@@ -13,6 +13,7 @@ export {
   parseChatJsonl,
   parseStDate,
 } from "./chat";
+export { type CollectResult, collectBundlesFromDir } from "./loader";
 export {
   createImportService,
   type ImportCardInput,

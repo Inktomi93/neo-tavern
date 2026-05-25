@@ -28,6 +28,7 @@
     "sdk:play": "tsx scripts/sdk-playground.ts",
     "sdk:contract": "tsx scripts/sdk-contract.ts",
     "embed:probe": "tsx scripts/embed-probe.ts",
+    "import:st": "tsx scripts/import-st.ts",
     "prepare": "husky"
   },
   "keywords": [],
