@@ -89,12 +89,17 @@ empty** — 100% rails, 0% product.
    **4.6.2 ✅ (code)** real native tokenizer (`@anush008/tokenizers` — JS tokenizer is
    quadratic), token-budget batching, owner-scoped knn, **in-process CUDA** embed pass
    (`pnpm embed:corpus:gpu`, project-local uv CUDA-12, fp16, GPU-saturated) — first full
-   GPU index running. **4.6.3 ⏭** CSLS hubness (per entity_type), bge-reranker-v2-m3
-   two-stage (GPU 1), `discover`, `features/corpus-search` UI. Lift from card-curator +
+   GPU index running. **4.6.3a ✅** CSLS hubness (per entity_type): `embeddings.hub_score`
+   (migration 0005), `domain/corpus/hubness` precompute (`pnpm csls`, per-row `vector_top_k`
+   — no in-memory matrix), query-time `adjusted_dist = max(0, dist−1+hub)` re-rank in
+   `domain/search`. Validated on the real corpus (8225 vectors; char avg hub 0.71 vs segment
+   0.86 — why per-type). **4.6.3b ⏭** bge-reranker-v2-m3 two-stage (GPU 1) + store source_text,
+   **4.6.3c** `discover`, **4.6.3d** `features/corpus-search` UI. Lift from card-curator +
    st-bridge per `docs/corpus-import.md`.
-   **⏭ Migration 0005 (pending, specced)** — `docs/handoff-0005-relational-fixes.md`:
+   **⏭ Migration 0006 (pending, specced)** — `docs/handoff-0006-relational-fixes.md`:
    enforce internal FKs (cascade policy) + presets → content-versioning. The importer
-   added link columns + proved zero dangling; 0005 makes them DB-enforced FKs.
+   added link columns + proved zero dangling; 0006 makes them DB-enforced FKs. (Renumbered
+   from 0005 — that number is now hub_score.)
 7. **Analytics** — `domain` queries + `features` charts (`recharts`), one chart at
    a time, only when there's a real question.
 

@@ -9,6 +9,7 @@ export {
   MIN_SEARCH_TEXT_TOKENS,
   normalizePlaceholders,
 } from "./embed-text";
+export { CSLS_K, computeHubScores, type HubStats, type HubTypeStat } from "./hubness";
 export { type Segment, type SegmentMessage, segmentChat } from "./segment";
 export {
   type CorpusService,

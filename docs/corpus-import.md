@@ -51,11 +51,16 @@ card into rows on import (`raw` json preserved), the PNG is transport.
 
 Algorithms are model-agnostic and port unchanged; only the embedding model differs.
 
-- **CSLS hubness correction** — `index.py:62-89` + `server.py:157-175`. `hub_score` =
-  mean cosine-sim of a vector to its K=10 nearest neighbours, precomputed at index time
-  (`embs @ embs.T`), stored per row; at query time `adjusted_dist = max(0, dist − 1 +
-  hub_score)`. **The highest-value lift — BGE-M3 has hubs too.** This is the
-  good-vs-mediocre line for semantic search over a few-hundred-item corpus.
+- **CSLS hubness correction — ✅ IMPLEMENTED (Phase 4.6.3a).** `embeddings.hub_score`
+  (migration 0005) + `src/server/domain/corpus/hubness.ts` (`computeHubScores`, run via
+  `pnpm csls`) + the query-time re-rank in `src/server/domain/search/service.ts`. Computed
+  **per (entity_type, model)** — char hubs (avg 0.71) and segment hubs (avg 0.86) have
+  different distributions, so a mixed score skews both. Ported from `index.py:62-89` +
+  `server.py:157-175`. `hub_score` = mean cosine-sim of a vector to its K=10 nearest
+  neighbours, precomputed at index time (`embs @ embs.T`), stored per row; at query time
+  `adjusted_dist = max(0, dist − 1 + hub_score)`. **The highest-value lift — BGE-M3 has
+  hubs too.** This is the good-vs-mediocre line for semantic search over a few-hundred-item
+  corpus.
   **Second reference:** `st-bridge/src/st_bridge/embeddings.py:149-177`
   (`_compute_hub_scores` K=10 · `_csls_correct` penalizing above-mean hubness) — the same
   math in plain numpy, in-process. Our libSQL twist: precompute `hub_score` per embedding

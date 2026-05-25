@@ -7,7 +7,11 @@ import { getLog } from "../../observability/logger";
 export interface SearchHit {
   entityType: string;
   entityId: string;
-  /** Cosine distance (0 = identical). Lower is nearer. */
+  /**
+   * Raw cosine distance (0 = identical). Lower is nearer. NOTE: hits are ordered by the
+   * CSLS-adjusted distance (hubness correction), not by this raw value — so a consumer
+   * must keep the returned order, not re-sort by `distance`.
+   */
   distance: number;
 }
 
@@ -27,6 +31,12 @@ export interface SearchServiceDeps {
 // embeddings has no ownerId (denormalizing it invites drift). When scoping, over-fetch and
 // resolve ownership through the entity rows. ×8 survives a filtered tail at this corpus size.
 const OWNER_OVERFETCH = 8;
+
+// CSLS hubness re-rank pool: fetch more than k so the correction can pull a non-hub from
+// positions k+1..(k·F) above a demoted hub. Diverges from card-curator's CSLS-only path
+// (pool = n_results, reorder-in-place) — over-fetching is cheap and is the whole point of
+// hubness correction (surface the specific match). hub_score precomputed in domain/corpus.
+const CSLS_POOL_FACTOR = 4;
 
 function chatIdOf(entityId: string): string {
   return entityId.split(":")[0] ?? entityId; // chat_segment entityId = "<chatId>:<segIdx>"
@@ -75,21 +85,34 @@ export function createSearchService(db: Db, deps: SearchServiceDeps = {}): Searc
     async knn({ queryText, k = 10, ownerId }) {
       const embedding = await embedder.embed(queryText);
       const query = JSON.stringify(Array.from(embedding));
-      const fetchK = ownerId ? k * OWNER_OVERFETCH : k;
+      // Pool ≥ k for the CSLS re-rank; unioned with the owner-scope over-fetch.
+      const poolK = Math.max(k * CSLS_POOL_FACTOR, ownerId ? k * OWNER_OVERFETCH : k);
       // ANN-limit via the libsql_vector_idx index, then exact cosine re-rank, joining the
-      // index's rowids back to the rows. (CSLS hubness / hybrid / rerank land in 4.6.3.)
-      const rows = await db.all<{ entityType: string; entityId: string; dist: number }>(sql`
+      // index's rowids back to the rows. hub_score (domain/corpus, may be null) drives CSLS.
+      const rows = await db.all<{
+        entityType: string;
+        entityId: string;
+        dist: number;
+        hubScore: number | null;
+      }>(sql`
         SELECT e.entity_type AS entityType, e.entity_id AS entityId,
-               vector_distance_cos(e.embedding, vector32(${query})) AS dist
-        FROM vector_top_k('embeddings_ann', vector32(${query}), ${fetchK}) AS v
+               vector_distance_cos(e.embedding, vector32(${query})) AS dist,
+               e.hub_score AS hubScore
+        FROM vector_top_k('embeddings_ann', vector32(${query}), ${poolK}) AS v
         JOIN embeddings e ON e.rowid = v.id
         ORDER BY dist ASC
       `);
-      const all: SearchHit[] = rows.map((row) => ({
-        entityType: row.entityType,
-        entityId: row.entityId,
-        distance: row.dist,
+      // CSLS hubness correction: adjusted = max(0, dist - 1 + hub_score), demoting vectors
+      // that are near everything (card-curator server.py:169). null hub_score (not yet
+      // precomputed) → raw distance, no adjustment. The clamp ties the top of the pool at 0;
+      // V8's sort is STABLE and the pool arrives in raw-dist order, so equal-adjusted hits
+      // keep their raw-distance tiebreak — do not "simplify" this to an unstable sort.
+      const adjusted = rows.map((row) => ({
+        hit: { entityType: row.entityType, entityId: row.entityId, distance: row.dist },
+        rank: row.hubScore === null ? row.dist : Math.max(0, row.dist - 1 + row.hubScore),
       }));
+      adjusted.sort((a, b) => a.rank - b.rank);
+      const all = adjusted.map((a) => a.hit);
       const scoped = ownerId ? await scopeToOwner(all, ownerId) : all;
       const hits = scoped.slice(0, k);
       getLog().debug(

@@ -31,6 +31,7 @@
     "import:st": "tsx scripts/import-st.ts",
     "embed:corpus": "tsx scripts/embed-corpus.ts",
     "embed:corpus:gpu": "bash scripts/embed-corpus-gpu.sh",
+    "csls": "tsx scripts/csls.ts",
     "cuda:setup": "uv sync --project tools/cuda",
     "prepare": "husky"
   },

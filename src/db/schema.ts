@@ -296,6 +296,13 @@ export const embeddings = sqliteTable(
     entityId: text("entity_id").notNull(),
     model: text("model").notNull(),
     embedding: vector32("embedding", { dim: 1024 }),
+    // CSLS hubness (migration 0005): mean cosine-sim to the K=10 nearest SAME-(type,model)
+    // neighbours, precomputed at index time by `pnpm csls` (domain/corpus/hubness). null
+    // until computed. Query-time re-rank: adjusted_dist = max(0, dist - 1 + hub_score),
+    // demoting "matches-everything" hubs. The value bakes in K=10 (CSLS_K) — changing K
+    // requires a full `pnpm csls` re-run. Per entity_type because segment vs character
+    // distributions differ (a mixed hub score skews both).
+    hubScore: real("hub_score"),
     metadata: text("metadata", { mode: "json" }),
     createdAt: integer("created_at").notNull(),
   },

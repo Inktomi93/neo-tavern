@@ -205,6 +205,11 @@ export const embeddings = sqliteTable('embeddings', {
   // (CPU ONNX; device:"cuda" flip later). NOTE: embeddings is global (no ownerId) —
   // owner-scope search results when multi-user + real data land.
   embedding: vector32('embedding', { dim: 1024 }),
+  // CSLS hubness (migration 0005, Phase 4.6.3a): mean cosine-sim to the K=10 nearest
+  // SAME-(entity_type, model) neighbours, precomputed at index time by `pnpm csls`
+  // (domain/corpus/hubness). null until computed. Query-time re-rank in domain/search:
+  // adjusted_dist = max(0, dist - 1 + hub_score), demoting "matches-everything" hubs.
+  hubScore: real('hub_score'),
   metadata: text('metadata', { mode: 'json' }),
   createdAt: integer('created_at').notNull(),
 });
@@ -322,13 +327,14 @@ export const taggables = sqliteTable('taggables', {
   blobs read *structurally* that *evolve* — `user_settings.config`, `presets.config`
   (load → if `schemaVersion < current`, migrate → Zod-validate → write back); this
   replaces ST's scattered `if (x === undefined)` duck-typing;
-  **⚠️ STANCE CHANGED (approved, PENDING migration 0005):** presets move from type-2 to
+  **⚠️ STANCE CHANGED (approved, PENDING migration 0006):** presets move from type-2 to
   **type-3 content versioning** (a `presets`/`preset_versions` triad, copy-on-write like
   characters) — because `messages.presetId` recording a *mutable* preset rewrites past
   generation provenance, which breaks corpus analytics. `schemaVersion` rides along on
-  `preset_versions`. See `docs/handoff-0005-relational-fixes.md`; this section gets rewritten
-  when 0005 lands. Also pending in 0005: **enforced internal FKs** (there are none today
-  beyond `ownerId` — a documented gap) with a CASCADE/RESTRICT policy.
+  `preset_versions`. See `docs/handoff-0006-relational-fixes.md`; this section gets rewritten
+  when 0006 lands. Also pending in 0006: **enforced internal FKs** (there are none today
+  beyond `ownerId` — a documented gap) with a CASCADE/RESTRICT policy. (The FK migration was
+  specced as 0005; renumbered to 0006 because 0005 became `embeddings.hub_score` — CSLS.)
   (3) **domain/content → `character_versions.version`** (canon history — a different
   concept). Opaque/archival blobs (`character_versions.raw`, `messages.rawRequest/
   rawResponse`, `chats.metadata`) are write-once — **not versioned.** Discriminator:

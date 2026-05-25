@@ -80,8 +80,13 @@ transformers.js `session_options`, OS env vars) trip `useNamingConvention`. Two 
   '<id>%'` + re-INSERT** (both proven safe) — same pattern as card-curator's ChromaDB delete-and-readd.
 - Known quirk: `count(*)` can read 0 on a vector-indexed table in some bindings — verify counts via
   the rows, not blind `count(*)`.
+- **`db.transaction()` breaks on `:memory:`** (the test DB): drizzle's libSQL `transaction()`
+  acquires a *fresh connection*, which for `:memory:` is a brand-new EMPTY database — so the
+  writes vanish and the next `db` query throws `no such table`. A file DB is fine. For batch
+  writes that must also run under in-memory tests (e.g. `domain/corpus/hubness` hub_score
+  updates), use sequential auto-commit `db.update(...)` in a loop, NOT a transaction.
 - `foreign_keys = ON` is set per-connection in `db/client.ts`; only `ownerId → users.id` FKs
-  exist today (internal links are plain `text` — hardening pending in migration 0005).
+  exist today (internal links are plain `text` — hardening pending in migration 0006).
 
 ## Workflow
 
