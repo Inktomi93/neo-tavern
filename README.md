@@ -38,6 +38,11 @@ pnpm import:st [dir]            # default dir: corpus-staging/default-user
 pnpm embed:corpus              # CPU (slow on long text; fine for a small corpus)
 pnpm embed:corpus:gpu          # GPU via in-process onnxruntime-node CUDA (~24× faster)
 pnpm cuda:setup                # one-time: vendor CUDA-12 + cuDNN-9 into tools/cuda/.venv (uv)
+
+# 3. Ranking quality (Phase 4.6.3): CSLS hubness + two-stage cross-encoder rerank
+pnpm csls                      # precompute embeddings.hub_score (CSLS, per entity_type) — re-run on corpus change
+pnpm corpus:backfill-source-text   # fill embeddings.source_text on rows embedded before the reranker (no re-embed)
+pnpm rerank:probe              # validate the bge-reranker-v2-m3 cross-encoder (CSLS vs reranked, side by side)
 ```
 
 - **GPU is self-contained:** `embed:corpus:gpu` auto-bootstraps a project-local uv venv

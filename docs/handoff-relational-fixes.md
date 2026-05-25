@@ -1,8 +1,11 @@
-# Handoff — Migration 0006: relational integrity + preset versioning
+# Handoff — relational integrity + preset versioning migration
 
-> **RENUMBERED 0005 → 0006:** migration `0005` was taken by `embeddings.hub_score` (CSLS,
-> Phase 4.6.3a). This relational-fixes migration is now **0006** — the next sequential
-> number after `0005`. References below say 0006; the existing migrations are now 0000–0005.
+> **MIGRATION NUMBER — read this:** originally specced as "0005", but later migrations
+> claimed lower numbers (0005 = `embeddings.hub_score`/CSLS, 0006 = `embeddings.source_text`/
+> reranker). This migration takes **the next available number when it actually lands** —
+> currently **0007** (`ls src/db/migrations/` to confirm). Do NOT hardcode a number; this
+> filename is intentionally number-agnostic so it stops churning. Everything below is
+> number-relative ("additive — don't rewrite earlier migrations").
 
 **For the implementing agent. You do NOT have the design conversation that produced this — everything you need is here. Read `docs/data-model.md` (esp. lines 227–330) and `docs/architecture.md` (the `db` layer rule) before starting.**
 
@@ -85,7 +88,7 @@ Model/reasoning vary per turn — that is **provenance**, recorded on the messag
 1. **SQLite cannot `ALTER TABLE ADD CONSTRAINT`.** Adding FKs to existing tables requires the full **table-recreate** (create new w/ FKs → `INSERT…SELECT` → drop old → rename). `drizzle-kit generate` emits this when you add `.references(...)`, wrapped in `PRAGMA foreign_keys=OFF … =ON`. **Most tables are POPULATED** (20,845 msgs, 801 chats, etc.) — the recreate copies real data. Verify row counts before/after.
 2. **After migrating, run `PRAGMA foreign_key_check`** on the real imported DB to confirm the existing data satisfies the new FKs. The importer reports "zero dangling refs" — verify, don't trust. If anything dangles, clean it before the FKs will hold.
 3. **Circular FKs** (`characters.currentVersionId ↔ character_versions`; `presets.currentVersionId ↔ preset_versions`): insert order = parent row with `currentVersionId` NULL → insert version → `UPDATE` parent's `currentVersionId`. No `DEFERRABLE` needed. The importer already does this for characters — mirror it for presets.
-4. **Hand-written SQL must survive.** Migration `0001` hand-adds the `libsql_vector_idx` ANN index (drizzle-kit can't emit it). **0006 is additive — do not regenerate/rewrite 0000–0005.** Hand-read the generated 0006 SQL before applying; drizzle's SQLite differ sometimes recreates more than intended — confirm it does not drop the `message_variants`/import columns from 0002/0003, the `embeddings.hub_score` column from 0005, or the vector column/index.
+4. **Hand-written SQL must survive.** Migration `0001` hand-adds the `libsql_vector_idx` ANN index (drizzle-kit can't emit it). **This migration is additive — do not regenerate/rewrite any earlier ones.** Hand-read the generated SQL before applying; drizzle's SQLite differ sometimes recreates more than intended — confirm it does not drop the `message_variants`/import columns (0002/0003), the `embeddings.hub_score` (0005) / `source_text` (0006) columns, or the vector column/index (0001).
 5. `foreign_keys = ON` is already set per-connection in `src/db/client.ts` (confirmed). The migration recreate toggles it internally; make sure `runMigrations` path handles that.
 6. **Conventions:** `db` layer imports only `shared` + externals (dependency-cruiser enforces). Column names are explicit `snake_case` (no drizzle casing inference). Match the existing style in `schema.ts`.
 7. `chats.presetId` / `messages.presetId` are **all-null and unreferenced by any code** (verified) — the rename to `presetVersionId` is safe and needs no data backfill.
@@ -115,7 +118,7 @@ Model/reasoning vary per turn — that is **provenance**, recorded on the messag
 ## Pointers
 - `docs/data-model.md` — the spec (UPDATE it). Design notes 227–330; versioning policy 318–329.
 - `docs/architecture.md` — `db` layer rule.
-- `src/db/schema.ts` — schema. `src/db/migrations/` — 0000–0005; add **0006**. `src/db/client.ts` — PRAGMAs + `runMigrations`.
+- `src/db/schema.ts` — schema. `src/db/migrations/` — add the next sequential migration (`ls` to find it; 0007 at time of writing). `src/db/client.ts` — PRAGMAs + `runMigrations`.
 - `src/server/domain/import/service.ts` — the **copy-on-write + circular-currentVersionId reference implementation** to mirror for presets.
 - `scripts/import-st.ts` + `src/server/domain/import/` — importer; keep idempotent.
 - `tests/integration/db-foundation.test.ts` — FK smoke test to extend.

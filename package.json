@@ -32,6 +32,8 @@
     "embed:corpus": "tsx scripts/embed-corpus.ts",
     "embed:corpus:gpu": "bash scripts/embed-corpus-gpu.sh",
     "csls": "tsx scripts/csls.ts",
+    "rerank:probe": "tsx scripts/rerank-probe.ts",
+    "corpus:backfill-source-text": "tsx scripts/backfill-source-text.ts",
     "cuda:setup": "uv sync --project tools/cuda",
     "prepare": "husky"
   },

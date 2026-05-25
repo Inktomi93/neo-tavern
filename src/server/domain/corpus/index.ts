@@ -17,3 +17,4 @@ export {
   type EmbedItem,
   embeddingKey,
 } from "./service";
+export { collectEmbedTargets } from "./targets";

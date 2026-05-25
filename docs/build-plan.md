@@ -93,13 +93,17 @@ empty** — 100% rails, 0% product.
    (migration 0005), `domain/corpus/hubness` precompute (`pnpm csls`, EXACT same-type top-K
    in-process — the ANN index was budget-exhausted by popular cards' own segments), query-time
    `adjusted_dist = max(0, dist−1+hub)` re-rank in `domain/search`. Validated on the real
-   corpus (8225 vectors in 35s; char avg hub 0.72 vs segment 0.86 — why per-type). **4.6.3b ⏭** bge-reranker-v2-m3 two-stage (GPU 1) + store source_text,
-   **4.6.3c** `discover`, **4.6.3d** `features/corpus-search` UI. Lift from card-curator +
-   st-bridge per `docs/corpus-import.md`.
-   **⏭ Migration 0006 (pending, specced)** — `docs/handoff-0006-relational-fixes.md`:
+   corpus (8225 vectors in 35s; char avg hub 0.72 vs segment 0.86 — why per-type).
+   **4.6.3b ✅** two-stage cross-encoder rerank: `embeddings.source_text` (migration 0006,
+   stored by the embed pass + `pnpm corpus:backfill-source-text` for old rows),
+   `embeddings/reranker` (bge-reranker-v2-m3 ONNX fp16, max_length 1024, batched),
+   `knn({rerank:true})` over-fetches the CSLS pool → cross-encoder → top-n; GPU-validated via
+   `pnpm rerank:probe`. **4.6.3c ⏭** `discover`, **4.6.3d** `features/corpus-search` UI. Lift
+   from card-curator + st-bridge per `docs/corpus-import.md`.
+   **⏭ Migration 0007 (pending, specced)** — `docs/handoff-relational-fixes.md`:
    enforce internal FKs (cascade policy) + presets → content-versioning. The importer
-   added link columns + proved zero dangling; 0006 makes them DB-enforced FKs. (Renumbered
-   from 0005 — that number is now hub_score.)
+   added link columns + proved zero dangling; it makes them DB-enforced FKs. (Number-agnostic
+   handoff — takes the next free migration; 0005=hub_score, 0006=source_text already claimed.)
 7. **Analytics** — `domain` queries + `features` charts (`recharts`), one chart at
    a time, only when there's a real question.
 

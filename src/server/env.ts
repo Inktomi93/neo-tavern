@@ -36,6 +36,15 @@ const envSchema = z.object({
   // L2-normalize (cosine of an fp16 vs fp32 embedding of the same text ≈ 0.9999), so a
   // cuda+fp16 corpus index and cpu+fp32 queries share one space. The GPU launcher sets fp16.
   EMBED_DTYPE: z.enum(["fp32", "fp16"]).default("fp32"),
+  // Reranker (bge-reranker-v2-m3 cross-encoder, Phase 4.6.3b) ONNX device. "cpu" default
+  // (safe for tests/dev); "cuda" for responsive query-time reranking. At query time the
+  // embedder (query vector) then reranker run SEQUENTIALLY, so they don't contend — a
+  // 2-GPU split (embedder GPU 0, reranker GPU 1 via CUDA_VISIBLE_DEVICES) only matters for
+  // concurrent INDEX batch ops, which don't use the reranker. So this stays device-agnostic.
+  RERANK_DEVICE: z.enum(["cpu", "cuda"]).default("cpu"),
+  // The onnx-community/bge-reranker-v2-m3-ONNX repo ships ONLY fp16 weights (fp32/auto fail
+  // — no file), so fp16 is the default for both cpu and cuda (ORT runs fp16 on cpu via fallback).
+  RERANK_DTYPE: z.enum(["fp16", "q8"]).default("fp16"),
   // Where transformers.js downloads/caches model weights (BGE-M3, the reranker). Pinned
   // to a repo-local, gitignored dir so model artifacts stay self-contained — not leaking
   // into node_modules/.cache or an OS-global HF cache. Resolved relative to cwd (repo root).

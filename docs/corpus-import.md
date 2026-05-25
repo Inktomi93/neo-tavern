@@ -81,9 +81,15 @@ Algorithms are model-agnostic and port unchanged; only the embedding model diffe
   match everything moderately; filter from results, still directly retrievable).
 - **Field budgeting + order** — `extract.py:143-186`: core fields first (last-token
   pooling weights later text more), optional fields appended only under budget.
-- **Two-stage retrieve→rerank** — `server.py:189-222`: over-fetch `n*3` via CSLS, rerank
-  to `n`. Keep the *shape*; swap the local 8B reranker for an API cross-encoder, or skip
-  reranking initially.
+- **Two-stage retrieve→rerank — ✅ IMPLEMENTED (Phase 4.6.3b).** `server.py:189-222` shape:
+  `knn({rerank:true})` (domain/search) over-fetches the CSLS pool → `embeddings/reranker`
+  (bge-reranker-v2-m3 ONNX cross-encoder, fp16, `max_length` 1024 = BAAI's fine-tuned length,
+  batched in chunks of 32 to bound O(seq²) attention memory) scores each (query, `source_text`)
+  pair → top n. `source_text` (migration 0006) is stored by the embed pass / `pnpm
+  corpus:backfill-source-text` so segment text needn't be re-derived at query time. Rows without
+  source_text are skipped from rerank (slotted after, debug-logged). GPU-validated: `pnpm
+  rerank:probe` (e.g. "catgirl who cooks" → the cross-encoder surfaces Katzette/Clawdia that
+  vector-sim missed). Device via `RERANK_DEVICE` (cpu default; cuda for prod).
 - **find-duplicates / similar** — `server.py:663, 926-987`: self vector-top-K at cosine
   ≥ 0.92 → a libSQL `vector_top_k` self-join.
 - **`discover`** — `server.py:229+`: search chat segments → group by character → enrich

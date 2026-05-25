@@ -133,13 +133,16 @@ soft-delete trash bin. No tautological getById tests. Catch yourself building th
   running*; **4.6.3a ✅** CSLS hubness (per-entity-type): `embeddings.hub_score` (migration
   0005) + `domain/corpus/hubness` precompute (`pnpm csls`) + query-time `adjusted_dist =
   max(0, dist−1+hub)` re-rank in `domain/search` — validated on the real corpus (8225 vectors;
-  generic "match-everything" cards demoted, distinctive cards surfaced); **4.6.3b ⏭ NEXT**
-  bge-reranker two-stage + store source_text · **4.6.3c** `discover` · **4.6.3d**
-  `features/corpus-search` UI. ·
-  **⏭ Migration 0006 (PENDING, specced):** enforce internal FKs (cascade policy) + move presets
+  generic "match-everything" cards demoted, distinctive cards surfaced); **4.6.3b ✅** two-stage
+  cross-encoder rerank: `embeddings.source_text` (migration 0006) stored by the embed pass +
+  `pnpm corpus:backfill-source-text`, `embeddings/reranker` (bge-reranker-v2-m3 ONNX, fp16,
+  max_length 1024, batched, device via `RERANK_DEVICE`), `knn({rerank:true})` over-fetches the
+  CSLS pool → cross-encoder → top-n (GPU-validated, `pnpm rerank:probe`); **4.6.3c ⏭ NEXT**
+  `discover` · **4.6.3d** `features/corpus-search` UI. ·
+  **⏭ Migration 0007 (PENDING, specced):** enforce internal FKs (cascade policy) + move presets
   to content-versioning (copy-on-write) — fixes "nuke chat orphans 20k msgs" + preset-provenance
-  bug. Full handoff: **`docs/handoff-0006-relational-fixes.md`**. (Was specced as "0005"; renumbered
-  to 0006 since 0005 is now hub_score.) ·
+  bug. Full handoff: **`docs/handoff-relational-fixes.md`** (number-agnostic — takes the next
+  free migration when it lands; 0005=hub_score, 0006=source_text already claimed those). ·
   **Phase 5** mode escape valve · **Phase 6** analytics (one chart at a time, only
   when there's a real question).
 
@@ -162,7 +165,7 @@ read before touching imports) → `docs/data-model.md` (schema) → the doc for 
 - **`docs/data-model.md`** — the full v1 database schema spec.
 - **`docs/corpus-import.md`** — the ST import + RAG **answer key**: validated parsers + models
   to lift from **card-curator** & **st-bridge** (DON'T re-derive), the model stack, the divergence.
-- **`docs/handoff-0006-relational-fixes.md`** — spec for the pending FK + preset-versioning migration.
+- **`docs/handoff-relational-fixes.md`** — spec for the pending FK + preset-versioning migration.
 - **`docs/observability.md`** — pino logging + the `curl`-able `/api/_debug/*` API.
 - **`docs/sdk-notes.md`** — Agent SDK map + the `pnpm sdk:play` playground.
 - **`docs/dependencies.md`** — deps (installed + deferred parking lot).
@@ -187,6 +190,6 @@ by `DEBUG_TOKEN`). `pnpm check` = green-to-ship (biome+tsc+arch+vitest), runs on
 - **references/ = answer-keys.** card-curator/st-bridge already solved the ST parsers + RAG —
   port `file:line`, don't re-derive. (corpus-import)
 - **Commit directly to `main`**; **NEVER extract the Claude OAuth token** (ban risk). (CLAUDE locked-decisions)
-- Internal links are plain `text` (only `ownerId` is a real FK today) — being hardened in 0006.
+- Internal links are plain `text` (only `ownerId` is a real FK today) — hardening pending (`docs/handoff-relational-fixes.md`).
 
 When unclear, ask. Don't re-litigate locked decisions — raise a question if you disagree.

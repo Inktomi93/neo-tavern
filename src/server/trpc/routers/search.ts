@@ -10,6 +10,8 @@ export const searchRouter = t.router({
       z.object({
         queryText: z.string().min(1),
         k: z.number().int().positive().max(50).optional(),
+        /** Second-stage cross-encoder rerank (4.6.3b) — better order, costs a model pass. */
+        rerank: z.boolean().optional(),
       }),
     )
     .query(({ ctx, input }) => ctx.services.search.knn(input)),

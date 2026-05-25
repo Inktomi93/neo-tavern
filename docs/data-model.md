@@ -210,6 +210,11 @@ export const embeddings = sqliteTable('embeddings', {
   // (domain/corpus/hubness). null until computed. Query-time re-rank in domain/search:
   // adjusted_dist = max(0, dist - 1 + hub_score), demoting "matches-everything" hubs.
   hubScore: real('hub_score'),
+  // The literal text that was embedded (migration 0006, Phase 4.6.3b): the two-stage
+  // cross-encoder reranker scores (query, source_text) pairs; reconstructing segment text
+  // at query time would mean re-segmenting whole chats. null on rows embedded before 0006;
+  // filled by the embed pass + `pnpm corpus:backfill-source-text`.
+  sourceText: text('source_text'),
   metadata: text('metadata', { mode: 'json' }),
   createdAt: integer('created_at').notNull(),
 });
@@ -327,14 +332,14 @@ export const taggables = sqliteTable('taggables', {
   blobs read *structurally* that *evolve* — `user_settings.config`, `presets.config`
   (load → if `schemaVersion < current`, migrate → Zod-validate → write back); this
   replaces ST's scattered `if (x === undefined)` duck-typing;
-  **⚠️ STANCE CHANGED (approved, PENDING migration 0006):** presets move from type-2 to
-  **type-3 content versioning** (a `presets`/`preset_versions` triad, copy-on-write like
-  characters) — because `messages.presetId` recording a *mutable* preset rewrites past
+  **⚠️ STANCE CHANGED (approved, PENDING migration — 0007 at time of writing):** presets move
+  from type-2 to **type-3 content versioning** (a `presets`/`preset_versions` triad, copy-on-write
+  like characters) — because `messages.presetId` recording a *mutable* preset rewrites past
   generation provenance, which breaks corpus analytics. `schemaVersion` rides along on
-  `preset_versions`. See `docs/handoff-0006-relational-fixes.md`; this section gets rewritten
-  when 0006 lands. Also pending in 0006: **enforced internal FKs** (there are none today
-  beyond `ownerId` — a documented gap) with a CASCADE/RESTRICT policy. (The FK migration was
-  specced as 0005; renumbered to 0006 because 0005 became `embeddings.hub_score` — CSLS.)
+  `preset_versions`. See `docs/handoff-relational-fixes.md` (number-agnostic — takes the next
+  free migration; 0005=hub_score, 0006=source_text already claimed those); this section gets
+  rewritten when it lands. Also pending: **enforced internal FKs** (there are none today beyond
+  `ownerId` — a documented gap) with a CASCADE/RESTRICT policy.
   (3) **domain/content → `character_versions.version`** (canon history — a different
   concept). Opaque/archival blobs (`character_versions.raw`, `messages.rawRequest/
   rawResponse`, `chats.metadata`) are write-once — **not versioned.** Discriminator:

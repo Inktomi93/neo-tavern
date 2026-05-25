@@ -303,6 +303,11 @@ export const embeddings = sqliteTable(
     // requires a full `pnpm csls` re-run. Per entity_type because segment vs character
     // distributions differ (a mixed hub score skews both).
     hubScore: real("hub_score"),
+    // The literal text that was embedded (card identity text / chat segment). Needed by the
+    // two-stage reranker (4.6.3b), which scores (query, doc-text) pairs — reconstructing
+    // segment text at query time would mean re-segmenting whole chats. null on rows embedded
+    // before 4.6.3b; populated going forward by the embed pass + `pnpm corpus:backfill-source-text`.
+    sourceText: text("source_text"),
     metadata: text("metadata", { mode: "json" }),
     createdAt: integer("created_at").notNull(),
   },

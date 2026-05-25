@@ -43,6 +43,13 @@
       "when": 1779728744883,
       "tag": "0005_embeddings_hub_score",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1779730710282,
+      "tag": "0006_embeddings_source_text",
+      "breakpoints": true
     }
   ]
 }

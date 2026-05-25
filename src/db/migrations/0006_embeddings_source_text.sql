@@ -1,0 +1,1 @@
+ALTER TABLE `embeddings` ADD `source_text` text;
