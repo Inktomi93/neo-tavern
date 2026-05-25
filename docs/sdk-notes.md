@@ -180,18 +180,20 @@ per-run nonce so each invocation writes its own cache):
 Consequences for the design:
 - **Append (normal YGWYG turn)** and **swipe (regen last turn)** and **fork from a
   point** all branch at/after a cached prefix → cache-cheap. Confirmed for fork.
-- **Editing a buried turn** diverges the prefix at the edit point → everything
-  after re-caches (cost ∝ tail length). *Reasoned from prefix mechanics, NOT yet
-  measured here* — the truncation test only proves prefixes stay cached.
+- **Editing a buried turn** diverges the prefix at the edit point → everything after
+  re-caches (cost ∝ tail length). **Now measured** (`EDIT=1 pnpm sdk:play`): editing
+  the earliest text frame dropped `cacheRead` 5664→4688 (collapsed to the bare system
+  prefix) and pushed `cacheCreate` 232→1186 (the whole ~976-token tail re-cached);
+  editing the **last** frame cost ~0 (`cacheRead` unchanged). Edit cost ∝ distance
+  from the end.
 - The expensive static prefix (character/system) is paid **once** and read free
   thereafter, including across forks — so YGWYG's append-only path is also the
   cache-optimal path.
 
 Not covered by this probe (honest gaps): **actual TTL expiry** (proved which bucket
 via `cache_creation`, didn't wait out the window — a chat reopened after it is a
-cold first turn regardless); **mid-history edit divergence**; **raw-mode** (separate
-path, our own `cache_control`). Numbers are Haiku-specific; mechanics are
-model-independent.
+cold first turn regardless); **raw-mode** (separate path, our own `cache_control`).
+Numbers are Haiku-specific; mechanics are model-independent.
 
 ## Spawn latency & the session model (measured — `LATENCY=1 pnpm sdk:play`)
 
@@ -221,9 +223,10 @@ assumed.** Because `load()` feeds the subprocess whatever transcript we return, 
 
 - **Fork / swipe** (drop trailing frames, resume) — *executed live* in the CACHE
   probe; cache prefix survives.
-- **Edit a buried frame** (change content, resume) — the identical `load()` mechanism,
-  so it works; the only open question is its **cache cost** (mid-history divergence
-  re-caches the tail), the one thing we flagged-but-didn't-measure. `EDIT` probe TODO.
+- **Edit a buried frame** (change content, resume) — the identical `load()` mechanism;
+  *executed live* in the `EDIT` probe. It resumes coherently, and its **cache cost is
+  measured**: a buried edit re-caches the entire tail after it (~976 tokens in the
+  probe), a tail edit costs ~0. So editing late is cheap, editing deep is not.
 - **Can't edit inside a warm session** (the live subprocess already "saw" the
   original); an edit = mutate `session_entries` + fresh resume from the branch point.
   In stateless mode that's just the normal path, so edits are free to bolt on.
