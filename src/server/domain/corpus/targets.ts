@@ -1,6 +1,7 @@
 import { asc, eq } from "drizzle-orm";
 import type { Db } from "../../../db/client";
 import { characters, characterVersions, chats, messages } from "../../../db/schema";
+import { getLog } from "../../observability/logger";
 import { buildCardEmbedText } from "./embed-text";
 import { segmentChat } from "./segment";
 import type { EmbedItem } from "./service";
@@ -82,5 +83,10 @@ export async function collectEmbedTargets(db: Db): Promise<EmbedItem[]> {
       });
     }
   }
+  const cards = targets.filter((t) => t.entityType === "character").length;
+  getLog().debug(
+    { targets: targets.length, cards, segments: targets.length - cards },
+    "corpus: collected embed targets",
+  );
   return targets;
 }

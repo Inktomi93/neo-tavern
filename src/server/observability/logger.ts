@@ -119,7 +119,18 @@ export const logger: Logger = pino(
       censor: "[redacted]",
     },
   },
-  pino.multistream([{ stream: process.stdout }, { stream: ringStream }]),
+  // Each multistream destination needs its OWN level — without it pino.multistream
+  // defaults streams to `info` and silently DROPS debug logs even when the logger level
+  // is `debug`, making every getLog().debug (per-op search/embed lines) unreachable.
+  // Tie both to LOG_LEVEL so `LOG_LEVEL=debug` actually surfaces them (stdout + the
+  // /api/_debug ring). dedupe:false → a log goes to every stream at/above its level.
+  pino.multistream(
+    [
+      { level: env.LOG_LEVEL, stream: process.stdout },
+      { level: env.LOG_LEVEL, stream: ringStream },
+    ],
+    { dedupe: false },
+  ),
 );
 
 interface RequestContext {

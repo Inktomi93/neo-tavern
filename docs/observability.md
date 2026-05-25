@@ -7,7 +7,12 @@ Two things: **structured logging** (pino) and an **in-process debug API** you
 
 - **pino**, structured JSON. The single logger lives in
   `src/server/observability/logger.ts`. Level via `LOG_LEVEL`
-  (`fatal|error|warn|info|debug|trace|silent`, default `info`).
+  (`fatal|error|warn|info|debug|trace|silent`, default `info`). **Per-op `debug` lines**
+  (search `knn`/`find`/`discover`, the embed pass, hub scoring) are emitted at `debug` —
+  run with `LOG_LEVEL=debug` to surface them (stdout + the `/api/_debug` ring). NOTE: each
+  `pino.multistream` destination carries its OWN `level` tied to `LOG_LEVEL` — without that
+  multistream defaults streams to `info` and silently drops `debug` even when the logger is
+  `debug`. Don't remove the per-stream `level`.
 - **Use it, don't bypass it** (enforced — see below):
   - In a tRPC procedure: `ctx.log.info({ chatId }, "message appended")`.
   - Anywhere server-side: `import { getLog } from "../observability/logger"; getLog().warn(...)`.

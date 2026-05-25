@@ -395,6 +395,10 @@ export function createSearchService(db: Db, deps: SearchServiceDeps = {}): Searc
         }
       }
     }
+    getLog().debug(
+      { results: results.length, characters: charIds.length, segments: segIds.length },
+      "search: find (enriched)",
+    );
     return results;
   }
 
