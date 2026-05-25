@@ -1,10 +1,13 @@
 import { type FeatureExtractionPipeline, pipeline } from "@huggingface/transformers";
+import { env } from "../env";
 
-// Local embeddings, BGE-M3 (1024-dim, locked in dependencies.md). Runs in-process on
-// the CPU ONNX runtime — embedding is a batch/index job, never the chat hot path, so
-// CPU is fine for the one-time corpus index. To use the GPU later, add
-// `{ device: "cuda" }` to the pipeline() call (needs the CUDA onnxruntime EP) — a
-// one-line flip. The dim must match the embeddings.embedding F32_BLOB(1024) column.
+// Local, in-process embeddings: BGE-M3 (1024-dim, locked in dependencies.md) on
+// onnxruntime-node. EMBED_DEVICE picks the execution provider: "cpu" (default — fine for
+// short query embeds ~0.04s, and the safe default for tests/dev) or "cuda" (the in-process
+// CUDA EP, ~24× faster on long text — used for the corpus embed pass; needs CUDA-12 runtime
+// libs on LD_LIBRARY_PATH, see docs/corpus-import.md). Same model both ways, so CPU-embedded
+// queries and GPU-embedded corpus share one vector space. Dim must match the
+// embeddings.embedding F32_BLOB(1024) column.
 const MODEL_ID = "Xenova/bge-m3";
 export const EMBEDDING_MODEL = "bge-m3";
 export const EMBEDDING_DIM = 1024;
@@ -19,7 +22,7 @@ export interface Embedder {
 // Lazy singleton — the model loads (and downloads, once) on first embed, not at import.
 let pipelinePromise: Promise<FeatureExtractionPipeline> | null = null;
 function getPipeline(): Promise<FeatureExtractionPipeline> {
-  pipelinePromise ??= pipeline("feature-extraction", MODEL_ID);
+  pipelinePromise ??= pipeline("feature-extraction", MODEL_ID, { device: env.EMBED_DEVICE });
   return pipelinePromise;
 }
 

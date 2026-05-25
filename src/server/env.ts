@@ -25,6 +25,13 @@ const envSchema = z.object({
   // Database — the libSQL file URL (dev: a local file; prod: the mounted volume).
   DATABASE_URL: z.string().min(1).default("file:./neo-tavern.db"),
 
+  // Embedding ONNX execution provider. "cpu" (default) runs BGE-M3 on the CPU runtime —
+  // fine for short query embeds (~0.04s) and the safe default for tests/dev. "cuda" runs
+  // the in-process onnxruntime-node CUDA EP (~24× faster on long text — used for the
+  // corpus embed pass). CUDA needs the CUDA-12 runtime libs on LD_LIBRARY_PATH (ORT's EP
+  // is built for CUDA 12; the host's system CUDA may differ) — see docs/corpus-import.md.
+  EMBED_DEVICE: z.enum(["cpu", "cuda"]).default("cpu"),
+
   // Auth/tenancy (see CLAUDE.md). Identity = X-Authentik-Username, trusted ONLY when
   // caddy forwards it with a matching X-Neo-Proxy secret; otherwise (direct LAN/IP
   // access) we fall back to the owner. UNSET secret = header never trusted = always
