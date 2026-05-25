@@ -136,6 +136,12 @@ export const chats = sqliteTable(
     parentChatId: text("parent_chat_id"), // set when this chat is a fork
     convertedAt: integer("converted_at"),
     forkedAt: integer("forked_at"),
+    // ST import provenance. importedFrom = the source .jsonl filename — the key that
+    // resolves a branch's chat_metadata.main_chat ref → the parent chat's id (scoped to
+    // the character). importHash = SHA-256 of the file bytes → idempotent re-import
+    // (docker cp rewrites mtimes, so hash-not-mtime per docs/corpus-import.md).
+    importedFrom: text("imported_from"),
+    importHash: text("import_hash"),
     messageCount: integer("message_count").default(0),
     totalTokensIn: integer("total_tokens_in").default(0),
     totalTokensOut: integer("total_tokens_out").default(0),
