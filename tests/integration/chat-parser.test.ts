@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { parseChatJsonl, parseStDate } from "../../src/server/domain/corpus/import/chat";
+import { parseChatJsonl, parseStDate } from "../../src/server/domain/import/chat";
 
 // Synthetic JSONL fixtures (one header line + message lines) — deliberately encode the
 // edge cases a single real chat won't have all at once: swipes, mes≠active-swipe, short

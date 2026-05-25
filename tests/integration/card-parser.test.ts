@@ -2,7 +2,7 @@ import { Buffer } from "node:buffer";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "vitest";
-import { parseCardPng } from "../../src/server/domain/corpus/import/card";
+import { parseCardPng } from "../../src/server/domain/import/card";
 
 const cardFixture = fileURLToPath(
   new URL("../fixtures/cards/Block of Cheese.png", import.meta.url),

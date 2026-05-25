@@ -232,7 +232,7 @@
       // Keeping those names visible makes the port auditable against the ST spec +
       // card-curator, so useNamingConvention is off here; useLiteralKeys is off for the
       // bracket access tsc's noPropertyAccessFromIndexSignature requires on raw entries.
-      "includes": ["src/server/domain/corpus/import/**", "tests/integration/*-parser.test.ts"],
+      "includes": ["src/server/domain/import/**", "tests/integration/*-parser.test.ts"],
       "linter": {
         "rules": {
           "style": { "useNamingConvention": "off" },
