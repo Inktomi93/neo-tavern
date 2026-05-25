@@ -138,18 +138,44 @@ soft-delete trash bin. No tautological getById tests. Catch yourself building th
   **Phase 5** mode escape valve · **Phase 6** analytics (one chart at a time, only
   when there's a real question).
 
-## Where everything lives
+## Start here — fast orientation (new session, read this section)
 
+**Where am I in the build?** ↑ See "Build phases & status" above + run **`TaskList`** (the live
+task queue is the source of truth for in-flight work). **What's running/validated?** the recent
+git log + the per-phase ✅ markers above.
+
+**Read order** (don't read everything — pull what the task needs): this file →
+`docs/build-plan.md` (order + spike results) → `docs/architecture.md` (the enforced layer cake —
+read before touching imports) → `docs/data-model.md` (schema) → the doc for your area below.
+
+**Doc map:**
 - **`AGENTS.md`** — working doctrine: the enforcement is real, references are not the bible.
 - **`docs/build-plan.md`** — bottom-up build order + the de-risk spike results (all passed).
 - **`docs/architecture.md`** — the enforced layer cake + folder map + the barrel tradeoff.
-- **`docs/data-model.md`** — the full v1 database schema spec (implemented in Phase 2).
-- **`docs/corpus-import.md`** — the ST import + RAG answer key: validated parsers to
-  port from **card-curator** & **st-bridge** (don't re-derive), + the BGE-M3 divergence.
-- **`docs/observability.md`** — structured logging (pino) + the `curl`-able `/api/_debug/*` API.
-- **`docs/sdk-notes.md`** — Agent SDK map (knobs, messages, hooks, debug) + the `pnpm sdk:play` playground.
-- **`docs/dependencies.md`** — deferred-dependency parking lot.
-- **`references/README.md`** — local domain reference clones (read, don't copy).
-- **`README.md`** — how to run.
+- **`docs/data-model.md`** — the full v1 database schema spec.
+- **`docs/corpus-import.md`** — the ST import + RAG **answer key**: validated parsers + models
+  to lift from **card-curator** & **st-bridge** (DON'T re-derive), the model stack, the divergence.
+- **`docs/handoff-0005-relational-fixes.md`** — spec for the pending FK + preset-versioning migration.
+- **`docs/observability.md`** — pino logging + the `curl`-able `/api/_debug/*` API.
+- **`docs/sdk-notes.md`** — Agent SDK map + the `pnpm sdk:play` playground.
+- **`docs/dependencies.md`** — deps (installed + deferred parking lot).
+- **`references/README.md`** — local clones of card-curator/st-bridge/SillyTavern (read, don't copy).
+- **`README.md` / `ONBOARDING.md`** — how to run / human-teammate onboarding.
+
+**Dev tools (don't reinvent — drive these):** `pnpm sdk:play` (Agent SDK probes — env/models/
+latency), `pnpm embed:probe` (live BGE-M3), `pnpm import:st` / `pnpm embed:corpus[:gpu]` (corpus),
+`pnpm cuda:setup` (uv CUDA). Inspect a running server via `/api/_debug/*` (logs/requests, gated
+by `DEBUG_TOKEN`). `pnpm check` = green-to-ship (biome+tsc+arch+vitest), runs on pre-commit.
+
+**Hard-won facts (a fresh session WILL waste time re-deriving these — each → its doc):**
+- **Vectors are libSQL NATIVE `F32_BLOB` + `libsql_vector_idx`** — NO sqlite-vec. The index
+  **can't UPSERT or bulk `DELETE FROM`** (corrupts it); insert plain, re-index = fresh DB. (data-model)
+- **Embedding/rerank run IN-PROCESS on GPU** via onnxruntime-node CUDA; CUDA-12 is vendored in
+  `tools/cuda/` (uv, `pnpm cuda:setup`), models cache to `.models/`. (corpus-import, CLAUDE locked-decisions)
+- **The transformers.js JS tokenizer is QUADRATIC** (12.7s/10k-tok) — use native `@anush008/tokenizers`. (#15)
+- **references/ = answer-keys.** card-curator/st-bridge already solved the ST parsers + RAG —
+  port `file:line`, don't re-derive. (corpus-import)
+- **Commit directly to `main`**; **NEVER extract the Claude OAuth token** (ban risk). (CLAUDE locked-decisions)
+- Internal links are plain `text` (only `ownerId` is a real FK today) — being hardened in 0005.
 
 When unclear, ask. Don't re-litigate locked decisions — raise a question if you disagree.
