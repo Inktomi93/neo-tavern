@@ -6,8 +6,15 @@ their logic; do not re-derive.** Both are local git repos — cite, lift, adapt 
 
 - **card-curator** (`development/card-curator`, Python) — the deep source: PNG card
   extraction, ST chat parsing, semantic indexing (embeddings + CSLS hubness + rerank).
-- **st-bridge** (`development/st-bridge`) — ported parsers; `src/st_bridge/dates.py` is
-  card-curator's `chats.py` date logic, already lifted once.
+- **st-bridge** (`development/st-bridge`) — a *live bridge* to a running ST (eval/command
+  transport), architecturally the opposite of us, so its 1.7k-LOC `server.py` mostly
+  doesn't apply. Two assets do: (1) `src/st_bridge/dates.py` — card-curator's date logic,
+  lifted **and improved** (numeric-string epochs · `is_branch` via `"Branch #"` substring,
+  not `startsWith`, which recovers ~80 branches · filename-derived parent) — all three
+  folded into our chat parser. (2) `src/st_bridge/embeddings.py` — a **second, in-process
+  CSLS implementation** (nomic-embed via SentenceTransformer, numpy `_compute_hub_scores`/
+  `_csls_correct`), closer to our no-GPU constraints than card-curator's GPU/ChromaDB
+  stack → a Phase 4.6 cross-reference (see CSLS bullet below).
 
 The parsers + retrieval *scaffolding* port 1:1. The GPU / 8B-model / ChromaDB / MCP
 stack does **not** (and shouldn't) — see the model-divergence note below.
@@ -49,6 +56,11 @@ Algorithms are model-agnostic and port unchanged; only the embedding model diffe
   (`embs @ embs.T`), stored per row; at query time `adjusted_dist = max(0, dist − 1 +
   hub_score)`. **The highest-value lift — BGE-M3 has hubs too.** This is the
   good-vs-mediocre line for semantic search over a few-hundred-item corpus.
+  **Second reference:** `st-bridge/src/st_bridge/embeddings.py:149-177`
+  (`_compute_hub_scores` K=10 · `_csls_correct` penalizing above-mean hubness) — the same
+  math in plain numpy, in-process. Our libSQL twist: precompute `hub_score` per embedding
+  row at index time and fold it into the re-rank after `vector_top_k`, rather than holding
+  the full `embs @ embs.T` matrix in memory.
 - **Chat segmentation** — `chat_index.py:48-215`: 4096-token target / 512 min / 50%
   overlap, **never split a user→char exchange** (snap to pair boundary), per-message
   binary-search truncation, single-segment fast path. Embeddable text template at `:226`.
