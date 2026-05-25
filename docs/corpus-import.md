@@ -82,16 +82,32 @@ Algorithms are model-agnostic and port unchanged; only the embedding model diffe
 
 | | card-curator | neo-tavern |
 |---|---|---|
-| model | Qwen3-VL-Embedding-8B (+ Reranker-8B) | BGE-M3 (Qwen3-Embedding alt) |
+| embed model | Qwen3-VL-Embedding-8B | **BGE-M3** (1024-dim, 8192 ctx) — LOCKED |
+| reranker | Qwen3-VL-Reranker-8B | **bge-reranker-v2-m3** (Xenova ONNX cross-encoder) — LOCKED |
 | dim | 4096 | 1024 |
-| host | local GPU (A6000, 48GB) | in-process / small service, no GPU |
+| host | local GPU (A6000, 48GB) | **in-process onnxruntime-node CUDA** (A6000) |
+| CUDA runtime | system | **uv-vendored CUDA-12 + cuDNN-9** (`tools/cuda/`, `pnpm cuda:setup`) |
+| GPU layout | embedder + reranker split across 2 cards | same — embedder GPU 0, reranker GPU 1 (`CUDA_VISIBLE_DEVICES`) |
 | store | ChromaDB, 4 collections | libSQL native `F32_BLOB(1024)` + `libsql_vector_idx` |
 | modalities | card **text + images** | text only |
 
-Theirs is **hardware-driven** (they happen to have the GPU), not a quality necessity.
-Ours is the right single-user-homelab call. **The one capability we give up: image
-embeddings** (visual card similarity / "find cards that look alike"). Defer; if ever
-wanted, a second vector table + a CLIP-class model mirrors their two-collection design.
+**LOCKED (May 2026, supersedes the original "no GPU" call):** we DO use the GPUs — BGE-M3 +
+bge-reranker-v2-m3 run **in-process** via onnxruntime-node's CUDA EP (proven: ~24× over CPU,
+fully on-GPU bar 8 trivial input-prep ops). The CUDA-12 runtime is vendored project-locally
+with uv (`tools/cuda/`), not a system install. fp16 on the Ampere cards (~30% faster). The
+embedder is **device/dtype-configurable** (`EMBED_DEVICE`/`EMBED_DTYPE`); CPU stays the
+default for tests/queries (short, ~0.04s — same model, so cpu-fp32 queries share the space
+with the cuda-fp16 corpus). Swapping models later is cheap — `embeddings.model` tags every
+vector — so this isn't a marriage; a Qwen3-Embedding upgrade is a spike + re-index away.
+**The one capability we give up: image embeddings** (visual card similarity). Defer; a second
+vector table + CLIP-class model mirrors their two-collection design.
+
+**Card embed text** = card-curator `EMBED_FIELDS` (`config.py:63`): name, tags, description,
+personality, scenario, first_mes (+ optional alternate_greetings); **excludes** mes_example /
+system_prompt / post_history / creator_notes (instructions/meta, dilute identity signal).
+**Token counting uses the real BGE-M3 tokenizer** (not a chars/4 estimate) — for segmentation
+budgets, the embed cap, the MIN_SEARCH_TEXT_TOKENS=150 degenerate filter, and **token-budget
+batching** (cap total padded tokens/batch, not a fixed count — `config.py:97`).
 
 ## Per-chat stats menu (Phase 6, when a chart asks a real question)
 
