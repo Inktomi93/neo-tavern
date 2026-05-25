@@ -99,8 +99,17 @@ embedder is **device/dtype-configurable** (`EMBED_DEVICE`/`EMBED_DTYPE`); CPU st
 default for tests/queries (short, ~0.04s — same model, so cpu-fp32 queries share the space
 with the cuda-fp16 corpus). Swapping models later is cheap — `embeddings.model` tags every
 vector — so this isn't a marriage; a Qwen3-Embedding upgrade is a spike + re-index away.
-**The one capability we give up: image embeddings** (visual card similarity). Defer; a second
-vector table + CLIP-class model mirrors their two-collection design.
+**Image embeddings (visual card similarity) are DEFERRED, not given up** — verified feasible in
+our stack: CLIP (`Xenova/clip-vit-base-patch32`, 512-dim) embeds a card PNG in-process via the same
+transformers.js + `.models` + CUDA setup. Add when wanted = a CLIP model + a second `F32_BLOB(512)`
+table/column + its own `libsql_vector_idx` (separate dim from the 1024-dim text vectors), mirroring
+card-curator's `card_images` collection. The libSQL store is vector-agnostic.
+
+**Vector-store capabilities (verified — supersedes any earlier "can't upsert/delete" claim):**
+`libsql_vector_idx` does full CRUD — `UPSERT`/`UPDATE`/targeted `DELETE WHERE` all work and the index
+auto-maintains. The only footgun: bulk `DELETE FROM` (emptying a vector table) poisons the shadow
+index → next insert fails; fix with `REINDEX <idx>`. So **incremental re-embed = targeted DELETE +
+re-INSERT** (just like card-curator's ChromaDB delete-and-readd). See `docs/conventions.md`.
 
 **Card embed text** = card-curator `EMBED_FIELDS` (`config.py:63`): name, tags, description,
 personality, scenario, first_mes (+ optional alternate_greetings); **excludes** mes_example /

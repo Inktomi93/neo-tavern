@@ -172,8 +172,10 @@ latency), `pnpm embed:probe` (live BGE-M3), `pnpm import:st` / `pnpm embed:corpu
 by `DEBUG_TOKEN`). `pnpm check` = green-to-ship (biome+tsc+arch+vitest), runs on pre-commit.
 
 **Hard-won facts (a fresh session WILL waste time re-deriving these — each → its doc):**
-- **Vectors are libSQL NATIVE `F32_BLOB` + `libsql_vector_idx`** — NO sqlite-vec. The index
-  **can't UPSERT or bulk `DELETE FROM`** (corrupts it); insert plain, re-index = fresh DB. (data-model)
+- **Vectors are libSQL NATIVE `F32_BLOB` + `libsql_vector_idx`** — NO sqlite-vec. The index does
+  full CRUD (UPSERT/UPDATE/targeted-DELETE all work + auto-maintain); the ONE footgun is bulk
+  `DELETE FROM` (empties → next insert fails) → fix with `REINDEX <idx>`. Image vectors supported
+  (CLIP, separate dim) — deferred by choice, not a limit. (docs/conventions.md, corpus-import.md)
 - **Embedding/rerank run IN-PROCESS on GPU** via onnxruntime-node CUDA; CUDA-12 is vendored in
   `tools/cuda/` (uv, `pnpm cuda:setup`), models cache to `.models/`. (corpus-import, CLAUDE locked-decisions)
 - **The transformers.js JS tokenizer is QUADRATIC** (12.7s/10k-tok) — use native `@anush008/tokenizers`. (#15)

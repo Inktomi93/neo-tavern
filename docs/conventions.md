@@ -61,13 +61,25 @@ transformers.js `session_options`, OS env vars) trip `useNamingConvention`. Two 
   it doesn't drop columns/indexes from earlier migrations).
 - **`pnpm exec tsx`**, not bare `tsx` (not always on PATH).
 
-## libSQL / native vectors
+## libSQL / native vectors  (VERIFIED — corrected after an over-cautious earlier claim)
 
-- Vectors are **native `F32_BLOB` + `libsql_vector_idx`** — NO sqlite-vec.
-- A vector-indexed table **cannot UPSERT** (`onConflictDoUpdate` → `failed to insert shadow row`)
-  and **cannot bulk `DELETE FROM`** (corrupts the shadow table → native `corrupted double-linked
-  list` abort). So: **plain `INSERT`**; idempotency via a `unique(...)` index + the *caller*
-  skipping known keys; **re-index = drop the DB file + re-import**, never `DELETE`.
+- Vectors are **native `F32_BLOB` + `libsql_vector_idx`** — NO sqlite-vec. Image vectors are
+  supported too (it's vector-agnostic): a separate `F32_BLOB(<imgDim>)` column/table + its own
+  ANN index. CLIP (`Xenova/clip-vit-base-patch32`, 512-dim) embeds card PNGs in our stack —
+  verified; deferred by choice (text-only), not a limitation.
+- **Full CRUD works + the index auto-maintains** (Turso docs + empirically tested on a file DB):
+  `INSERT`, `UPDATE` (vector), **`UPSERT`** (`onConflictDoUpdate`), and **targeted `DELETE WHERE …`**
+  all succeed and keep `vector_top_k` consistent. (UPDATE is internally DELETE+INSERT.)
+- **The ONE footgun:** `DELETE FROM <table>` that **empties** a vector-indexed table poisons the
+  shadow index → the *next* `INSERT` fails `failed to insert shadow row`. **Recover with
+  `REINDEX <index_name>`** (verified to fully repair it) — or use targeted deletes / DROP+recreate /
+  a fresh DB. Don't bulk-`DELETE FROM`-then-insert without a `REINDEX` between.
+- **Embed pass still uses plain `INSERT` + caller-skip (`existingKeys`)** — NOT because upsert is
+  impossible (it isn't), but because *skipping already-embedded entities is the right resumable-pass
+  behavior*. **Incremental re-embed** of a changed entity = **targeted `DELETE WHERE entity_id LIKE
+  '<id>%'` + re-INSERT** (both proven safe) — same pattern as card-curator's ChromaDB delete-and-readd.
+- Known quirk: `count(*)` can read 0 on a vector-indexed table in some bindings — verify counts via
+  the rows, not blind `count(*)`.
 - `foreign_keys = ON` is set per-connection in `db/client.ts`; only `ownerId → users.id` FKs
   exist today (internal links are plain `text` — hardening pending in migration 0005).
 
