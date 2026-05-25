@@ -1,0 +1,4 @@
+# Not a multi-package workspace yet (the brief defers that). This file exists
+# only because pnpm 11 reads its build-script allowlist here, not in package.json.
+allowBuilds:
+  esbuild: true

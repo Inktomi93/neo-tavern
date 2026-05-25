@@ -1,0 +1,28 @@
+# Make line-endings repo-authoritative so cross-platform dev (Windows <-> Linux)
+# can't introduce CRLF. Pairs with Biome (lineEnding: "lf") and .editorconfig
+# (end_of_line = lf): all text is normalized to LF in the repo AND on checkout,
+# regardless of each machine's core.autocrlf.
+* text=auto eol=lf
+
+# Windows-only scripts genuinely need CRLF (none yet, but correct if ever added).
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary assets — never normalize or text-diff (it would corrupt them).
+*.png    binary
+*.jpg    binary
+*.jpeg   binary
+*.webp   binary
+*.gif    binary
+*.ico    binary
+*.woff   binary
+*.woff2  binary
+*.ttf    binary
+*.otf    binary
+*.db     binary
+*.sqlite binary
+
+# Generated / lockfiles — collapse in GitHub diffs, exclude from language stats.
+pnpm-lock.yaml              linguist-generated=true
+src/client/routeTree.gen.ts linguist-generated=true
+docs/dependency-graph.mmd   linguist-generated=true

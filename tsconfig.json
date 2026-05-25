@@ -1,0 +1,42 @@
+{
+  "compilerOptions": {
+    // Type-check only. tsx executes TS directly (dev + prod); Vite bundles the
+    // client. tsc is never an emitter here — it is the type oracle for `check`.
+    "noEmit": true,
+    "skipLibCheck": true,
+
+    // Bundler resolution serves both the Vite client and the tsx server, and
+    // lets us write extensionless relative imports.
+    "target": "ES2023",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "moduleDetection": "force",
+    "jsx": "react-jsx",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    // Pairs with Biome useImportType: type-only imports must say `import type`.
+    "verbatimModuleSyntax": true,
+    "esModuleInterop": true,
+    "allowJs": false,
+
+    // Strictness — fully on. These are the flags that hurt to retrofit later.
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    // Forces process.env["PORT"] over process.env.PORT — no silent any on index access.
+    "noPropertyAccessFromIndexSignature": true,
+    "allowUnreachableCode": false,
+    "allowUnusedLabels": false,
+    "forceConsistentCasingInFileNames": true,
+    "useUnknownInCatchVariables": true,
+
+    "types": ["node"]
+  },
+  "include": ["src", "scripts", "tests", "vite.config.ts", "vitest.config.ts"]
+}

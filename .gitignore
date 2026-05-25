@@ -1,0 +1,27 @@
+node_modules/
+dist/
+*.tsbuildinfo
+
+# env
+.env
+.env.*
+!.env.example
+
+# data volume (libSQL db + assets) — mounted in prod, local in dev
+data/
+*.db
+*.db-journal
+*.sqlite
+
+# logs / os
+*.log
+.DS_Store
+
+# claude code local settings
+.claude/settings.local.json
+
+# local domain reference clones (SillyTavern, Astra, Marinara) — not part of this
+# project; cloned for reference only. The README is tracked (documents how to
+# repopulate); the clones themselves are not.
+references/*
+!references/README.md
