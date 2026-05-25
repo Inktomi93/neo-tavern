@@ -43,6 +43,7 @@ pnpm cuda:setup                # one-time: vendor CUDA-12 + cuDNN-9 into tools/c
 pnpm csls                      # precompute embeddings.hub_score (CSLS, per entity_type) — re-run on corpus change
 pnpm corpus:backfill-source-text   # fill embeddings.source_text on rows embedded before the reranker (no re-embed)
 pnpm rerank:probe              # validate the bge-reranker-v2-m3 cross-encoder (CSLS vs reranked, side by side)
+pnpm discover:probe [--rerank] # validate `discover` ("who have I done X with") — characters + matching snippets
 ```
 
 - **GPU is self-contained:** `embed:corpus:gpu` auto-bootstraps a project-local uv venv

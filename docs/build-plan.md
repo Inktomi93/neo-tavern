@@ -98,8 +98,10 @@ empty** — 100% rails, 0% product.
    stored by the embed pass + `pnpm corpus:backfill-source-text` for old rows),
    `embeddings/reranker` (bge-reranker-v2-m3 ONNX fp16, max_length 1024, batched),
    `knn({rerank:true})` over-fetches the CSLS pool → cross-encoder → top-n; GPU-validated via
-   `pnpm rerank:probe`. **4.6.3c ⏭** `discover`, **4.6.3d** `features/corpus-search` UI. Lift
-   from card-curator + st-bridge per `docs/corpus-import.md`.
+   `pnpm rerank:probe`. **4.6.3c ✅** the killer feature `discover` (`search.discover` — chat
+   segments grouped by character, ranked by best matching conversation + snippet evidence +
+   card meta; real-corpus validated via `pnpm discover:probe`). **4.6.3d ⏭** `features/corpus-search`
+   UI. Lift from card-curator + st-bridge per `docs/corpus-import.md`.
    **⏭ Migration 0007 (pending, specced)** — `docs/handoff-relational-fixes.md`:
    enforce internal FKs (cascade policy) + presets → content-versioning. The importer
    added link columns + proved zero dangling; it makes them DB-enforced FKs. (Number-agnostic

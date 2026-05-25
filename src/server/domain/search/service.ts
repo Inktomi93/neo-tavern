@@ -1,6 +1,6 @@
 import { and, eq, inArray, sql } from "drizzle-orm";
 import type { Db } from "../../../db/client";
-import { characters, chats } from "../../../db/schema";
+import { characters, characterVersions, chats } from "../../../db/schema";
 import { createEmbedder, type Embedder } from "../../embeddings/embedder";
 import { createReranker, type Reranker } from "../../embeddings/reranker";
 import { getLog } from "../../observability/logger";
@@ -16,6 +16,30 @@ export interface SearchHit {
   distance: number;
 }
 
+/** One conversation snippet backing a discover hit. */
+export interface DiscoverSegment {
+  chatId: string;
+  segIndex: number;
+  /** Leading slice of the embedded segment text (the supporting evidence). */
+  snippet: string;
+  /** Raw cosine distance of this segment to the query. */
+  distance: number;
+}
+
+/** A character surfaced by discover, ranked by their single best matching segment. */
+export interface DiscoverCharacter {
+  characterId: string;
+  name: string;
+  tags: string[];
+  description: string;
+  /** How many pool segments matched this character. */
+  matchCount: number;
+  /** Raw cosine distance of the best matching segment (results are ordered by rank, which
+   *  is CSLS-adjusted distance, or cross-encoder score when reranked — not this value). */
+  bestDistance: number;
+  segments: DiscoverSegment[];
+}
+
 export interface SearchService {
   knn(params: {
     queryText: string;
@@ -25,6 +49,18 @@ export interface SearchService {
     /** Second stage: re-score the CSLS pool with the cross-encoder reranker (4.6.3b). */
     rerank?: boolean | undefined;
   }): Promise<SearchHit[]>;
+
+  /**
+   * The killer feature (4.6.3c): "who have I actually done X with?" Searches chat SEGMENTS,
+   * groups by character, and returns characters ranked by their single best matching
+   * conversation — with the supporting segment snippets — rather than raw segments.
+   */
+  discover(params: {
+    queryText: string;
+    k?: number | undefined;
+    ownerId?: string | undefined;
+    rerank?: boolean | undefined;
+  }): Promise<DiscoverCharacter[]>;
 }
 
 export interface SearchServiceDeps {
@@ -42,6 +78,15 @@ const OWNER_OVERFETCH = 8;
 // hubness correction (surface the specific match). Also the candidate pool the cross-encoder
 // reranker re-scores (card-curator uses n*3; k*4 is comparable). hub_score in domain/corpus.
 const CSLS_POOL_FACTOR = 4;
+
+// discover groups a big SEGMENT pool by character, so it needs many more candidates than knn
+// — a heavy-tailed corpus (a popular card owns 100+ segments) means k characters need ~k·20
+// segments represented. Capped near the ANN budget ceiling (vector_top_k returns only a few
+// hundred for a large request — docs/conventions.md); bail to whatever covered if fewer.
+const DISCOVER_SEGMENT_POOL_FACTOR = 20;
+const DISCOVER_SEGMENT_POOL_CAP = 400;
+const DISCOVER_SEGMENTS_PER_CHAR = 3; // best + up to 2 more for drill-down evidence
+const DISCOVER_SNIPPET_CHARS = 280; // segment text can be ~8KB; a snippet is enough evidence
 
 // A pool candidate carries source_text (for rerank) through CSLS + owner-scoping.
 interface Candidate {
@@ -178,6 +223,111 @@ export function createSearchService(db: Db, deps: SearchServiceDeps = {}): Searc
         "search: knn",
       );
       return hits;
+    },
+
+    async discover({ queryText, k = 10, ownerId, rerank = false }) {
+      const embedding = await embedder.embed(queryText);
+      const query = JSON.stringify(Array.from(embedding));
+      const poolK = Math.min(k * DISCOVER_SEGMENT_POOL_FACTOR, DISCOVER_SEGMENT_POOL_CAP);
+      // chat_segment-only pool (cards excluded), CSLS-rankable + rerankable.
+      const rows = await db.all<{
+        entityId: string;
+        dist: number;
+        hubScore: number | null;
+        sourceText: string | null;
+      }>(sql`
+        SELECT e.entity_id AS entityId,
+               vector_distance_cos(e.embedding, vector32(${query})) AS dist,
+               e.hub_score AS hubScore, e.source_text AS sourceText
+        FROM vector_top_k('embeddings_ann', vector32(${query}), ${poolK}) AS v
+        JOIN embeddings e ON e.rowid = v.id
+        WHERE e.entity_type = 'chat_segment'
+        ORDER BY dist ASC
+      `);
+      const pool: Candidate[] = rows
+        .map((row) => ({
+          cand: {
+            entityType: "chat_segment",
+            entityId: row.entityId,
+            distance: row.dist,
+            sourceText: row.sourceText,
+          },
+          rank: row.hubScore === null ? row.dist : Math.max(0, row.dist - 1 + row.hubScore),
+        }))
+        .sort((a, b) => a.rank - b.rank)
+        .map((x) => x.cand);
+      // Rerank the SEGMENTS (independent of grouping) before grouping — a segment the
+      // reranker promotes can pull in a character CSLS ranked low (advisor's note).
+      const ranked = rerank ? await applyRerank(queryText, pool) : pool;
+
+      // Resolve segment → chat (owner-scoped) → pinned version → characterId + card, batched.
+      const chatIds = [...new Set(ranked.map((c) => chatIdOf(c.entityId)))];
+      if (chatIds.length === 0) return [];
+      const chatRows = await db
+        .select({ id: chats.id, cvId: chats.characterVersionId })
+        .from(chats)
+        .where(
+          ownerId
+            ? and(eq(chats.ownerId, ownerId), inArray(chats.id, chatIds))
+            : inArray(chats.id, chatIds),
+        );
+      const chatToCv = new Map(chatRows.map((r) => [r.id, r.cvId]));
+      const cvIds = [...new Set(chatRows.map((r) => r.cvId))];
+      const cvRows =
+        cvIds.length > 0
+          ? await db
+              .select({
+                id: characterVersions.id,
+                characterId: characterVersions.characterId,
+                name: characterVersions.name,
+                tags: characterVersions.tags,
+                description: characterVersions.description,
+              })
+              .from(characterVersions)
+              .where(inArray(characterVersions.id, cvIds))
+          : [];
+      const cvById = new Map(cvRows.map((r) => [r.id, r]));
+
+      // Group by character in ranked order — first appearance = best segment. Map preserves
+      // insertion order, so iterating values() yields characters already ranked by best match.
+      const byChar = new Map<string, DiscoverCharacter>();
+      for (const c of ranked) {
+        const chatId = chatIdOf(c.entityId);
+        const cvId = chatToCv.get(chatId);
+        if (cvId === undefined) continue; // chat not owned / not found → dropped under scoping
+        const cv = cvById.get(cvId);
+        if (!cv) continue;
+        const segIndex = Number(c.entityId.split(":")[1] ?? 0);
+        const seg: DiscoverSegment = {
+          chatId,
+          segIndex,
+          snippet: (c.sourceText ?? "").slice(0, DISCOVER_SNIPPET_CHARS),
+          distance: c.distance,
+        };
+        const existing = byChar.get(cv.characterId);
+        if (existing) {
+          existing.matchCount += 1;
+          if (existing.segments.length < DISCOVER_SEGMENTS_PER_CHAR) existing.segments.push(seg);
+        } else {
+          byChar.set(cv.characterId, {
+            characterId: cv.characterId,
+            name: cv.name,
+            tags: Array.isArray(cv.tags)
+              ? cv.tags.filter((t): t is string => typeof t === "string")
+              : [],
+            description: cv.description,
+            matchCount: 1,
+            bestDistance: c.distance,
+            segments: [seg],
+          });
+        }
+      }
+      const result = [...byChar.values()].slice(0, k);
+      getLog().debug(
+        { k, reranked: rerank, pool: ranked.length, characters: result.length },
+        "search: discover",
+      );
+      return result;
     },
   };
 }

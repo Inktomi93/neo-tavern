@@ -91,9 +91,15 @@ Algorithms are model-agnostic and port unchanged; only the embedding model diffe
   rerank:probe` (e.g. "catgirl who cooks" → the cross-encoder surfaces Katzette/Clawdia that
   vector-sim missed). Device via `RERANK_DEVICE` (cpu default; cuda for prod).
 - **find-duplicates / similar** — `server.py:663, 926-987`: self vector-top-K at cosine
-  ≥ 0.92 → a libSQL `vector_top_k` self-join.
-- **`discover`** — `server.py:229+`: search chat segments → group by character → enrich
-  with card metadata = "who have I actually done X with." **This is the killer feature.**
+  ≥ 0.92 → a libSQL `vector_top_k` self-join. **Deferred** (optional standalone feature).
+- **`discover` — ✅ IMPLEMENTED (Phase 4.6.3c). The killer feature.** `server.py:229+`:
+  `search.discover()` searches the chat_segment pool (CSLS + optional two-stage rerank, owner-
+  scoped), resolves each segment → chat → pinned version → characterId, GROUPS by character
+  (best segment first), and returns characters ranked by their single best matching
+  conversation, each with up to 3 snippet evidences + the card's name/tags/description =
+  "who have I actually done X with." Validated on the real corpus (`pnpm discover:probe`):
+  "comforting someone crying" / "arena fight" / "first kiss" each surface thematically correct
+  characters with matching snippets. tRPC `search.discover`.
 
 ## The model divergence (validated, deliberate)
 

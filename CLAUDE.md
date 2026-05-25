@@ -137,8 +137,11 @@ soft-delete trash bin. No tautological getById tests. Catch yourself building th
   cross-encoder rerank: `embeddings.source_text` (migration 0006) stored by the embed pass +
   `pnpm corpus:backfill-source-text`, `embeddings/reranker` (bge-reranker-v2-m3 ONNX, fp16,
   max_length 1024, batched, device via `RERANK_DEVICE`), `knn({rerank:true})` over-fetches the
-  CSLS pool → cross-encoder → top-n (GPU-validated, `pnpm rerank:probe`); **4.6.3c ⏭ NEXT**
-  `discover` · **4.6.3d** `features/corpus-search` UI. ·
+  CSLS pool → cross-encoder → top-n (GPU-validated, `pnpm rerank:probe`); **4.6.3c ✅** the
+  killer feature `discover` — `search.discover()` searches chat segments, groups by character,
+  returns characters ranked by their best matching conversation + snippet evidence + card meta
+  (real-corpus validated, `pnpm discover:probe`: "arena fight"/"first kiss" → thematically
+  correct characters); **4.6.3d ⏭ NEXT** `features/corpus-search` UI. ·
   **⏭ Migration 0007 (PENDING, specced):** enforce internal FKs (cascade policy) + move presets
   to content-versioning (copy-on-write) — fixes "nuke chat orphans 20k msgs" + preset-provenance
   bug. Full handoff: **`docs/handoff-relational-fixes.md`** (number-agnostic — takes the next
