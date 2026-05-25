@@ -161,7 +161,9 @@ read before touching imports) → `docs/data-model.md` (schema) → the doc for 
 - **`docs/observability.md`** — pino logging + the `curl`-able `/api/_debug/*` API.
 - **`docs/sdk-notes.md`** — Agent SDK map + the `pnpm sdk:play` playground.
 - **`docs/dependencies.md`** — deps (installed + deferred parking lot).
-- **`references/README.md`** — local clones of card-curator/st-bridge/SillyTavern (read, don't copy).
+- **`references/README.md`** — reference repos (read, don't copy): external clones
+  (astra-projecta/marinara-engine/sillytavern) **+ symlinks to our sibling repos
+  `card-curator`/`st-bridge`** (the corpus/RAG answer-keys, in `development/`).
 - **`README.md` / `ONBOARDING.md`** — how to run / human-teammate onboarding.
 
 **Dev tools (don't reinvent — drive these):** `pnpm sdk:play` (Agent SDK probes — env/models/

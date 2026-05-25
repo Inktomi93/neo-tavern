@@ -5,19 +5,29 @@ of neo-tavern** — the clones are gitignored (only this README is tracked) and
 excluded from every tool (biome / tsc / vitest / knip / dependency-cruiser).
 Read them for patterns; never import from them.
 
+Two kinds live here: **cloned external** frontend/domain refs, and **symlinks to our own
+sibling repos** in `development/` (card-curator, st-bridge — the corpus/RAG answer-keys). Both
+are gitignored; only this README is tracked.
+
 Repopulate on a fresh checkout:
 
 ```bash
 mkdir -p references
+# external clones (read for patterns):
 git clone --depth 1 https://github.com/RivelleDays/SillyTavern-AstraProjecta references/astra-projecta
 git clone --depth 1 https://github.com/Pasta-Devs/Marinara-Engine references/marinara-engine
 git clone --depth 1 https://github.com/SillyTavern/SillyTavern references/sillytavern
+# our own sibling repos (in development/) — SYMLINKED, not cloned:
+ln -sfn ../../card-curator references/card-curator
+ln -sfn ../../st-bridge   references/st-bridge
 ```
 
-| Clone | Good for |
-| --- | --- |
-| **astra-projecta** | Closest analog — modern shadcn/radix ST frontend redesign. Feature-sliced client, desktop/mobile shells, UI library choices. |
-| **marinara-engine** | Fullstack RP engine (Fastify + React + Drizzle/libSQL + Agent SDK). Provider patterns, prompt/cache handling, build scripts. |
-| **sillytavern** | The canonical domain reference — character-card PNG format, world-info/lorebook structure, chat JSONL. The Phase 4 import target. |
+| Ref | Kind | Good for |
+| --- | --- | --- |
+| **astra-projecta** | clone | Closest analog — modern shadcn/radix ST frontend redesign. Feature-sliced client, desktop/mobile shells, UI library choices. |
+| **marinara-engine** | clone | Fullstack RP engine (Fastify + React + Drizzle/libSQL + Agent SDK). Provider patterns, prompt/cache handling, build scripts. |
+| **sillytavern** | clone | Canonical domain reference — character-card PNG format, world-info/lorebook, chat JSONL. The Phase 4 import target. |
+| **card-curator** | symlink | **Our** Python ST corpus tool — the deep RAG **answer key**: PNG card + chat parsers, CSLS hubness, segmentation, field budgeting. Lift `file:line` per `docs/corpus-import.md`. |
+| **st-bridge** | symlink | **Our** ST bridge — lifted/improved date + branch parsers (`dates.py`), in-process CSLS (`embeddings.py`). |
 
-Update a clone: `git -C references/<name> pull`.
+Update a clone: `git -C references/<name> pull`. (Symlinks track the live sibling repos.)

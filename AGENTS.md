@@ -53,6 +53,12 @@ on pre-commit. Green = ship. It must pass before you call anything done.
 locally (gitignored, tool-excluded). They exist so you can **learn** — data formats,
 domain concepts, what patterns worked — **not** so you can copy them.
 
+**Exception — `references/card-curator` + `references/st-bridge` are symlinks to OUR OWN
+sibling repos** (in `development/`). They are the corpus/RAG **answer keys**: validated ST
+parsers + ranking we *do* port (`docs/corpus-import.md` cites them `file:line`). "Learn don't
+copy" applies to the *external* refs above; for our own prior work, lift the logic + re-express
+it in our layers/types. Don't re-derive what they already solved.
+
 - **SillyTavern** is legacy jQuery / webpack / no-TypeScript. We are modern TS +
   Vite + Biome with an *enforced* architecture. Mine it for **domain knowledge**
   (character-card PNG format, world-info/lorebook structure, chat JSONL — the Phase 4
