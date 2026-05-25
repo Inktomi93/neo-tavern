@@ -62,14 +62,24 @@ tailwindcss (v4), concurrently.
 # pnpm add drizzle-orm @libsql/client
 # pnpm add -D drizzle-kit
 # pnpm add nanoid          # id generation for rows
-# sqlite-vec is loaded as a libSQL/SQLite extension at runtime — not an npm dep.
+# Vectors use libSQL NATIVE F32_BLOB + libsql_vector_idx — NO sqlite-vec, no extension.
 ```
 
-## Server — embeddings / RAG (Phase 3)
+## Server — embeddings / RAG ✅ INSTALLED (Phase 3a / 4.6)
 
 ```bash
-# pnpm add @huggingface/transformers   # BGE-M3 (default) or Qwen3-Embedding local embeddings
+# pnpm add @huggingface/transformers   # in-process BGE-M3 (Xenova/bge-m3) embeddings +
+#                                       # onnx-community/bge-reranker-v2-m3-ONNX reranker
+# pnpm add @anush008/tokenizers        # native Rust tokenizer (real BGE-M3 token counts;
+#                                       # the transformers.js JS tokenizer is quadratic — 12.7s
+#                                       # for a 10k-token card). Prebuilt napi, no build step.
 ```
+- **GPU is in-process** (onnxruntime-node CUDA EP), not a service. The CUDA-12 + cuDNN-9
+  runtime is vendored project-locally with **uv** (`tools/cuda/pyproject.toml` + `uv.lock`,
+  `pnpm cuda:setup`) — NOT an npm/system dep. `allowBuilds`: `onnxruntime-node` (native).
+- Model weights cache to repo-local `.models/` (`MODEL_CACHE_DIR`), gitignored.
+- Future swap option (no native binary): **kitoken** (Rust→WASM, HF-compatible) for the
+  tokenizer; **Qwen3-Embedding** if BGE-M3 is outgrown (cheap re-index — `embeddings.model` tags rows).
 
 ## Server — structured logging + observability ✅ INSTALLED
 

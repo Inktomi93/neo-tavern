@@ -28,6 +28,25 @@ pnpm knip     # dead-code / unused-dependency scan (not part of `check`)
 `pnpm check` is the contract: **green = ship.** It also runs on every commit via
 the husky pre-commit hook.
 
+## Corpus import + embedding (the RAG product)
+
+```bash
+# 1. Import a staged SillyTavern profile → DB rows (idempotent; re-run-safe)
+pnpm import:st [dir]            # default dir: corpus-staging/default-user
+
+# 2. Embed the imported corpus for semantic search (BGE-M3 → libSQL vectors)
+pnpm embed:corpus              # CPU (slow on long text; fine for a small corpus)
+pnpm embed:corpus:gpu          # GPU via in-process onnxruntime-node CUDA (~24× faster)
+pnpm cuda:setup                # one-time: vendor CUDA-12 + cuDNN-9 into tools/cuda/.venv (uv)
+```
+
+- **GPU is self-contained:** `embed:corpus:gpu` auto-bootstraps a project-local uv venv
+  (`tools/cuda/`, gitignored) with the CUDA-12 runtime — no system CUDA install. Model
+  weights cache to repo-local `.models/` (gitignored). Both are pinned via env
+  (`EMBED_DEVICE`, `EMBED_DTYPE`, `MODEL_CACHE_DIR`). See `docs/corpus-import.md`.
+- Staging the corpus (root-owned ST docker volume): `docker cp sillytavern:/home/node/app/
+  data/<profile> corpus-staging/<profile>` (gitignored; the `tests/fixtures/` subset is committed).
+
 The folder structure and dependency direction are a machine-enforced **layer
 cake** — see [docs/architecture.md](docs/architecture.md). `pnpm arch`
 (dependency-cruiser) fails the build if anything imports upward or sideways

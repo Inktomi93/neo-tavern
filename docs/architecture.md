@@ -99,8 +99,8 @@ src/
 │   ├── embeddings/      # INFRA — BGE-M3 / vectors (Phase 3)
 │   ├── domain/          # BUSINESS LOGIC — one dir per feature
 │   │   ├── _shared/     #   cross-feature domain helpers (the only shared escape)
-│   │   └── <feature>/   #   e.g. chat/, search/ — entered via index.ts (front door)
-│   ├── jobs/            # DRIVER — background workers (corpus embed pass, agent jobs)
+│   │   └── <feature>/   #   chat/, corpus/, import/, search/ — entered via index.ts
+│   ├── jobs/            # DRIVER — IN-SERVER background workers (reach db only via domain)
 │   └── trpc/            # DRIVER — transport
 │       ├── context.ts
 │       ├── router.ts    #   root router
@@ -121,6 +121,14 @@ src/
 
 Empty directories are `.gitkeep`-stubbed to lock the layout. Files are created
 when their feature lands — and slot into the enforced layer automatically.
+
+**`scripts/` (repo root, NOT cruised) = composition-root CLIs.** One-shot tools that
+bootstrap their own `createDb` + services and call **down** into domain — `import-st.ts`,
+`embed-corpus.ts`, probes. They are NOT `jobs/`: the `drivers-through-domain` rule bars
+`jobs/` from importing `db` *at all* (even type-only), so a db-bootstrapping CLI can't live
+there. Like `server/index.ts`, a script is an entry point that wires the graph; `jobs/` stays
+for thin **in-server** background workers. `tools/` (root) holds the uv-vendored CUDA runtime
+(`tools/cuda/`) — not application code.
 
 ## Enforcement
 

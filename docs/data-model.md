@@ -322,6 +322,13 @@ export const taggables = sqliteTable('taggables', {
   blobs read *structurally* that *evolve* — `user_settings.config`, `presets.config`
   (load → if `schemaVersion < current`, migrate → Zod-validate → write back); this
   replaces ST's scattered `if (x === undefined)` duck-typing;
+  **⚠️ STANCE CHANGED (approved, PENDING migration 0005):** presets move from type-2 to
+  **type-3 content versioning** (a `presets`/`preset_versions` triad, copy-on-write like
+  characters) — because `messages.presetId` recording a *mutable* preset rewrites past
+  generation provenance, which breaks corpus analytics. `schemaVersion` rides along on
+  `preset_versions`. See `docs/handoff-0005-relational-fixes.md`; this section gets rewritten
+  when 0005 lands. Also pending in 0005: **enforced internal FKs** (there are none today
+  beyond `ownerId` — a documented gap) with a CASCADE/RESTRICT policy.
   (3) **domain/content → `character_versions.version`** (canon history — a different
   concept). Opaque/archival blobs (`character_versions.raw`, `messages.rawRequest/
   rawResponse`, `chats.metadata`) are write-once — **not versioned.** Discriminator:

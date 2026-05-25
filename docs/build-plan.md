@@ -84,10 +84,17 @@ empty** — 100% rails, 0% product.
    801 chats · 20,845 msgs · 71,187 variants · 184 branches · zero dangling refs; re-run is
    idempotent. Schema additions: migration `0002` (`message_variants` + `messages.activeVariantIdx`),
    `0003` (`chats.importedFrom`/`importHash`).
-6. **Search (Phase 4.6)** — the deferred Phase-3 product, now over the real corpus:
-   chat segmentation, CSLS hubness, hybrid query, two-stage rerank, `discover`,
-   owner-scoped results, `features/corpus-search` UI. Lift from card-curator + st-bridge
-   per `docs/corpus-import.md`.
+6. **Search (Phase 4.6)** — the deferred Phase-3 product, now over the real corpus.
+   **4.6.1 ✅** segmentation + identity-only card embed-text + embedding idempotency.
+   **4.6.2 ✅ (code)** real native tokenizer (`@anush008/tokenizers` — JS tokenizer is
+   quadratic), token-budget batching, owner-scoped knn, **in-process CUDA** embed pass
+   (`pnpm embed:corpus:gpu`, project-local uv CUDA-12, fp16, GPU-saturated) — first full
+   GPU index running. **4.6.3 ⏭** CSLS hubness (per entity_type), bge-reranker-v2-m3
+   two-stage (GPU 1), `discover`, `features/corpus-search` UI. Lift from card-curator +
+   st-bridge per `docs/corpus-import.md`.
+   **⏭ Migration 0005 (pending, specced)** — `docs/handoff-0005-relational-fixes.md`:
+   enforce internal FKs (cascade policy) + presets → content-versioning. The importer
+   added link columns + proved zero dangling; 0005 makes them DB-enforced FKs.
 7. **Analytics** — `domain` queries + `features` charts (`recharts`), one chart at
    a time, only when there's a real question.
 

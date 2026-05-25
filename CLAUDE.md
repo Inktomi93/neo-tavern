@@ -75,7 +75,8 @@ mode.
 ## Locked decisions (current — supersedes the original brief where noted)
 
 - **Runtime:** Node 24 (brief said 22; we target 24), pnpm 11. TypeScript, strict.
-- **Backend:** Hono · Drizzle + libSQL (sqlite-vec for vectors) · Zod · tRPC ·
+- **Backend:** Hono · Drizzle + libSQL (**native `F32_BLOB` vectors + `libsql_vector_idx`**
+  — no sqlite-vec; the Step-0 spike proved native vectors work) · Zod · tRPC ·
   `@anthropic-ai/claude-agent-sdk` (sdk chats + agent jobs) · `openai` → OpenRouter
   (raw / non-Claude).
 - **Frontend:** React 19 · Vite · TanStack Router + Query · Tailwind v4 · shadcn
@@ -89,6 +90,16 @@ mode.
 - **Deploy:** one Docker image into the authentik + caddy compose stack. Backend
   port **8788** (3000 is Open WebUI on this box).
 - **Default chat model:** Opus 4.7; toggle catalog in `src/shared/models.ts`.
+- **Corpus RAG (embedding + reranking) — STANCE CHANGED (May 2026, supersedes the original
+  "no GPU" call):** we DO use the homelab's 2× RTX A6000. **BGE-M3** (1024-dim, 8192 ctx,
+  CLS+normalize, no query prefix) for embeddings + **`onnx-community/bge-reranker-v2-m3-ONNX`**
+  (fp16 cross-encoder) for reranking, both **in-process via onnxruntime-node's CUDA EP** (~24×
+  CPU). CUDA-12 runtime is **vendored project-locally with uv** (`tools/cuda/`, `pnpm cuda:setup`)
+  — not a system install. Real token counts use the **native `@anush008/tokenizers`** (the JS
+  tokenizer is quadratic). Model weights cache to repo-local `.models/`. EMBED_DEVICE/EMBED_DTYPE
+  configurable; CPU+fp32 stays the default for tests/queries (same model → one vector space).
+  2-GPU split: embedder GPU 0, reranker GPU 1. Not married — `embeddings.model` tags every
+  vector, so a model swap is a re-index away. Details: `docs/corpus-import.md`.
 
 ## What NOT to build (slop guard)
 
@@ -116,8 +127,14 @@ soft-delete trash bin. No tautological getById tests. Catch yourself building th
   (`domain/import`), `message_variants`/branch schema, orchestration (copy-on-write
   versions, char-wide branch resolution, idempotent), and the `pnpm import:st` runner —
   validated on the real corpus (**309 chars · 20,845 msgs · 71,187 variants**, zero
-  dangling refs). **⏭ NEXT: 4.6** — embed the imported corpus → real search (segmentation,
-  CSLS, hybrid, rerank, `discover`, `features/corpus-search` UI). ·
+  dangling refs). **Phase 4.6 — embed → real search (IN PROGRESS):** 4.6.1 ✅ segmentation
+  + identity-only card embed-text + embedding idempotency; 4.6.2 ✅ (code) native tokenizer,
+  token-budget batching, owner-scoped knn, in-process CUDA embed pass — *first full GPU index
+  running*; **4.6.3 ⏭ NEXT** CSLS hubness (per-entity-type) + bge-reranker two-stage + `discover`
+  + `features/corpus-search` UI. ·
+  **⏭ Migration 0005 (PENDING, specced):** enforce internal FKs (cascade policy) + move presets
+  to content-versioning (copy-on-write) — fixes "nuke chat orphans 20k msgs" + preset-provenance
+  bug. Full handoff: **`docs/handoff-0005-relational-fixes.md`**. ·
   **Phase 5** mode escape valve · **Phase 6** analytics (one chart at a time, only
   when there's a real question).
 
