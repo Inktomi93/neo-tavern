@@ -27,15 +27,24 @@ empty** — 100% rails, 0% product.
 
 ## Build order — bottom-up, thin vertical slices
 
-1. **`db`** — schema from `data-model.md` + libSQL client + migrations + the
-   in-memory test harness (`tests/AGENTS.md`). _Re-add: `@libsql/client`,
-   `drizzle-orm`, `-D drizzle-kit`._
+1. **`db`** ✅ — full 18-table schema from `data-model.md`, libSQL client (`createDb`
+   + PRAGMAs incl. `foreign_keys=ON`, `runMigrations`), `0000_init` migration, and the
+   in-memory test harness (`tests/support/db.ts` + a FK-enforcement smoke test). Deps
+   added: `drizzle-orm`, `@libsql/client`, `nanoid`, `-D drizzle-kit`. (Native-vector
+   `embeddings.embedding` column deferred → Step 4.)
 2. **`domain/chat`** — the YGWYG turn (resume-based, proven in Step 0). The
    **walking skeleton**: the cheapest full proof of `db → domain → trpc → client`.
 3. **`trpc/routers/chats` → `client/features/chat` → the `/chats/$id` route** —
    first real UI, built last in the slice.
 4. **The product:** `domain/corpus` + `embeddings` (_re-add
    `@huggingface/transformers`_) + `domain/search` → `features/corpus-search`.
+   - ⚠️ **Carried over from Phase 2:** add the `embeddings.embedding` `F32_BLOB(1024)`
+     column + `CREATE INDEX … libsql_vector_idx(embedding)` via a migration HERE — the
+     Phase-2 db foundation shipped the table's *scalar* columns only (deliberate defer;
+     see `data-model.md` embeddings note). Verify the Drizzle `customType` insert
+     (`vector32`, watch #3899) + query (`vector_top_k` / `vector_distance_cos`)
+     end-to-end against a real BGE-M3 (1024-dim) embedding. Lift CSLS hubness +
+     segmentation from card-curator (`docs/corpus-import.md`).
 5. **Importer** (`jobs`) — walk the ST corpus → our schema. SillyTavern is cloned
    in `references/` for the exact card / world-info / JSONL formats.
 6. **Analytics** — `domain` queries + `features` charts (`recharts`), one chart at

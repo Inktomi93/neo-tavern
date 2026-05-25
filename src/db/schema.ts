@@ -1,0 +1,286 @@
+// Drizzle schema — the v1 spec from docs/data-model.md, machine-of-record.
+// Layer rule (docs/architecture.md): `db` imports only `shared` + externals; never
+// `server`/`client`. Column names are explicit snake_case (no `casing` inference —
+// drizzle's casing has live bugs; explicit is deterministic).
+import { sql } from "drizzle-orm";
+import {
+  index,
+  integer,
+  primaryKey,
+  real,
+  sqliteTable,
+  text,
+  uniqueIndex,
+} from "drizzle-orm/sqlite-core";
+
+// ───────────────────────── Tenancy ─────────────────────────
+// DESIGNED multi-user, IMPLEMENTED single-user (one row). Identity =
+// X-Authentik-Username, resolved at the auth seam (trusted-proxy header → that user;
+// else DEFAULT_USER_HANDLE). Owned tables carry `ownerId`; scoping is enforced in the
+// domain layer. assets/embeddings are global (see below).
+export const users = sqliteTable("users", {
+  id: text("id").primaryKey(),
+  handle: text("handle").notNull().unique(), // = X-Authentik-Username
+  displayName: text("display_name"),
+  createdAt: integer("created_at").notNull(),
+});
+
+// Per-user config — ONE versioned blob (schemaVersion + migrate-fns), not ST's monolith.
+export const userSettings = sqliteTable("user_settings", {
+  userId: text("user_id")
+    .primaryKey()
+    .references(() => users.id),
+  schemaVersion: integer("schema_version").notNull(),
+  config: text("config", { mode: "json" }).notNull(),
+  updatedAt: integer("updated_at").notNull(),
+});
+
+// ───────────────────────── Characters (identity / content / instance) ─────────────────────────
+export const personas = sqliteTable("personas", {
+  id: text("id").primaryKey(),
+  ownerId: text("owner_id")
+    .notNull()
+    .references(() => users.id),
+  name: text("name").notNull(),
+  description: text("description").notNull(),
+  avatarAssetId: text("avatar_asset_id"),
+  metadata: text("metadata", { mode: "json" }),
+  createdAt: integer("created_at").notNull(),
+});
+
+export const characters = sqliteTable(
+  "characters",
+  {
+    id: text("id").primaryKey(),
+    ownerId: text("owner_id")
+      .notNull()
+      .references(() => users.id),
+    handle: text("handle").notNull().unique(), // → unique(ownerId, handle) under multi-user
+    currentVersionId: text("current_version_id"),
+    importedFrom: text("imported_from"),
+    importHash: text("import_hash"),
+    starred: integer("starred", { mode: "boolean" }).default(false),
+    archived: integer("archived", { mode: "boolean" }).default(false),
+    createdAt: integer("created_at").notNull(),
+  },
+  (t) => [index("characters_owner_idx").on(t.ownerId)],
+);
+
+// Immutable content versions (copy-on-write: a version freezes once a chat pins it).
+export const characterVersions = sqliteTable(
+  "character_versions",
+  {
+    id: text("id").primaryKey(),
+    characterId: text("character_id").notNull(),
+    version: integer("version").notNull(),
+    name: text("name").notNull(),
+    description: text("description").notNull(),
+    personality: text("personality"),
+    scenario: text("scenario"),
+    firstMessage: text("first_message"),
+    exampleMessages: text("example_messages"),
+    systemPrompt: text("system_prompt"),
+    postHistoryInstructions: text("post_history_instructions"),
+    alternateGreetings: text("alt_greetings", { mode: "json" }),
+    tags: text("tags", { mode: "json" }),
+    creatorNotes: text("creator_notes"),
+    avatarAssetId: text("avatar_asset_id"),
+    raw: text("raw", { mode: "json" }), // archival original card — never versioned/migrated
+    refineryScore: real("refinery_score"),
+    refineryAnalysis: text("refinery_analysis", { mode: "json" }),
+    createdAt: integer("created_at").notNull(),
+  },
+  (t) => [uniqueIndex("character_versions_char_ver_unq").on(t.characterId, t.version)],
+);
+
+// ───────────────────────── Chats & messages ─────────────────────────
+export const chats = sqliteTable(
+  "chats",
+  {
+    id: text("id").primaryKey(),
+    ownerId: text("owner_id")
+      .notNull()
+      .references(() => users.id),
+    title: text("title").notNull(),
+    characterVersionId: text("character_version_id").notNull(), // pins the version this chat ran on
+    personaId: text("persona_id"),
+    presetId: text("preset_id"),
+    mode: text("mode", { enum: ["sdk", "raw"] })
+      .notNull()
+      .default("sdk"),
+    provider: text("provider").notNull(), // 'anthropic-sdk' | 'anthropic-direct' | 'openrouter'
+    sessionId: text("session_id"), // SDK session; null after conversion to raw / for imports
+    parentChatId: text("parent_chat_id"), // set when this chat is a fork
+    convertedAt: integer("converted_at"),
+    forkedAt: integer("forked_at"),
+    messageCount: integer("message_count").default(0),
+    totalTokensIn: integer("total_tokens_in").default(0),
+    totalTokensOut: integer("total_tokens_out").default(0),
+    starred: integer("starred", { mode: "boolean" }).default(false),
+    archived: integer("archived", { mode: "boolean" }).default(false),
+    metadata: text("metadata", { mode: "json" }),
+    createdAt: integer("created_at").notNull(),
+    updatedAt: integer("updated_at").notNull(),
+  },
+  (t) => [index("chats_owner_idx").on(t.ownerId)],
+);
+
+// Append-only canon (all modes). session_entries is the sdk-mode resume cache (below).
+export const messages = sqliteTable(
+  "messages",
+  {
+    id: text("id").primaryKey(),
+    chatId: text("chat_id").notNull(),
+    seq: integer("seq").notNull(), // monotonic per-chat — canonical order + concurrency token
+    parentId: text("parent_id"), // null in sdk/YGWYG (linear); reserved for raw-mode branching
+    role: text("role", { enum: ["user", "assistant", "system"] }).notNull(),
+    content: text("content").notNull(),
+    toolCalls: text("tool_calls", { mode: "json" }),
+    model: text("model"),
+    provider: text("provider"),
+    stopReason: text("stop_reason"),
+    tokensIn: integer("tokens_in"),
+    tokensOut: integer("tokens_out"),
+    cacheReadTokens: integer("cache_read_tokens"),
+    cacheWriteTokens: integer("cache_write_tokens"),
+    costUsd: real("cost_usd"),
+    presetId: text("preset_id"),
+    rawRequest: text("raw_request", { mode: "json" }), // null in sdk-mode (body not exposed)
+    rawResponse: text("raw_response", { mode: "json" }),
+    createdAt: integer("created_at").notNull(),
+    editedAt: integer("edited_at"),
+  },
+  // (chat_id, seq) unique = ordering guarantee + the optimistic-concurrency dedup key.
+  (t) => [uniqueIndex("messages_chat_seq_unq").on(t.chatId, t.seq)],
+);
+
+// ───────────────────────── World info (explicit attachment, never keyword-scanned) ─────────────────────────
+export const worldBooks = sqliteTable("world_books", {
+  id: text("id").primaryKey(),
+  ownerId: text("owner_id")
+    .notNull()
+    .references(() => users.id),
+  name: text("name").notNull(),
+  description: text("description"),
+  createdAt: integer("created_at").notNull(),
+});
+
+export const worldEntries = sqliteTable("world_entries", {
+  id: text("id").primaryKey(),
+  worldBookId: text("world_book_id").notNull(),
+  title: text("title").notNull(),
+  content: text("content").notNull(),
+  legacyKeys: text("legacy_keys", { mode: "json" }), // ST keyword triggers — import compat only, never scanned
+  enabled: integer("enabled", { mode: "boolean" }).default(true),
+  priority: integer("priority").default(0),
+  metadata: text("metadata", { mode: "json" }),
+});
+
+export const chatWorldEntries = sqliteTable(
+  "chat_world_entries",
+  {
+    chatId: text("chat_id").notNull(),
+    entryId: text("entry_id").notNull(),
+    scope: text("scope").default("always"),
+    pinned: integer("pinned", { mode: "boolean" }).default(true),
+  },
+  (t) => [primaryKey({ columns: [t.chatId, t.entryId] })],
+);
+
+export const characterVersionWorldEntries = sqliteTable(
+  "cv_world_entries",
+  {
+    characterVersionId: text("cv_id").notNull(),
+    entryId: text("entry_id").notNull(),
+    scope: text("scope").default("always"),
+  },
+  (t) => [primaryKey({ columns: [t.characterVersionId, t.entryId] })],
+);
+
+// ───────────────────────── Config, assets, search, tags ─────────────────────────
+export const presets = sqliteTable("presets", {
+  id: text("id").primaryKey(),
+  ownerId: text("owner_id")
+    .notNull()
+    .references(() => users.id),
+  name: text("name").notNull(),
+  kind: text("kind").notNull(),
+  config: text("config", { mode: "json" }).notNull(),
+  schemaVersion: integer("schema_version").notNull().default(1), // config-blob upgrade path
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at").notNull(),
+});
+
+// App-global key/value (one-time flags etc.). Per-user prefs live in user_settings.
+export const settings = sqliteTable("settings", {
+  key: text("key").primaryKey(),
+  value: text("value", { mode: "json" }).notNull(),
+  updatedAt: integer("updated_at").notNull(),
+});
+
+// Global + content-addressed + refcounted — NO ownerId (binaries dedup by hash).
+export const assets = sqliteTable("assets", {
+  id: text("id").primaryKey(),
+  kind: text("kind").notNull(),
+  path: text("path").notNull(),
+  mime: text("mime").notNull(),
+  size: integer("size").notNull(),
+  hash: text("hash").notNull().unique(),
+  uploadedAt: integer("uploaded_at").notNull(),
+});
+
+// Polymorphic. The native-vector column (F32_BLOB(1024) + libsql_vector_idx) is added
+// in a Phase-3 migration when RAG lands — see docs/corpus-import.md. Scalar cols now.
+export const embeddings = sqliteTable("embeddings", {
+  id: text("id").primaryKey(),
+  entityType: text("entity_type").notNull(),
+  entityId: text("entity_id").notNull(),
+  model: text("model").notNull(),
+  metadata: text("metadata", { mode: "json" }),
+  createdAt: integer("created_at").notNull(),
+});
+
+export const tags = sqliteTable("tags", {
+  id: text("id").primaryKey(),
+  ownerId: text("owner_id")
+    .notNull()
+    .references(() => users.id),
+  name: text("name").notNull().unique(), // → unique(ownerId, name) under multi-user
+  color: text("color"),
+  source: text("source", { enum: ["manual", "auto"] }).default("manual"),
+});
+
+export const taggables = sqliteTable(
+  "taggables",
+  {
+    tagId: text("tag_id").notNull(),
+    entityType: text("entity_type").notNull(),
+    entityId: text("entity_id").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.tagId, t.entityType, t.entityId] })],
+);
+
+// ───────────────────────── SDK session persistence (the DbSessionStore substrate) ─────────────────────────
+// The raw SDK transcript, stored opaquely for `resume`. SEPARATE from `messages` (our
+// clean canon). sdk-mode only; regenerable-ish from messages.
+export const sessionEntries = sqliteTable(
+  "session_entries",
+  {
+    id: text("id").primaryKey(),
+    chatId: text("chat_id").notNull(),
+    sessionId: text("session_id").notNull(), // SDK session id (== chats.session_id)
+    subpath: text("subpath"), // SessionKey.subpath (subagents); null = main transcript
+    seq: integer("seq").notNull(), // append order
+    uuid: text("uuid"), // SDK entry uuid — idempotency key (nullable: titles/tags have none)
+    type: text("type").notNull(),
+    entry: text("entry", { mode: "json" }).notNull(), // the raw frame, opaque
+    createdAt: integer("created_at").notNull(),
+  },
+  (t) => [
+    index("session_entries_load_idx").on(t.sessionId, t.subpath, t.seq),
+    // backs append()'s upsert/dedup (SDK replays uuids on retry / importSessionToStore)
+    uniqueIndex("session_entries_uuid_unq")
+      .on(t.sessionId, t.subpath, t.uuid)
+      .where(sql`${t.uuid} is not null`),
+  ],
+);

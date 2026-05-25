@@ -193,10 +193,11 @@ export const embeddings = sqliteTable('embeddings', {
   entityType: text('entity_type').notNull(),
   entityId: text('entity_id').notNull(),
   model: text('model').notNull(),
-  // SPIKE FINDING (docs/build-plan.md): use libSQL NATIVE vectors, not sqlite-vec.
-  // The vector is a column on THIS table — drop the old `vecRowid` + the separate
-  // `embeddings_vec` vec0 virtual table. Declared as F32_BLOB(1024) via a Drizzle
-  // custom column type / raw DDL:
+  // ⚠️ DEFERRED TO PHASE 3 (NOT in the Phase-2 schema). The native-vector column +
+  // index are added by a Phase-3 migration when RAG lands — verified end-to-end then.
+  // SPIKE-VALIDATED approach (libSQL NATIVE vectors, no sqlite-vec): declare the column
+  // via a Drizzle `customType` emitting `F32_BLOB(1024)`, `toDriver` via `vector32(...)`
+  // (watch drizzle insert-API caveat #3899), `fromDriver` via Float32Array; then:
   //   embedding F32_BLOB(1024)
   //   CREATE INDEX embeddings_ann ON embeddings (libsql_vector_idx(embedding));
   // Query with vector_distance_cos(...) / vector_top_k('embeddings_ann', ...).
