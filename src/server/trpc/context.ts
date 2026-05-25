@@ -1,4 +1,6 @@
 import type { ChatService } from "../domain/chat";
+import type { CorpusService } from "../domain/corpus";
+import type { SearchService } from "../domain/search";
 import { getLog } from "../observability/logger";
 import { APP_VERSION } from "../version";
 
@@ -8,6 +10,8 @@ import { APP_VERSION } from "../version";
 // type-only). Add a service per domain feature as they land.
 export interface Services {
   chat: ChatService;
+  corpus: CorpusService;
+  search: SearchService;
 }
 
 export interface Context {

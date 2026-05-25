@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { CHAT_MODELS, DEFAULT_CHAT_MODEL_ID } from "../../shared/models";
 import { chatRouter } from "./routers/chat";
+import { corpusRouter, searchRouter } from "./routers/search";
 import { publicProcedure, t } from "./trpc";
 
 export const appRouter = t.router({
@@ -14,6 +15,8 @@ export const appRouter = t.router({
     defaultId: DEFAULT_CHAT_MODEL_ID,
   })),
   chat: chatRouter,
+  corpus: corpusRouter,
+  search: searchRouter,
 });
 
 export type AppRouter = typeof appRouter;

@@ -2,3 +2,7 @@
 # only because pnpm 11 reads its build-script allowlist here, not in package.json.
 allowBuilds:
   esbuild: true
+  # native ONNX runtime for @huggingface/transformers (BGE-M3 local embeddings, Phase 3)
+  onnxruntime-node: true
+  protobufjs: true # onnxruntime model loading
+  sharp: false # image processing only — we do text embeddings; transformers lazy-loads it (unused)

@@ -4,6 +4,7 @@
 // drizzle's casing has live bugs; explicit is deterministic).
 import { sql } from "drizzle-orm";
 import {
+  customType,
   index,
   integer,
   primaryKey,
@@ -12,6 +13,28 @@ import {
   text,
   uniqueIndex,
 } from "drizzle-orm/sqlite-core";
+
+// libSQL NATIVE vector column. Stored as the raw little-endian Float32 blob (which IS
+// libSQL's F32_BLOB on-wire format) — this avoids the drizzle `sql\`vector32()\`` insert
+// caveat (#3899). The query vector is wrapped with vector32(?) in the search SQL.
+const vector32 = customType<{
+  data: Float32Array;
+  driverData: Uint8Array;
+  config: { dim: number };
+}>({
+  dataType(config) {
+    return `F32_BLOB(${config?.dim ?? 1024})`;
+  },
+  toDriver(value: Float32Array): Uint8Array {
+    return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  },
+  fromDriver(value: Uint8Array): Float32Array {
+    // Copy into a fresh, 4-byte-aligned buffer (the driver may hand back an
+    // unaligned subarray view, which Float32Array can't wrap directly).
+    const bytes = Uint8Array.from(value);
+    return new Float32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
+  },
+});
 
 // ───────────────────────── Tenancy ─────────────────────────
 // DESIGNED multi-user, IMPLEMENTED single-user (one row). Identity =
@@ -229,13 +252,15 @@ export const assets = sqliteTable("assets", {
   uploadedAt: integer("uploaded_at").notNull(),
 });
 
-// Polymorphic. The native-vector column (F32_BLOB(1024) + libsql_vector_idx) is added
-// in a Phase-3 migration when RAG lands — see docs/corpus-import.md. Scalar cols now.
+// Polymorphic. `embedding` is the libSQL native vector (BGE-M3, 1024-dim); the ANN
+// index (libsql_vector_idx) is hand-added in migration 0001 since drizzle-kit can't
+// emit it. Query via vector_top_k('embeddings_ann', vector32(?), k).
 export const embeddings = sqliteTable("embeddings", {
   id: text("id").primaryKey(),
   entityType: text("entity_type").notNull(),
   entityId: text("entity_id").notNull(),
   model: text("model").notNull(),
+  embedding: vector32("embedding", { dim: 1024 }),
   metadata: text("metadata", { mode: "json" }),
   createdAt: integer("created_at").notNull(),
 });

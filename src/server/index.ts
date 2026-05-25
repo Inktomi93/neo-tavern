@@ -5,6 +5,8 @@ import { Hono } from "hono";
 import { createDb, runMigrations } from "../db/client";
 import { resolveUsername } from "./auth/trust-header";
 import { createChatService } from "./domain/chat";
+import { createCorpusService } from "./domain/corpus";
+import { createSearchService } from "./domain/search";
 import { env } from "./env";
 import { registerDebugRoutes } from "./observability/debug";
 import { logger } from "./observability/logger";
@@ -20,7 +22,11 @@ const IS_PROD = env.NODE_ENV === "production";
 // trpc only ever sees the services (the layer cake keeps db/auth out of trpc).
 const db = await createDb(env.DATABASE_URL);
 await runMigrations(db);
-const services: Services = { chat: createChatService(db) };
+const services: Services = {
+  chat: createChatService(db),
+  corpus: createCorpusService(db),
+  search: createSearchService(db),
+};
 
 const app = new Hono();
 
