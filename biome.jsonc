@@ -227,6 +227,13 @@
       "linter": { "rules": { "style": { "useNamingConvention": "off" } } }
     },
     {
+      // The embedder passes transformers.js / onnxruntime option keys verbatim
+      // (e.g. session_options, graphOptimizationLevel) — an external API shape, so
+      // useNamingConvention can't apply here (cf. the env.ts + importer overrides).
+      "includes": ["src/server/embeddings/**"],
+      "linter": { "rules": { "style": { "useNamingConvention": "off" } } }
+    },
+    {
       // The corpus importer parses SillyTavern's external, multi-spec wire JSON,
       // whose field names are snake_case by spec (first_mes, char_name, insertion_order…).
       // Keeping those names visible makes the port auditable against the ST spec +

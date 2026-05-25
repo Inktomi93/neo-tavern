@@ -31,6 +31,11 @@ const envSchema = z.object({
   // corpus embed pass). CUDA needs the CUDA-12 runtime libs on LD_LIBRARY_PATH (ORT's EP
   // is built for CUDA 12; the host's system CUDA may differ) — see docs/corpus-import.md.
   EMBED_DEVICE: z.enum(["cpu", "cuda"]).default("cpu"),
+  // ONNX weight precision. "fp32" (default, required on cpu) or "fp16" — fp16 on CUDA is
+  // ~30% faster at the same 1024-dim output; the precision delta is negligible after
+  // L2-normalize (cosine of an fp16 vs fp32 embedding of the same text ≈ 0.9999), so a
+  // cuda+fp16 corpus index and cpu+fp32 queries share one space. The GPU launcher sets fp16.
+  EMBED_DTYPE: z.enum(["fp32", "fp16"]).default("fp32"),
 
   // Auth/tenancy (see CLAUDE.md). Identity = X-Authentik-Username, trusted ONLY when
   // caddy forwards it with a matching X-Neo-Proxy secret; otherwise (direct LAN/IP

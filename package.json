@@ -30,6 +30,8 @@
     "embed:probe": "tsx scripts/embed-probe.ts",
     "import:st": "tsx scripts/import-st.ts",
     "embed:corpus": "tsx scripts/embed-corpus.ts",
+    "embed:corpus:gpu": "bash scripts/embed-corpus-gpu.sh",
+    "cuda:setup": "uv sync --project tools/cuda",
     "prepare": "husky"
   },
   "keywords": [],

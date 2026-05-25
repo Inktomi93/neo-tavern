@@ -19,7 +19,11 @@ function basisVec(text: string): Float32Array {
   v[d] = 1;
   return v;
 }
-const fakeEmbedder: Embedder = { model: "fake", embed: (t) => Promise.resolve(basisVec(t)) };
+const fakeEmbedder: Embedder = {
+  model: "fake",
+  embed: (t) => Promise.resolve(basisVec(t)),
+  embedBatch: (texts) => Promise.resolve(texts.map(basisVec)),
+};
 
 test("embedAndStore inserts retrievable vectors; existingKeys tracks them; knn round-trips", async () => {
   const db = await freshDb();
@@ -40,6 +44,22 @@ test("embedAndStore inserts retrievable vectors; existingKeys tracks them; knn r
   const search = createSearchService(db, { embedder: fakeEmbedder });
   const hits = await search.knn({ queryText: "alpha dragon", k: 2 });
   expect(hits[0]?.entityId).toBe("c1"); // exact-text match ranks first through the ANN index
+});
+
+test("embedAndStoreMany batch-inserts retrievable vectors in one pass", async () => {
+  const db = await freshDb();
+  const corpus = createCorpusService(db, { embedder: fakeEmbedder });
+  const n = await corpus.embedAndStoreMany([
+    { entityType: "character", entityId: "b1", text: "gamma" },
+    { entityType: "character", entityId: "b2", text: "delta" },
+    { entityType: "chat_segment", entityId: "b3:0", text: "epsilon" },
+  ]);
+  expect(n).toBe(3);
+  expect((await corpus.existingKeys()).size).toBe(3);
+
+  const search = createSearchService(db, { embedder: fakeEmbedder });
+  const hits = await search.knn({ queryText: "delta", k: 3 });
+  expect(hits[0]?.entityId).toBe("b2");
 });
 
 test("a duplicate (entity, model) insert errors loudly (no silent second vector)", async () => {

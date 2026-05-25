@@ -1,0 +1,23 @@
+# CUDA 12 + cuDNN 9 RUNTIME LIBS for neo-tavern's in-process GPU embedding/reranking
+# (onnxruntime-node 1.24 CUDA EP). This is NOT a Python app — uv only vendors NVIDIA's
+# .so wheels into a project-local venv so we don't depend on a system CUDA install or
+# borrow another project's libs. A launcher (scripts/embed-corpus-gpu.sh) puts the venv's
+# nvidia/*/lib dirs on LD_LIBRARY_PATH for the Node process.
+#
+# Why these exact pins: ORT 1.24 is built for CUDA 12.x + cuDNN 9.x (cuDNN 8 is ABI-
+# incompatible; the host's system CUDA 13 has no ORT prebuilt). These versions are the
+# set proven working on this box. PyTorch is intentionally absent — ORT needs none of it.
+[project]
+name = "neo-tavern-cuda-runtime"
+version = "0"
+description = "Vendored CUDA 12 + cuDNN 9 runtime for onnxruntime-node GPU (not a Python app)"
+requires-python = ">=3.10"
+dependencies = [
+  "nvidia-cuda-runtime-cu12==12.6.77",
+  "nvidia-cuda-nvrtc-cu12==12.6.85",
+  "nvidia-nvjitlink-cu12==12.6.85",
+  "nvidia-cublas-cu12==12.6.4.1",
+  "nvidia-cufft-cu12==11.3.0.4",
+  "nvidia-curand-cu12==10.3.7.77",
+  "nvidia-cudnn-cu12==9.10.2.21",
+]

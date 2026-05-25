@@ -10,4 +10,9 @@ export {
   normalizePlaceholders,
 } from "./embed-text";
 export { type Segment, type SegmentMessage, segmentChat } from "./segment";
-export { type CorpusService, createCorpusService, embeddingKey } from "./service";
+export {
+  type CorpusService,
+  createCorpusService,
+  type EmbedItem,
+  embeddingKey,
+} from "./service";

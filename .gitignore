@@ -19,6 +19,11 @@ data/
 # never committed). The small curated fixtures under tests/fixtures/ ARE committed.
 corpus-staging/
 
+# Project-local CUDA-12 + cuDNN-9 runtime venv for GPU embedding (uv vendors NVIDIA's
+# .so wheels here — multi-GB, machine-specific). pyproject.toml + uv.lock ARE committed
+# (reproducible via `pnpm cuda:setup`); the materialized venv is not.
+tools/cuda/.venv/
+
 # logs / os
 *.log
 .DS_Store
