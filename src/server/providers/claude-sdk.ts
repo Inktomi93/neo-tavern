@@ -1,6 +1,7 @@
 import { query, type SessionStore } from "@anthropic-ai/claude-agent-sdk";
 import { type ChatModelId, DEFAULT_CHAT_MODEL_ID } from "../../shared/models";
 import { buildClaudeSdkEnv } from "../env";
+import { getLog } from "../observability/logger";
 
 // sdk-mode (YGWYG) chats run through the Claude Agent SDK, which spawns the
 // official Claude Code runtime and authenticates with the host's `claude login`
@@ -101,6 +102,7 @@ export interface ChatTurnParams {
  * testable with a fake (no sub queries in `pnpm check`).
  */
 export async function runChatTurn(params: ChatTurnParams): Promise<ChatTurnResult> {
+  const startedAt = Date.now();
   const stream = query({
     prompt: params.prompt,
     options: {
@@ -124,27 +126,56 @@ export async function runChatTurn(params: ChatTurnParams): Promise<ChatTurnResul
     costUsd: 0,
   };
 
-  for await (const message of stream) {
-    if ("session_id" in message && typeof message.session_id === "string") {
-      sessionId = message.session_id;
-    }
-    if (message.type === "assistant") {
-      stopReason = message.message.stop_reason ?? stopReason;
-      for (const block of message.message.content) {
-        if (block.type === "text") {
-          reply += block.text;
+  try {
+    for await (const message of stream) {
+      if ("session_id" in message && typeof message.session_id === "string") {
+        sessionId = message.session_id;
+      }
+      if (message.type === "assistant") {
+        stopReason = message.message.stop_reason ?? stopReason;
+        for (const block of message.message.content) {
+          if (block.type === "text") {
+            reply += block.text;
+          }
+        }
+      } else if (message.type === "result") {
+        for (const modelUsage of Object.values(message.modelUsage)) {
+          usage.tokensIn += modelUsage.inputTokens;
+          usage.tokensOut += modelUsage.outputTokens;
+          usage.cacheReadTokens += modelUsage.cacheReadInputTokens;
+          usage.cacheWriteTokens += modelUsage.cacheCreationInputTokens;
+          usage.costUsd += modelUsage.costUSD;
         }
       }
-    } else if (message.type === "result") {
-      for (const modelUsage of Object.values(message.modelUsage)) {
-        usage.tokensIn += modelUsage.inputTokens;
-        usage.tokensOut += modelUsage.outputTokens;
-        usage.cacheReadTokens += modelUsage.cacheReadInputTokens;
-        usage.cacheWriteTokens += modelUsage.cacheCreationInputTokens;
-        usage.costUsd += modelUsage.costUSD;
-      }
     }
+  } catch (error) {
+    // The model boundary — observe failures (rate-limit/SDK errors) without swallowing them.
+    getLog().error(
+      {
+        model: params.model,
+        resumed: Boolean(params.resume),
+        err: error instanceof Error ? error.message : String(error),
+      },
+      "claude: turn failed",
+    );
+    throw error;
   }
 
+  // Metadata only — NEVER the prompt/reply (RP content lives in the DB). Cost/tokens/latency
+  // are the analytics-grade signals you want curl-able per turn (also stored on the message).
+  getLog().info(
+    {
+      model: usage.model,
+      tokensIn: usage.tokensIn,
+      tokensOut: usage.tokensOut,
+      cacheReadTokens: usage.cacheReadTokens,
+      cacheWriteTokens: usage.cacheWriteTokens,
+      costUsd: usage.costUsd,
+      stopReason,
+      resumed: Boolean(params.resume),
+      durationMs: Date.now() - startedAt,
+    },
+    "claude: turn complete",
+  );
   return { reply: reply.trim(), sessionId, stopReason, usage };
 }

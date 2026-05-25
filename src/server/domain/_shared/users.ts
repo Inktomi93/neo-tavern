@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import type { Db } from "../../../db/client";
 import { users } from "../../../db/schema";
+import { getLog } from "../../observability/logger";
 import { newId } from "./ids";
 
 // Resolve a handle (X-Authentik-Username, or DEFAULT_USER_HANDLE) to a user row id,
@@ -19,6 +20,9 @@ export async function ensureUser(db: Db, handle: string): Promise<string> {
   }
   const id = newId();
   await db.insert(users).values({ id, handle, createdAt: Date.now() }).onConflictDoNothing();
+  // Identity → tenant: a new user row appeared. Rare + notable (esp. under multi-user) —
+  // the handle is an identity label, not RP content, so it's safe to log.
+  getLog().info({ handle }, "user: created tenant row");
   // Re-read to tolerate a concurrent insert that won the race.
   const after = await db
     .select({ id: users.id })

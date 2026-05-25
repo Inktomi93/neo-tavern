@@ -9,7 +9,7 @@ import { createCorpusService } from "./domain/corpus";
 import { createSearchService } from "./domain/search";
 import { env } from "./env";
 import { registerDebugRoutes } from "./observability/debug";
-import { logger } from "./observability/logger";
+import { getLog, logger } from "./observability/logger";
 import { observability } from "./observability/middleware";
 import { createContext, type Services } from "./trpc/context";
 import { appRouter } from "./trpc/router";
@@ -50,6 +50,11 @@ app.all("/api/trpc/*", (c) =>
         username: resolveUsername(req.headers, env.NEO_PROXY_SECRET, env.DEFAULT_USER_HANDLE),
         services,
       }),
+    // Central error logging — without this, procedure throws (stale-seq, NOT_FOUND, …)
+    // never hit the log/ring, so /api/_debug/errors stays empty. Metadata only (no bodies).
+    onError: ({ error, path, type }) => {
+      getLog().error({ path, type, code: error.code, err: error.message }, "trpc procedure error");
+    },
   }),
 );
 
