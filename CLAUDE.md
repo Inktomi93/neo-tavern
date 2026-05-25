@@ -111,8 +111,13 @@ soft-delete trash bin. No tautological getById tests. Catch yourself building th
   world books + junctions, presets, settings, assets, tags, embeddings), then
   `domain/chat` + `features/chat` + a tRPC router driving one YGWYG turn.
 - **Phase 3** embeddings + semantic search (**3a ✅** foundation: BGE-M3 + libSQL
-  F32_BLOB vectors proven; ranking polish + UI post-importer) · **Phase 4** ST corpus
-  importer (⏭ NEXT) ·
+  F32_BLOB vectors proven; ranking polish + UI fold into Phase 4.6) ·
+  **Phase 4 — ST corpus importer ✅ DONE** (4.1–4.5): pure card + chat-JSONL parsers
+  (`domain/import`), `message_variants`/branch schema, orchestration (copy-on-write
+  versions, char-wide branch resolution, idempotent), and the `pnpm import:st` runner —
+  validated on the real corpus (**309 chars · 20,845 msgs · 71,187 variants**, zero
+  dangling refs). **⏭ NEXT: 4.6** — embed the imported corpus → real search (segmentation,
+  CSLS, hybrid, rerank, `discover`, `features/corpus-search` UI). ·
   **Phase 5** mode escape valve · **Phase 6** analytics (one chart at a time, only
   when there's a real question).
 

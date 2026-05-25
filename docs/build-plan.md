@@ -75,9 +75,20 @@ empty** — 100% rails, 0% product.
    hubness, hybrid query, two-stage rerank, the `discover` feature, owner-scoped
    results, and `features/corpus-search` (UI) — lift from card-curator per
    `docs/corpus-import.md`.
-5. **Importer** (`jobs`) — walk the ST corpus → our schema. SillyTavern is cloned
-   in `references/` for the exact card / world-info / JSONL formats.
-6. **Analytics** — `domain` queries + `features` charts (`recharts`), one chart at
+5. **Importer ✅ DONE** — `domain/import/` (peer feature, NOT `jobs/`: the
+   `drivers-through-domain` rule bars `jobs/` from importing `db`, so the db-bootstrapping
+   CLI is a composition root in `scripts/import-st.ts`). Pure parsers (`card.ts`/`chat.ts`,
+   ported from card-curator + st-bridge), `loader.ts` (walk + hash + pair by `slugifyHandle`),
+   `service.ts` (orchestration: copy-on-write versions, char-wide branch resolution,
+   importHash idempotency). `pnpm import:st [dir]`. Validated on the real corpus: 309 chars ·
+   801 chats · 20,845 msgs · 71,187 variants · 184 branches · zero dangling refs; re-run is
+   idempotent. Schema additions: migration `0002` (`message_variants` + `messages.activeVariantIdx`),
+   `0003` (`chats.importedFrom`/`importHash`).
+6. **Search (Phase 4.6)** — the deferred Phase-3 product, now over the real corpus:
+   chat segmentation, CSLS hubness, hybrid query, two-stage rerank, `discover`,
+   owner-scoped results, `features/corpus-search` UI. Lift from card-curator + st-bridge
+   per `docs/corpus-import.md`.
+7. **Analytics** — `domain` queries + `features` charts (`recharts`), one chart at
    a time, only when there's a real question.
 
 ## Why chat before the corpus (which is the product)
