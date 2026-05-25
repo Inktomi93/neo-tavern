@@ -29,6 +29,13 @@
       "when": 1779713489730,
       "tag": "0003_chat_import_identity",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1779716011605,
+      "tag": "0004_embeddings_unique",
+      "breakpoints": true
     }
   ]
 }

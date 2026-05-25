@@ -288,15 +288,22 @@ export const assets = sqliteTable("assets", {
 // Polymorphic. `embedding` is the libSQL native vector (BGE-M3, 1024-dim); the ANN
 // index (libsql_vector_idx) is hand-added in migration 0001 since drizzle-kit can't
 // emit it. Query via vector_top_k('embeddings_ann', vector32(?), k).
-export const embeddings = sqliteTable("embeddings", {
-  id: text("id").primaryKey(),
-  entityType: text("entity_type").notNull(),
-  entityId: text("entity_id").notNull(),
-  model: text("model").notNull(),
-  embedding: vector32("embedding", { dim: 1024 }),
-  metadata: text("metadata", { mode: "json" }),
-  createdAt: integer("created_at").notNull(),
-});
+export const embeddings = sqliteTable(
+  "embeddings",
+  {
+    id: text("id").primaryKey(),
+    entityType: text("entity_type").notNull(),
+    entityId: text("entity_id").notNull(),
+    model: text("model").notNull(),
+    embedding: vector32("embedding", { dim: 1024 }),
+    metadata: text("metadata", { mode: "json" }),
+    createdAt: integer("created_at").notNull(),
+  },
+  // One vector per (entity, model) — makes the embed pass idempotent + upsertable.
+  // (The libsql_vector_idx ANN index is hand-added in migration 0001 — drizzle-kit
+  // can't emit it, so it lives only in SQL and is left untouched here.)
+  (t) => [uniqueIndex("embeddings_entity_model_unq").on(t.entityType, t.entityId, t.model)],
+);
 
 export const tags = sqliteTable("tags", {
   id: text("id").primaryKey(),

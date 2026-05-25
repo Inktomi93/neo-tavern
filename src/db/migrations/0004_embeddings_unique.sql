@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX `embeddings_entity_model_unq` ON `embeddings` (`entity_type`,`entity_id`,`model`);
