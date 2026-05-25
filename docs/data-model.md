@@ -15,8 +15,28 @@ columns use Drizzle `{ mode: 'json' }`. Enums = text with an `enum` constraint.
 // src/db/schema.ts
 import { sqliteTable, text, integer, real, primaryKey } from 'drizzle-orm/sqlite-core';
 
+// Tenancy: DESIGNED multi-user, IMPLEMENTED single-user (one row). Identity =
+// X-Authentik-Username, resolved at one auth seam (trusted-proxy header → that user;
+// else DEFAULT_USER_HANDLE). See the "Multi-user / tenancy" + "Versioning" notes below.
+export const users = sqliteTable('users', {
+  id: text('id').primaryKey(),
+  handle: text('handle').notNull().unique(), // = X-Authentik-Username
+  displayName: text('display_name'),
+  createdAt: integer('created_at').notNull(),
+});
+
+// Per-user config — ONE versioned blob, not ST's 503KB monolith. schemaVersion +
+// pure migrate-fns = a deterministic upgrade path (no duck-typed `?? default`).
+export const userSettings = sqliteTable('user_settings', {
+  userId: text('user_id').primaryKey().references(() => users.id),
+  schemaVersion: integer('schema_version').notNull(),
+  config: text('config', { mode: 'json' }).notNull(),
+  updatedAt: integer('updated_at').notNull(),
+});
+
 export const personas = sqliteTable('personas', {
   id: text('id').primaryKey(),
+  ownerId: text('owner_id').notNull().references(() => users.id),
   name: text('name').notNull(),
   description: text('description').notNull(),
   avatarAssetId: text('avatar_asset_id'),
@@ -26,7 +46,8 @@ export const personas = sqliteTable('personas', {
 
 export const characters = sqliteTable('characters', {
   id: text('id').primaryKey(),
-  handle: text('handle').notNull().unique(),
+  ownerId: text('owner_id').notNull().references(() => users.id),
+  handle: text('handle').notNull().unique(), // → unique(ownerId, handle) under multi-user
   currentVersionId: text('current_version_id'),
   importedFrom: text('imported_from'),
   importHash: text('import_hash'),
@@ -59,6 +80,7 @@ export const characterVersions = sqliteTable('character_versions', {
 
 export const chats = sqliteTable('chats', {
   id: text('id').primaryKey(),
+  ownerId: text('owner_id').notNull().references(() => users.id),
   title: text('title').notNull(),
   characterVersionId: text('character_version_id').notNull(),
   personaId: text('persona_id'),
@@ -84,6 +106,9 @@ export const chats = sqliteTable('chats', {
 export const messages = sqliteTable('messages', {
   id: text('id').primaryKey(),
   chatId: text('chat_id').notNull(),
+  // Monotonic per-chat ordering — THE canonical sort key. Don't trust createdAt
+  // (ms collisions; doesn't encode intended order). Also the fork/swipe anchor.
+  seq: integer('seq').notNull(),
   // Linear in YGWYG mode (no parent_id needed), set in raw mode if swipes used
   parentId: text('parent_id'),
   role: text('role', { enum: ['user', 'assistant', 'system'] }).notNull(),
@@ -91,12 +116,14 @@ export const messages = sqliteTable('messages', {
   toolCalls: text('tool_calls', { mode: 'json' }),
   model: text('model'),
   provider: text('provider'),
+  stopReason: text('stop_reason'), // result.stop_reason — why generation ended
   tokensIn: integer('tokens_in'),
   tokensOut: integer('tokens_out'),
   cacheReadTokens: integer('cache_read_tokens'),
   cacheWriteTokens: integer('cache_write_tokens'),
+  costUsd: real('cost_usd'), // result.modelUsage[].costUSD — for the analytics layer
   presetId: text('preset_id'),
-  rawRequest: text('raw_request', { mode: 'json' }),
+  rawRequest: text('raw_request', { mode: 'json' }), // null in sdk-mode (body not exposed)
   rawResponse: text('raw_response', { mode: 'json' }),
   createdAt: integer('created_at').notNull(),
   editedAt: integer('edited_at'),
@@ -104,6 +131,7 @@ export const messages = sqliteTable('messages', {
 
 export const worldBooks = sqliteTable('world_books', {
   id: text('id').primaryKey(),
+  ownerId: text('owner_id').notNull().references(() => users.id),
   name: text('name').notNull(),
   description: text('description'),
   createdAt: integer('created_at').notNull(),
@@ -135,9 +163,11 @@ export const characterVersionWorldEntries = sqliteTable('cv_world_entries', {
 
 export const presets = sqliteTable('presets', {
   id: text('id').primaryKey(),
+  ownerId: text('owner_id').notNull().references(() => users.id),
   name: text('name').notNull(),
   kind: text('kind').notNull(),
   config: text('config', { mode: 'json' }).notNull(),
+  schemaVersion: integer('schema_version').notNull().default(1), // config-blob upgrade path
   createdAt: integer('created_at').notNull(),
   updatedAt: integer('updated_at').notNull(),
 });
@@ -176,7 +206,8 @@ export const embeddings = sqliteTable('embeddings', {
 
 export const tags = sqliteTable('tags', {
   id: text('id').primaryKey(),
-  name: text('name').notNull().unique(),
+  ownerId: text('owner_id').notNull().references(() => users.id),
+  name: text('name').notNull().unique(), // → unique(ownerId, name) under multi-user
   color: text('color'),
   source: text('source', { enum: ['manual', 'auto'] }).default('manual'),
 });
@@ -190,19 +221,57 @@ export const taggables = sqliteTable('taggables', {
 
 ## Design notes (the why)
 
-- **Character versioning.** `characters` is the stable identity (handle, starred,
-  archived); the actual content lives in immutable `character_versions`, with
-  `currentVersionId` pointing at the active one. This is what lets the refinery
-  (Score → Rewrite → Analyze) mint new versions while preserving history —
-  `refineryScore` / `refineryAnalysis` ride on the version.
+- **Character versioning (identity / content / instance).** `characters` is the
+  stable identity (immutable `id`, rename-able `handle`, starred, archived); the
+  content lives in immutable `character_versions` (`currentVersionId` points at the
+  active one); a `chat` pins ONE version via `chats.characterVersionId`. This is the
+  whole answer to ST's "the PNG filename *is* the character" — identity, content, and
+  the instance that ran a given version are three separate things. It lets the
+  refinery (Score → Rewrite → Analyze) mint versions while preserving history
+  (`refineryScore` / `refineryAnalysis` ride on the version), and it's what makes the
+  cards queryable for the analytics layer at all.
+  - **Increment policy = copy-on-write.** A version becomes immutable the moment any
+    chat pins it. Editing a version no chat references mutates it in place (drafts
+    don't spam versions); editing a pinned version forks a new row (`version = max+1`)
+    and repoints `currentVersionId`. Chats keep their pinned version, so editing a
+    character never rewrites past canon — and in `sdk` mode the version is already
+    baked into the session at start, so an edit can't disturb an in-flight chat.
 - **World Info is explicit attachment, not keyword scanning.** `chat_world_entries`
   and `cv_world_entries` are the junctions that attach entries to a chat or a
   character version. `world_entries.legacyKeys` preserves ST's keyword triggers for
   **import compatibility only** — we never scan on them.
-- **Messages are append-only.** `parentId` stays null in `sdk`/YGWYG mode (linear);
-  it's only set in `raw` mode if swipes are used. Full token accounting
-  (`tokensIn/Out`, `cacheRead/WriteTokens`) + `rawRequest`/`rawResponse` feed the
-  analytics layer (the actual product).
+- **`messages` is the source of truth; `session_entries` is an sdk-mode resume cache.**
+  `messages` is the clean canon for **all** modes (display, search, analytics); the
+  raw SDK transcript in `session_entries` exists only in sdk-mode, only to feed
+  `resume`, and is regenerable-ish from `messages` (so if they ever diverge, `messages`
+  wins). `seq` — not `createdAt` — is the canonical order. **Swipes/variants = a `message_variants`
+  child table** (decided against `parentId`-siblings): real ST data shows swipes as N
+  alternates at one slot — `swipes[]` + a parallel `swipe_info[]` where *each swipe can
+  carry its own model* — so the faithful shape is `message_variants(message_id, idx,
+  content, model, tokens_in/out, gen_started/finished)` + `messages.activeVariantIdx`
+  (built Phase 5 with raw mode; sdk-mode never makes variants). `parentId` is reserved
+  for future in-chat branching. See `docs/corpus-import.md` for the ST→variant mapping.
+  Because sdk-mode is **stateless** (a fresh `query({resume})` per message),
+  `result.usage` is per-turn, so `tokensIn/Out` + `cacheRead/WriteTokens` + `costUsd`
+  are a direct copy — no cumulative differencing (a warm session would need it). These
+  feed the analytics layer (the actual product).
+- **Concurrency & live sync (multi-device, same chat — expected for one user on phone +
+  desktop).** Writes are **optimistically concurrent on `seq`**: a send carries the
+  client's last-seen tip (`expectedSeq`); if `MAX(seq) > expectedSeq` the router returns
+  **409 + the missing messages and does NOT run generation** — so a stale device can
+  never inject an incoherent turn. Resolution is non-destructive: **reconcile** (append
+  at the real tip) or **fork** (`parentChatId` branch from `expectedSeq`). A **per-chat
+  turn lock** (`chats.generatingSince` + timeout, or an in-process per-chat mutex for
+  single-instance) allows **one in-flight generation per chat** — required so two
+  concurrent `resume`s can't corrupt `session_entries`. Append-only + libSQL
+  single-writer means a stale write can never *lose* the other device's turns; only
+  ordering/coherence is at stake, which `seq` guards. **Live push** = a tRPC v11
+  subscription (SSE transport) → TanStack Query invalidation, so the other device stays
+  fresh without a refresh; the stateless/no-session design *enables* this (no session
+  affinity to coordinate — the exact thing that was painful in st-bridge). SSE
+  deployment: disable proxy buffering on the stream route (caddy auto-flushes
+  `text/event-stream`) and emit `: ping` keep-alives (~20s) so h2/h3 idle timeouts don't
+  drop an idle stream.
 - **Chat mode / provider / session / fork.** `mode` = `sdk` | `raw`; `provider` =
   `anthropic-sdk` | `anthropic-direct` | `openrouter`; `sessionId` = the Agent SDK
   session (null after conversion to raw, or for imports); `parentChatId` +
@@ -214,11 +283,43 @@ export const taggables = sqliteTable('taggables', {
   `libsql_vector_idx` ANN index — **no sqlite-vec extension, no `vec0` table.**
   `1024` matches **BGE-M3** (default); the `model` column + the column dimension are
   the only things that change if we switch to Qwen3-Embedding.
-- **Assets are content-addressed.** `hash` is unique; binaries live on the mounted
-  volume and are referenced by hash. The DB row is metadata only.
+- **Assets are content-addressed.** `hash` is unique; binaries (avatars, the imported
+  card PNGs) live on the mounted volume and are referenced by hash; the DB row is
+  metadata only (caddy serves them statically, identical images dedup by hash). Image
+  **bytes never go in the DB.** Image **analysis** (cardcurator-style) is a separate
+  axis and a **batch/import job, not a hot path** — the derived signal lands in the DB
+  (vision tags → `taggables`, themes → `refineryAnalysis`, visual embeddings →
+  `embeddings`), the bytes do not. Analyzing 400 cards is a one-time background pass;
+  the "perf" worry conflates that with a per-request blob read.
 - **Tags are polymorphic** (`taggables` over any entity), `manual` or `auto` (the
   latter for theme-clustering output).
 - `presets` (kind + JSON config) and `settings` (key/JSON value) are config blobs.
+- **Multi-user: designed, single-user implemented.** Every top-level *owned* entity
+  carries `ownerId → users.id` (personas, characters, chats, presets, world_books,
+  tags); children inherit ownership via their parent (messages/session_entries ← chat,
+  versions ← character, embeddings ← entity, world_entries ← world_book). **`assets`
+  are global + content-addressed + refcounted — NO `ownerId`** (binaries dedup by hash;
+  reaped when unreferenced). Scoping is **enforced in the `domain/*` repository layer**
+  (every read/write bakes `WHERE owner_id = ctx.user.id`), exercised even with one user,
+  so a second user is a no-op not a rewrite. Global uniques become composite under
+  multi-user (`unique(ownerId, handle)` on characters, `(ownerId, name)` on tags).
+  Identity = `X-Authentik-Username` at one auth seam: **trusted-proxy header → that
+  user; else `DEFAULT_USER_HANDLE`** (so direct-LAN/IP access = the owner, by design).
+  No session, no CSRF (stateless per-request); the header is believed **only from
+  caddy** (verified via an `X-Neo-Proxy` shared secret; caddy strips client copies).
+  Deployment invariant: don't expose port 8788 to an untrusted network.
+- **Versioning — three kinds, don't conflate (and don't version everything):**
+  (1) **table/column shape → Drizzle migrations** (the migration history *is* the
+  version; every table gets it free, no per-table version column);
+  (2) **JSON-blob shape → an explicit `schemaVersion` + pure migrate-fns**, but ONLY for
+  blobs read *structurally* that *evolve* — `user_settings.config`, `presets.config`
+  (load → if `schemaVersion < current`, migrate → Zod-validate → write back); this
+  replaces ST's scattered `if (x === undefined)` duck-typing;
+  (3) **domain/content → `character_versions.version`** (canon history — a different
+  concept). Opaque/archival blobs (`character_versions.raw`, `messages.rawRequest/
+  rawResponse`, `chats.metadata`) are write-once — **not versioned.** Discriminator:
+  *do I parse this on read AND will its shape change?* yes → version; column →
+  migrations cover it; archival → leave it.
 
 ## Importing from SillyTavern (validated against real cards + chats)
 

@@ -13,8 +13,16 @@ It's the **personal RAG / analytics layer over my entire RP corpus** — 400+
 characters, hundreds of chats: semantic search, theme analysis, co-occurrence.
 Chat is incidental; **the corpus tool is the product.** Build accordingly.
 
-Single user (me). Authentik terminates auth and passes `X-Authentik-Username`; the
-app trusts it. **Zero auth code in the app.** No multi-user, no permissions.
+**Auth & tenancy.** Zero auth *logic* in the app, no sessions, no CSRF — stateless
+per-request identity. Authentik terminates auth; identity = `X-Authentik-Username`,
+believed **only when forwarded by caddy** (verified via an `X-Neo-Proxy` shared
+secret; caddy strips client copies). No trusted header (direct-LAN/IP access, which I
+use often) → falls back to `DEFAULT_USER_HANDLE` = the owner. **Multi-user is
+*designed* (a `users` table + `ownerId` scoping enforced in the `domain` layer +
+per-user versioned `user_settings`), but only single-user is *implemented* (one user
+row).** No permissions/roles/sharing/login UI — ownership, not access control.
+**Deployment invariant:** don't expose port 8788 to an untrusted network; if the app
+ever becomes directly reachable by untrusted clients, the header-trust model changes.
 
 ## RP philosophy (the non-obvious vision — easy to lose)
 
@@ -107,6 +115,8 @@ soft-delete trash bin. No tautological getById tests. Catch yourself building th
 - **`docs/build-plan.md`** — bottom-up build order + the de-risk spike results (all passed).
 - **`docs/architecture.md`** — the enforced layer cake + folder map + the barrel tradeoff.
 - **`docs/data-model.md`** — the full v1 database schema spec (implemented in Phase 2).
+- **`docs/corpus-import.md`** — the ST import + RAG answer key: validated parsers to
+  port from **card-curator** & **st-bridge** (don't re-derive), + the BGE-M3 divergence.
 - **`docs/observability.md`** — structured logging (pino) + the `curl`-able `/api/_debug/*` API.
 - **`docs/sdk-notes.md`** — Agent SDK map (knobs, messages, hooks, debug) + the `pnpm sdk:play` playground.
 - **`docs/dependencies.md`** — deferred-dependency parking lot.
