@@ -90,6 +90,7 @@ soft-delete trash bin. No tautological getById tests. Catch yourself building th
 - **`docs/architecture.md`** — the enforced layer cake + folder map + the barrel tradeoff.
 - **`docs/data-model.md`** — the full v1 database schema spec (implemented in Phase 2).
 - **`docs/observability.md`** — structured logging (pino) + the `curl`-able `/api/_debug/*` API.
+- **`docs/sdk-notes.md`** — Agent SDK map (knobs, messages, hooks, debug) + the `pnpm sdk:play` playground.
 - **`docs/dependencies.md`** — deferred-dependency parking lot.
 - **`references/README.md`** — local domain reference clones (read, don't copy).
 - **`README.md`** — how to run.

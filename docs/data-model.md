@@ -220,6 +220,58 @@ export const taggables = sqliteTable('taggables', {
   latter for theme-clustering output).
 - `presets` (kind + JSON config) and `settings` (key/JSON value) are config blobs.
 
+## Importing from SillyTavern (validated against real cards + chats)
+
+Verified against a real card ("Block of Cheese", a V3 card) and its chat logs.
+
+### Character card (PNG)
+
+The card JSON is base64 in PNG `tEXt` chunks — keyword **`chara`** (V2) and/or
+**`ccv3`** (V3, fields under `.data`). Prefer `ccv3` when present. Field map → `character_versions`:
+
+| Card field | Column |
+| --- | --- |
+| `name` | `name` |
+| `description` | `description` |
+| `personality` | `personality` |
+| `scenario` | `scenario` |
+| `first_mes` | `firstMessage` (the greeting — see below) |
+| `mes_example` | `exampleMessages` |
+| `system_prompt` | `systemPrompt` |
+| `post_history_instructions` | `postHistoryInstructions` |
+| `alternate_greetings` | `alternateGreetings` |
+| `tags` | `tags` |
+| `creator_notes` | `creatorNotes` |
+| `extensions.depth_prompt` | author's note seed |
+| (whole card JSON) | `raw` · `importHash` = hash of the card |
+
+### Chat JSONL
+
+Line 0 = metadata: `{ chat_metadata: { note_prompt, note_interval, note_position,
+note_depth, note_role, timedWorldInfo, variables }, user_name, character_name }`
+(`note_*` → the author's-note system message). Subsequent lines = messages:
+`{ name, is_user, is_system, send_date, mes, extra, swipes, swipe_id, swipe_info }`.
+
+- `is_user:true` → `role:"user"`; `is_user:false` → `"assistant"`; `is_system` → `"system"`.
+- `mes` → `content`; `send_date` → `createdAt`; `extra` (model/tokens) → `model`/token columns.
+- **`swipes` / `swipe_id`** = alternate generations. Import the active swipe
+  (`swipes[swipe_id]`) as the canonical message; stash the rest in `raw` (imported
+  chats are `mode:'raw'`, so swipes are legitimate there).
+
+### Conversation start — assistant-first vs user-first (validated)
+
+A chat whose first message is `is_user:false` **starts assistant-first** — that
+first message is the character's greeting (== card `first_mes`).
+
+- **New chat:** store the greeting as `messages` row #1 (`role:'assistant'`). The
+  SDK prompt is user-only, so for turn 1 the greeting rides in the composed
+  `systemPrompt` as the established opening line — **validated**: the model
+  continues in-character from it. Subsequent turns use the SDK session (`resume`).
+- **Imported chat (full history):** too much for the system prompt — seed the real
+  transcript via the session store (`importSessionToStore` + the `parentUuid`-chained
+  JSONL frame format; that's the Phase 4 task) and `resume`. Imported chats are
+  `mode:'raw'` from day zero (the SDK can't continue them anyway).
+
 ## Open question (Phase 3, not now)
 
 Embedding model: **BGE-M3** (default, 1024-dim) vs **Qwen3-Embedding-4B** (SOTA).

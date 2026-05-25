@@ -41,6 +41,8 @@ on pre-commit. Green = ship. It must pass before you call anything done.
   `X-Request-Id` from any response, then `/api/_debug/logs?requestId=…`. Logging:
   `ctx.log` in procedures, `getLog()` elsewhere — never raw `console`, never import
   `pino` directly (both are lint errors). See `docs/observability.md`.
+- **To understand/debug the Agent SDK, run `pnpm sdk:play`** (dumps the full message
+  stream + config; toggles via env) — don't guess at its behavior. Map: `docs/sdk-notes.md`.
 
 ## references/ is a REFERENCE, not the bible
 

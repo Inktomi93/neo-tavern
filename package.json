@@ -25,6 +25,8 @@
     "arch": "depcruise src --config .dependency-cruiser.cjs",
     "arch:graph": "depcruise src --include-only ^src --output-type mermaid --config .dependency-cruiser.cjs --output-to docs/dependency-graph.mmd",
     "verify:claude": "tsx scripts/verify-claude.ts",
+    "sdk:play": "tsx scripts/sdk-playground.ts",
+    "sdk:contract": "tsx scripts/sdk-contract.ts",
     "prepare": "husky"
   },
   "keywords": [],

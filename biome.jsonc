@@ -245,6 +245,11 @@
       // The observability module is the one place pino itself is allowed.
       "includes": ["src/server/observability/**"],
       "linter": { "rules": { "style": { "noRestrictedImports": "off" } } }
+    },
+    {
+      // scripts/ are CLI dev tools — console IS their output channel.
+      "includes": ["scripts/**"],
+      "linter": { "rules": { "suspicious": { "noConsole": "off" } } }
     }
   ]
 }

@@ -9,7 +9,9 @@ import { buildClaudeSdkEnv } from "../env";
 // hard-won config: no built-in tools, no MCP servers, and no user settings
 // (which is how plugins/hooks like superpowers sneak ~3.4k tokens into every
 // request). CLAUDE.md injection is killed via buildClaudeSdkEnv().
-function disciplineOptions() {
+// Exported so the leak-prevention contract is locked by tests (see the proxy
+// painpoints in claude-sdk.test.ts).
+export function disciplineOptions() {
   return {
     tools: [],
     mcpServers: {},
