@@ -16,6 +16,17 @@ export const searchRouter = t.router({
     )
     .query(({ ctx, input }) => ctx.services.search.knn(input)),
 
+  // Display-ready semantic search (the "Find" UI mode): enriched cards + segment snippets.
+  find: publicProcedure
+    .input(
+      z.object({
+        queryText: z.string().min(1),
+        k: z.number().int().positive().max(50).optional(),
+        rerank: z.boolean().optional(),
+      }),
+    )
+    .query(({ ctx, input }) => ctx.services.search.find(input)),
+
   // "Who have I actually done X with?" — searches chat segments, groups by character.
   discover: publicProcedure
     .input(

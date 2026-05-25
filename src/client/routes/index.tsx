@@ -1,4 +1,4 @@
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { CreateChatForm } from "../features/chat";
 import { trpc } from "../lib/trpc";
 
@@ -24,6 +24,13 @@ function HomePage() {
         <p className="text-muted-foreground text-sm">{status}</p>
       </header>
       <CreateChatForm onCreated={(id) => navigate({ to: "/chats/$id", params: { id } })} />
+      <Link
+        to="/corpus"
+        search={{ mode: "discover", q: "", rerank: false }}
+        className="text-muted-foreground text-sm hover:text-foreground"
+      >
+        Search the corpus →
+      </Link>
     </main>
   );
 }

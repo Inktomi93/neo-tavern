@@ -36,6 +36,10 @@ tailwindcss (v4), concurrently.
 # pnpm add zustand                              # global + feature-local client state (brief-locked)
 # pnpm add react-hook-form @hookform/resolvers  # forms (character/persona editors), validated with zod
 ```
+> **Still deferred (confirmed at 4.6.3d, the corpus-search UI):** that feature needs NO zustand —
+> its state is URL search params (router-owned, shareable) + local `useState` (the input draft) +
+> TanStack Query (server cache). zustand is for genuine GLOBAL client state (a cross-route selection,
+> app-wide ephemeral UI); install it when a feature actually has that, else knip flags it dead.
 
 ## Client — per feature (Phase 2+)
 

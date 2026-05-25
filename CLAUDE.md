@@ -127,7 +127,7 @@ soft-delete trash bin. No tautological getById tests. Catch yourself building th
   (`domain/import`), `message_variants`/branch schema, orchestration (copy-on-write
   versions, char-wide branch resolution, idempotent), and the `pnpm import:st` runner —
   validated on the real corpus (**309 chars · 20,845 msgs · 71,187 variants**, zero
-  dangling refs). **Phase 4.6 — embed → real search (IN PROGRESS):** 4.6.1 ✅ segmentation
+  dangling refs). **Phase 4.6 — embed → real search ✅ DONE:** 4.6.1 ✅ segmentation
   + identity-only card embed-text + embedding idempotency; 4.6.2 ✅ (code) native tokenizer,
   token-budget batching, owner-scoped knn, in-process CUDA embed pass — *first full GPU index
   running*; **4.6.3a ✅** CSLS hubness (per-entity-type): `embeddings.hub_score` (migration
@@ -141,7 +141,10 @@ soft-delete trash bin. No tautological getById tests. Catch yourself building th
   killer feature `discover` — `search.discover()` searches chat segments, groups by character,
   returns characters ranked by their best matching conversation + snippet evidence + card meta
   (real-corpus validated, `pnpm discover:probe`: "arena fight"/"first kiss" → thematically
-  correct characters); **4.6.3d ⏭ NEXT** `features/corpus-search` UI. ·
+  correct characters); **4.6.3d ✅** `features/corpus-search` UI — the `/corpus` route, a
+  two-mode (Discover | Find) search box with a rerank toggle; search state (mode/q/rerank)
+  lives in the URL (shareable); `search.find` enriches knn hits (names + snippets) for display.
+  **The corpus tool — the product — is now end-to-end usable.** ·
   **⏭ Migration 0007 (PENDING, specced):** enforce internal FKs (cascade policy) + move presets
   to content-versioning (copy-on-write) — fixes "nuke chat orphans 20k msgs" + preset-provenance
   bug. Full handoff: **`docs/handoff-relational-fixes.md`** (number-agnostic — takes the next

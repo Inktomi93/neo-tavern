@@ -100,8 +100,10 @@ empty** — 100% rails, 0% product.
    `knn({rerank:true})` over-fetches the CSLS pool → cross-encoder → top-n; GPU-validated via
    `pnpm rerank:probe`. **4.6.3c ✅** the killer feature `discover` (`search.discover` — chat
    segments grouped by character, ranked by best matching conversation + snippet evidence +
-   card meta; real-corpus validated via `pnpm discover:probe`). **4.6.3d ⏭** `features/corpus-search`
-   UI. Lift from card-curator + st-bridge per `docs/corpus-import.md`.
+   card meta; real-corpus validated via `pnpm discover:probe`). **4.6.3d ✅** `features/corpus-search`
+   UI — `/corpus` route, two-mode (Discover | Find) box + rerank toggle; search state in the URL
+   (shareable); `search.find` enriches knn hits with names/snippets. State = URL params + local
+   form state + TanStack Query (no zustand needed). **The corpus product is end-to-end usable.**
    **⏭ Migration 0007 (pending, specced)** — `docs/handoff-relational-fixes.md`:
    enforce internal FKs (cascade policy) + presets → content-versioning. The importer
    added link columns + proved zero dangling; it makes them DB-enforced FKs. (Number-agnostic

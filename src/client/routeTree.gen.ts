@@ -9,9 +9,15 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as CorpusRouteImport } from './routes/corpus'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ChatsIdRouteImport } from './routes/chats.$id'
 
+const CorpusRoute = CorpusRouteImport.update({
+  id: '/corpus',
+  path: '/corpus',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
@@ -25,32 +31,43 @@ const ChatsIdRoute = ChatsIdRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/corpus': typeof CorpusRoute
   '/chats/$id': typeof ChatsIdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/corpus': typeof CorpusRoute
   '/chats/$id': typeof ChatsIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/corpus': typeof CorpusRoute
   '/chats/$id': typeof ChatsIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/chats/$id'
+  fullPaths: '/' | '/corpus' | '/chats/$id'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/chats/$id'
-  id: '__root__' | '/' | '/chats/$id'
+  to: '/' | '/corpus' | '/chats/$id'
+  id: '__root__' | '/' | '/corpus' | '/chats/$id'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  CorpusRoute: typeof CorpusRoute
   ChatsIdRoute: typeof ChatsIdRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/corpus': {
+      id: '/corpus'
+      path: '/corpus'
+      fullPath: '/corpus'
+      preLoaderRoute: typeof CorpusRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/': {
       id: '/'
       path: '/'
@@ -70,6 +87,7 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  CorpusRoute: CorpusRoute,
   ChatsIdRoute: ChatsIdRoute,
 }
 export const routeTree = rootRouteImport
