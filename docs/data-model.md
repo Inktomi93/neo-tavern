@@ -253,9 +253,11 @@ export const taggables = sqliteTable('taggables', {
   child table** (decided against `parentId`-siblings): real ST data shows swipes as N
   alternates at one slot — `swipes[]` + a parallel `swipe_info[]` where *each swipe can
   carry its own model* — so the faithful shape is `message_variants(message_id, idx,
-  content, model, tokens_in/out, gen_started/finished)` + `messages.activeVariantIdx`
-  (built Phase 5 with raw mode; sdk-mode never makes variants). `parentId` is reserved
-  for future in-chat branching. See `docs/corpus-import.md` for the ST→variant mapping.
+  content, model, provider, tokens_in/out, gen_started/finished)` + `messages.activeVariantIdx`
+  (**built Phase 4** — the ST importer is the first writer, since real chats are swipe-heavy:
+  42% of messages carry alternates; raw mode in Phase 5 adds them live; sdk-mode never makes
+  variants). `parentId` is reserved for future in-chat branching. See `docs/corpus-import.md`
+  for the ST→variant mapping.
   Because sdk-mode is **stateless** (a fresh `query({resume})` per message),
   `result.usage` is per-turn, so `tokensIn/Out` + `cacheRead/WriteTokens` + `costUsd`
   are a direct copy — no cumulative differencing (a warm session would need it). These
@@ -360,9 +362,15 @@ note_depth, note_role, timedWorldInfo, variables }, user_name, character_name }`
 
 - `is_user:true` → `role:"user"`; `is_user:false` → `"assistant"`; `is_system` → `"system"`.
 - `mes` → `content`; `send_date` → `createdAt`; `extra` (model/tokens) → `model`/token columns.
-- **`swipes` / `swipe_id`** = alternate generations. Import the active swipe
-  (`swipes[swipe_id]`) as the canonical message; stash the rest in `raw` (imported
-  chats are `mode:'raw'`, so swipes are legitimate there).
+- **`swipes` / `swipe_id`** = alternate generations. **All swipes → `message_variants`**
+  (one row each, verbatim), with `messages.activeVariantIdx = swipe_id` and
+  `messages.content = mes` (the *rendered* text — authoritative). Note `mes` can diverge
+  from `swipes[swipe_id]` (~1% of swiped msgs: in-place edits after generation), so `content`
+  is `mes`, not a re-derived swipe. Single-generation messages (`swipes.length ≤ 1`) get no
+  variant rows and `activeVariantIdx = null`. Per-swipe model/timing come from `swipe_info[i]`
+  and are nullable (real data has `swipe_info` shorter than `swipes`). Imports are **not**
+  forced to `raw` — we own the transcript, so an imported chat can be continued in sdk-mode
+  (seed `session_entries` from `messages`); mode is a per-chat choice, not an import constraint.
 
 ### Conversation start — assistant-first vs user-first (validated)
 

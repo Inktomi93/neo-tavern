@@ -170,11 +170,38 @@ export const messages = sqliteTable(
     presetId: text("preset_id"),
     rawRequest: text("raw_request", { mode: "json" }), // null in sdk-mode (body not exposed)
     rawResponse: text("raw_response", { mode: "json" }),
+    // Which message_variants.idx is the rendered/selected swipe. null = no variants
+    // (single generation). content above is the authoritative rendered text regardless.
+    activeVariantIdx: integer("active_variant_idx"),
     createdAt: integer("created_at").notNull(),
     editedAt: integer("edited_at"),
   },
   // (chat_id, seq) unique = ordering guarantee + the optimistic-concurrency dedup key.
   (t) => [uniqueIndex("messages_chat_seq_unq").on(t.chatId, t.seq)],
+);
+
+// Swipes / alternate generations at one message slot. Real ST data shows N alternates
+// per slot (`swipes[]` + a parallel `swipe_info[]` where each swipe can carry its own
+// model), so the faithful shape is one row per swipe — NOT parentId-siblings. Sparse:
+// only messages with >1 swipe get rows. The ST importer (Phase 4) is the first writer;
+// raw-mode (Phase 5) adds them live. sdk-mode never makes variants. Per-swipe model/
+// timing are nullable — real data has `swipe_info` shorter than `swipes` (104 cases).
+export const messageVariants = sqliteTable(
+  "message_variants",
+  {
+    id: text("id").primaryKey(),
+    messageId: text("message_id").notNull(),
+    idx: integer("idx").notNull(), // position in the swipe pool (0-based)
+    content: text("content").notNull(), // the swipe text, verbatim
+    model: text("model"), // swipe_info[idx].extra.model
+    provider: text("provider"), // swipe_info[idx].extra.api
+    tokensIn: integer("tokens_in"),
+    tokensOut: integer("tokens_out"),
+    genStarted: integer("gen_started"), // ms epoch
+    genFinished: integer("gen_finished"),
+    createdAt: integer("created_at").notNull(),
+  },
+  (t) => [uniqueIndex("message_variants_msg_idx_unq").on(t.messageId, t.idx)],
 );
 
 // ───────────────────────── World info (explicit attachment, never keyword-scanned) ─────────────────────────

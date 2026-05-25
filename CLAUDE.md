@@ -45,8 +45,12 @@ capability, it's economics + cleanliness: `raw` is where they're **first-class a
 cache-cheap** (we own the messages array + `cache_control`), whereas an sdk-mode edit
 re-caches the tail (the prefix cache survives only a clean cut, measured). A swipe/fork
 = a new session branched at a `seq`; the original stays intact. Conversion is
-**one-way**; fork-and-convert is preferred. Imported ST chats land as `raw` from day
-zero (the SDK can't continue them).
+**one-way**; fork-and-convert is preferred. **Imported ST chats are NOT forced to `raw`**
+(superseded — the old framing was "the SDK can't continue them"). We own the transcript via
+the DB-backed SessionStore, so an imported chat can be continued in sdk-mode by seeding
+`session_entries` from its `messages`; mode is a per-chat choice, not an import constraint.
+Imported swipes are preserved faithfully in `message_variants` (built Phase 4) regardless of
+mode.
 
 ### Other locked product principles
 - **Append-only conversation log is the source of truth** — not a prompt template
