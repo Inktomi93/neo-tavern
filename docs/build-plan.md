@@ -8,6 +8,23 @@ spikes before pouring concrete**. A wrong assumption should cost a 20-minute
 spike, not a rebuild. If a vertical slice reveals the layer cake is wrong, you
 find out with ~3 files written, not 30.
 
+## Principle: avoid rework — isolation contains churn, decide cross-cutting first
+
+The architecture already stops per-feature churn: feature isolation is
+`dependency-cruiser`-enforced (a new `domain/<feature>` literally *cannot* import
+another, so building one can't force edits to another), schema growth is **additive
+migrations** (never rewrites), and the router/context are **append-only seams** (a new
+feature = one line + one service field). The walking skeleton's job was to set every
+seam *once*; everything after copies the pattern as a **parallel slice**.
+
+What the architecture does **not** protect: **cross-cutting concerns added after their
+consumers exist** force edits across many files. So decide those *before* mass-producing
+consumers. The only **wide** one is the **component system (shadcn)** — it gates *all*
+UI including the corpus product, so it's set up before the product UI (Step 3.5). The
+rest are **local** and safe to defer: streaming (chat-only), `message_variants`
+(importer-only), markdown (one component). Rule: *foundations and cross-cutting choices
+first; isolated features whenever.*
+
 ## Step 0 — de-risk spikes ✅ DONE (all passed, no pivots)
 
 The three "this might not work the way we want" bets, validated with throwaway
@@ -32,10 +49,20 @@ empty** — 100% rails, 0% product.
    in-memory test harness (`tests/support/db.ts` + a FK-enforcement smoke test). Deps
    added: `drizzle-orm`, `@libsql/client`, `nanoid`, `-D drizzle-kit`. (Native-vector
    `embeddings.embedding` column deferred → Step 4.)
-2. **`domain/chat`** — the YGWYG turn (resume-based, proven in Step 0). The
-   **walking skeleton**: the cheapest full proof of `db → domain → trpc → client`.
-3. **`trpc/routers/chats` → `client/features/chat` → the `/chats/$id` route** —
-   first real UI, built last in the slice.
+2. **`domain/chat`** ✅ — the stateless YGWYG turn (resume-per-message): `DbSessionStore`
+   over `session_entries`, optimistic `seq` guard + per-chat lock, injectable SDK runner.
+   `auth` seam (`trust-header`) + `domain/_shared` (ids/lock/`ensureUser`). The
+   **walking skeleton**: proved `db → domain → trpc → client` with a real model turn,
+   driven + inspected via `/api/_debug`.
+3. **`trpc/routers/chat` → `client/features/chat` → `/chats/$id`** ✅ — trpc rewired
+   (services-in-context, so trpc never touches db/auth); `ChatView`/`MessageList`/
+   `MessageInput`/`CreateChatForm` + home create-and-navigate; 4 domain integration
+   tests (round-trip, stale-seq, resume, ownership). Deferred: greeting seeding, chat
+   list, streaming, `message_variants` (raw mode), shadcn polish.
+3.5. **Component system (shadcn) — *before* the product UI** (the one cross-cutting
+   UI choice; locked in `CLAUDE.md`). `cn()` util + `@/` alias + dark theme tokens +
+   base primitives in `client/components/ui/`; port the 4 plain-Tailwind chat
+   components onto them. Cheap now (4 components), saves rewriting the corpus UI later.
 4. **The product:** `domain/corpus` + `embeddings` (_re-add
    `@huggingface/transformers`_) + `domain/search` → `features/corpus-search`.
    - ⚠️ **Carried over from Phase 2:** add the `embeddings.embedding` `F32_BLOB(1024)`
