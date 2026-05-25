@@ -24,9 +24,7 @@ async function main(): Promise<void> {
       `[csls]   ${type}: ${s.computed} computed · ${s.skipped} zeroed (< K+1) · ${s.count} total`,
     );
   }
-  console.log(
-    `[csls] ✅ ${stats.total} rows in ${secs}s · ${stats.escalated} needed an over-fetch escalation`,
-  );
+  console.log(`[csls] ✅ ${stats.total} rows in ${secs}s (exact same-type top-K)`);
 }
 
 await main().catch((error: unknown) => {

@@ -54,18 +54,24 @@ Algorithms are model-agnostic and port unchanged; only the embedding model diffe
 - **CSLS hubness correction — ✅ IMPLEMENTED (Phase 4.6.3a).** `embeddings.hub_score`
   (migration 0005) + `src/server/domain/corpus/hubness.ts` (`computeHubScores`, run via
   `pnpm csls`) + the query-time re-rank in `src/server/domain/search/service.ts`. Computed
-  **per (entity_type, model)** — char hubs (avg 0.71) and segment hubs (avg 0.86) have
+  **per (entity_type, model)** — char hubs (avg 0.72) and segment hubs (avg 0.86) have
   different distributions, so a mixed score skews both. Ported from `index.py:62-89` +
   `server.py:157-175`. `hub_score` = mean cosine-sim of a vector to its K=10 nearest
-  neighbours, precomputed at index time (`embs @ embs.T`), stored per row; at query time
+  **same-type** neighbours, precomputed at index time, stored per row; at query time
   `adjusted_dist = max(0, dist − 1 + hub_score)`. **The highest-value lift — BGE-M3 has
   hubs too.** This is the good-vs-mediocre line for semantic search over a few-hundred-item
   corpus.
   **Second reference:** `st-bridge/src/st_bridge/embeddings.py:149-177`
   (`_compute_hub_scores` K=10 · `_csls_correct` penalizing above-mean hubness) — the same
-  math in plain numpy, in-process. Our libSQL twist: precompute `hub_score` per embedding
-  row at index time and fold it into the re-rank after `vector_top_k`, rather than holding
-  the full `embs @ embs.T` matrix in memory.
+  math in plain numpy, in-process.
+  **The precompute is EXACT same-type top-K, NOT the ANN index** (`computeHubScores` loads
+  each type's vectors and computes cosine in-process, bounded top-K — card-curator's
+  `embs @ embs.T` without materializing the full n² matrix). We first tried per-row
+  `vector_top_k` and it was *wrong for minority types*: a popular character is surrounded by
+  its OWN hundreds of chat segments, so the index's ~200-row result budget is exhausted by
+  within-type cross-traffic before 10 other characters surface → hub 0 for the most-used
+  cards. Exact is also **faster** here (35s vs 97s — no per-row SQL round-trips). The libSQL
+  ANN is the *query-time* path (`vector_top_k` → cosine re-rank); hub scoring is in-process.
 - **Chat segmentation** — `chat_index.py:48-215`: 4096-token target / 512 min / 50%
   overlap, **never split a user→char exchange** (snap to pair boundary), per-message
   binary-search truncation, single-segment fast path. Embeddable text template at `:226`.

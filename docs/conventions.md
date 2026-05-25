@@ -84,8 +84,10 @@ transformers.js `session_options`, OS env vars) trip `useNamingConvention`. Two 
   ~200). The ANN graph traversal has a bounded search budget — it is a *top-k* operator, not a scan.
   Fine for small k (the real top-10/40 are exact-ish); but DON'T over-fetch a huge pool expecting it
   back. To rank/visit "most of the corpus" (e.g. an exact re-rank), `SELECT … FROM embeddings` and
-  compute, don't crank N. (Bit CSLS hub-scoring: ~4 isolated entities can't gather K same-type
-  neighbours through it → hub 0; benign. Relevant to the reranker/discover over-fetch too.)
+  compute, don't crank N. (It already bit CSLS hub-scoring: per-row `vector_top_k` gave the most
+  POPULAR cards hub 0 — their ~200 nearest were their own chat segments, never 10 other cards — so
+  `computeHubScores` does an exact in-process same-type top-K instead. Same trap awaits the
+  reranker/discover over-fetch: cap the pool at a few hundred, or compute exactly.)
 - **`db.transaction()` breaks on `:memory:`** (the test DB): drizzle's libSQL `transaction()`
   acquires a *fresh connection*, which for `:memory:` is a brand-new EMPTY database — so the
   writes vanish and the next `db` query throws `no such table`. A file DB is fine. For batch

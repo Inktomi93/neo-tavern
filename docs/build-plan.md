@@ -90,10 +90,10 @@ empty** — 100% rails, 0% product.
    quadratic), token-budget batching, owner-scoped knn, **in-process CUDA** embed pass
    (`pnpm embed:corpus:gpu`, project-local uv CUDA-12, fp16, GPU-saturated) — first full
    GPU index running. **4.6.3a ✅** CSLS hubness (per entity_type): `embeddings.hub_score`
-   (migration 0005), `domain/corpus/hubness` precompute (`pnpm csls`, per-row `vector_top_k`
-   — no in-memory matrix), query-time `adjusted_dist = max(0, dist−1+hub)` re-rank in
-   `domain/search`. Validated on the real corpus (8225 vectors; char avg hub 0.71 vs segment
-   0.86 — why per-type). **4.6.3b ⏭** bge-reranker-v2-m3 two-stage (GPU 1) + store source_text,
+   (migration 0005), `domain/corpus/hubness` precompute (`pnpm csls`, EXACT same-type top-K
+   in-process — the ANN index was budget-exhausted by popular cards' own segments), query-time
+   `adjusted_dist = max(0, dist−1+hub)` re-rank in `domain/search`. Validated on the real
+   corpus (8225 vectors in 35s; char avg hub 0.72 vs segment 0.86 — why per-type). **4.6.3b ⏭** bge-reranker-v2-m3 two-stage (GPU 1) + store source_text,
    **4.6.3c** `discover`, **4.6.3d** `features/corpus-search` UI. Lift from card-curator +
    st-bridge per `docs/corpus-import.md`.
    **⏭ Migration 0006 (pending, specced)** — `docs/handoff-0006-relational-fixes.md`:
