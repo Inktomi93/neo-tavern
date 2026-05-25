@@ -94,7 +94,8 @@ transformers.js `session_options`, OS env vars) trip `useNamingConvention`. Two 
   writes that must also run under in-memory tests (e.g. `domain/corpus/hubness` hub_score
   updates), use sequential auto-commit `db.update(...)` in a loop, NOT a transaction.
 - `foreign_keys = ON` is set per-connection in `db/client.ts`; only `ownerId → users.id` FKs
-  exist today (internal links are plain `text` — hardening pending, `docs/handoff-relational-fixes.md`).
+  plus the internal FKs from migration 0007 (cascade policy in `docs/data-model.md`); polymorphic
+  refs (`embeddings`/`taggables` entity columns) stay plain `text`.
 
 ## Workflow
 

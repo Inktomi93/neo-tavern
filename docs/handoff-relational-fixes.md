@@ -1,11 +1,13 @@
 # Handoff — relational integrity + preset versioning migration
 
-> **MIGRATION NUMBER — read this:** originally specced as "0005", but later migrations
-> claimed lower numbers (0005 = `embeddings.hub_score`/CSLS, 0006 = `embeddings.source_text`/
-> reranker). This migration takes **the next available number when it actually lands** —
-> currently **0007** (`ls src/db/migrations/` to confirm). Do NOT hardcode a number; this
-> filename is intentionally number-agnostic so it stops churning. Everything below is
-> number-relative ("additive — don't rewrite earlier migrations").
+> **✅ LANDED as migration `0007_relational_fks` (this session).** Internal FKs enforced
+> (cascade policy below), presets moved to the `presets`/`preset_versions` triad, +
+> `messages`/`message_variants.reasoningEffort`. Validated on the real corpus:
+> `PRAGMA foreign_key_check` = 0 violations, a full `pnpm import:st` inserts cleanly under the
+> enforced FKs and re-runs idempotent, and 5 FK acceptance tests cover cascade/RESTRICT/
+> copy-on-write (`tests/integration/db-foundation.test.ts`). It also exposed + fixed a real
+> circular-FK bug in `domain/chat` createChat (set `currentVersionId` before the version
+> existed). This doc is kept as the design record; the sections below describe what was built.
 
 **For the implementing agent. You do NOT have the design conversation that produced this — everything you need is here. Read `docs/data-model.md` (esp. lines 227–330) and `docs/architecture.md` (the `db` layer rule) before starting.**
 

@@ -82,9 +82,9 @@ export const chats = sqliteTable('chats', {
   id: text('id').primaryKey(),
   ownerId: text('owner_id').notNull().references(() => users.id),
   title: text('title').notNull(),
-  characterVersionId: text('character_version_id').notNull(),
-  personaId: text('persona_id'),
-  presetId: text('preset_id'),
+  characterVersionId: text('character_version_id').notNull(), // → character_versions.id (RESTRICT)
+  personaId: text('persona_id'), // → personas.id (SET NULL)
+  presetVersionId: text('preset_version_id'), // → preset_versions.id (RESTRICT); 0007 rename
   // YGWYG mode
   mode: text('mode', { enum: ['sdk', 'raw'] }).notNull().default('sdk'),
   provider: text('provider').notNull(), // 'anthropic-sdk' | 'anthropic-direct' | 'openrouter'
@@ -122,7 +122,8 @@ export const messages = sqliteTable('messages', {
   cacheReadTokens: integer('cache_read_tokens'),
   cacheWriteTokens: integer('cache_write_tokens'),
   costUsd: real('cost_usd'), // result.modelUsage[].costUSD — for the analytics layer
-  presetId: text('preset_id'),
+  presetVersionId: text('preset_version_id'), // → preset_versions.id (RESTRICT, immutable provenance); 0007
+  reasoningEffort: text('reasoning_effort'), // per-turn provenance (low|medium|high|…) — 0007; analytics axis
   rawRequest: text('raw_request', { mode: 'json' }), // null in sdk-mode (body not exposed)
   rawResponse: text('raw_response', { mode: 'json' }),
   createdAt: integer('created_at').notNull(),
@@ -284,22 +285,27 @@ export const taggables = sqliteTable('taggables', {
   are a direct copy — no cumulative differencing (a warm session would need it). These
   feed the analytics layer (the actual product).
 - **Concurrency & live sync (multi-device, same chat — expected for one user on phone +
-  desktop).** Writes are **optimistically concurrent on `seq`**: a send carries the
-  client's last-seen tip (`expectedSeq`); if `MAX(seq) > expectedSeq` the router returns
-  **409 + the missing messages and does NOT run generation** — so a stale device can
-  never inject an incoherent turn. Resolution is non-destructive: **reconcile** (append
-  at the real tip) or **fork** (`parentChatId` branch from `expectedSeq`). A **per-chat
-  turn lock** (`chats.generatingSince` + timeout, or an in-process per-chat mutex for
-  single-instance) allows **one in-flight generation per chat** — required so two
-  concurrent `resume`s can't corrupt `session_entries`. Append-only + libSQL
-  single-writer means a stale write can never *lose* the other device's turns; only
-  ordering/coherence is at stake, which `seq` guards. **Live push** = a tRPC v11
-  subscription (SSE transport) → TanStack Query invalidation, so the other device stays
-  fresh without a refresh; the stateless/no-session design *enables* this (no session
-  affinity to coordinate — the exact thing that was painful in st-bridge). SSE
-  deployment: disable proxy buffering on the stream route (caddy auto-flushes
-  `text/event-stream`) and emit `: ping` keep-alives (~20s) so h2/h3 idle timeouts don't
-  drop an idle stream.
+  desktop).** **IMPLEMENTATION STATUS (be honest — partially built):**
+  - **✅ BUILT:** the optimistic `seq` guard + the in-process per-chat lock. A send carries the
+    client's last-seen tip (`expectedSeq`); if `MAX(seq) ≠ expectedSeq` `domain/chat` send
+    returns **`status:"stale"` + the full current messages + `latestSeq`, and does NOT run
+    generation** — so a stale device (phone→desktop without refreshing) can never inject an
+    incoherent turn, and it gets everything to reconcile. The **per-chat turn lock** is an
+    in-process mutex (`_shared/lock.ts` `withChatLock`) — one in-flight generation per chat,
+    so two concurrent `resume`s can't corrupt `session_entries`. (Tested:
+    `tests/integration/chat.test.ts` stale-seq case proves the model isn't called.)
+  - **⏭ DEFERRED (designed, NOT built):** **live push** — a tRPC v11 subscription (SSE) →
+    TanStack Query invalidation so the other device auto-refreshes without a manual reload.
+    Today it's *reconcile-on-send* (you learn you're stale when you send, then re-send), not
+    seamless real-time sync. Also deferred: **fork** (`parentChatId` branch from `expectedSeq`
+    — the schema supports it, no endpoint yet) and the **multi-instance turn lock**
+    (`chats.generatingSince` + timeout — the in-process mutex covers single-instance, which is
+    what we run). Append-only + libSQL single-writer already means a stale write can never
+    *lose* the other device's turns; only ordering/coherence is at stake, which `seq` guards.
+  - The stateless/no-session design *enables* the deferred live-push (no session affinity to
+    coordinate — the exact thing that was painful in st-bridge). When built: SSE deployment
+    disables proxy buffering (caddy auto-flushes `text/event-stream`) + `: ping` keep-alives
+    (~20s) so h2/h3 idle timeouts don't drop an idle stream.
 - **Chat mode / provider / session / fork.** `mode` = `sdk` | `raw`; `provider` =
   `anthropic-sdk` | `anthropic-direct` | `openrouter`; `sessionId` = the Agent SDK
   session (null after conversion to raw, or for imports); `parentChatId` +

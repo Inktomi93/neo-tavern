@@ -145,10 +145,12 @@ soft-delete trash bin. No tautological getById tests. Catch yourself building th
   two-mode (Discover | Find) search box with a rerank toggle; search state (mode/q/rerank)
   lives in the URL (shareable); `search.find` enriches knn hits (names + snippets) for display.
   **The corpus tool — the product — is now end-to-end usable.** ·
-  **⏭ Migration 0007 (PENDING, specced):** enforce internal FKs (cascade policy) + move presets
-  to content-versioning (copy-on-write) — fixes "nuke chat orphans 20k msgs" + preset-provenance
-  bug. Full handoff: **`docs/handoff-relational-fixes.md`** (number-agnostic — takes the next
-  free migration when it lands; 0005=hub_score, 0006=source_text already claimed those). ·
+  **Migration 0007 ✅ DONE:** internal FKs now enforced (cascade policy — CASCADE down
+  containment, RESTRICT on pinned versions = archive-don't-delete, SET NULL on circular/optional/
+  self-refs) + presets moved to content-versioning (`presets`/`preset_versions` triad,
+  copy-on-write) + `messages`/`message_variants.reasoningEffort`. Validated on the real corpus
+  (`foreign_key_check` 0; importer re-runs idempotent under enforced FKs); exposed + fixed a
+  circular-FK bug in `domain/chat` createChat. Spec: `docs/handoff-relational-fixes.md`. ·
   **Phase 5** mode escape valve · **Phase 6** analytics (one chart at a time, only
   when there's a real question).
 
@@ -171,7 +173,7 @@ read before touching imports) → `docs/data-model.md` (schema) → the doc for 
 - **`docs/data-model.md`** — the full v1 database schema spec.
 - **`docs/corpus-import.md`** — the ST import + RAG **answer key**: validated parsers + models
   to lift from **card-curator** & **st-bridge** (DON'T re-derive), the model stack, the divergence.
-- **`docs/handoff-relational-fixes.md`** — spec for the pending FK + preset-versioning migration.
+- **`docs/handoff-relational-fixes.md`** — spec for the FK + preset-versioning migration (✅ landed as 0007).
 - **`docs/observability.md`** — pino logging + the `curl`-able `/api/_debug/*` API.
 - **`docs/sdk-notes.md`** — Agent SDK map + the `pnpm sdk:play` playground.
 - **`docs/dependencies.md`** — deps (installed + deferred parking lot).
@@ -196,6 +198,6 @@ by `DEBUG_TOKEN`). `pnpm check` = green-to-ship (biome+tsc+arch+vitest), runs on
 - **references/ = answer-keys.** card-curator/st-bridge already solved the ST parsers + RAG —
   port `file:line`, don't re-derive. (corpus-import)
 - **Commit directly to `main`**; **NEVER extract the Claude OAuth token** (ban risk). (CLAUDE locked-decisions)
-- Internal links are plain `text` (only `ownerId` is a real FK today) — hardening pending (`docs/handoff-relational-fixes.md`).
+- Internal links are now **enforced FKs** (migration 0007 — cascade policy in `docs/data-model.md`); polymorphic refs (`embeddings`/`taggables` entity refs) stay plain `text` by necessity.
 
 When unclear, ask. Don't re-litigate locked decisions — raise a question if you disagree.

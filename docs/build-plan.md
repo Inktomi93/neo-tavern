@@ -104,10 +104,10 @@ empty** — 100% rails, 0% product.
    UI — `/corpus` route, two-mode (Discover | Find) box + rerank toggle; search state in the URL
    (shareable); `search.find` enriches knn hits with names/snippets. State = URL params + local
    form state + TanStack Query (no zustand needed). **The corpus product is end-to-end usable.**
-   **⏭ Migration 0007 (pending, specced)** — `docs/handoff-relational-fixes.md`:
-   enforce internal FKs (cascade policy) + presets → content-versioning. The importer
-   added link columns + proved zero dangling; it makes them DB-enforced FKs. (Number-agnostic
-   handoff — takes the next free migration; 0005=hub_score, 0006=source_text already claimed.)
+   **Migration 0007 ✅ DONE** — `docs/handoff-relational-fixes.md`: internal FKs enforced
+   (cascade policy) + presets → content-versioning (`preset_versions` triad) +
+   `reasoningEffort` columns. Validated on the real corpus (foreign_key_check 0; importer
+   idempotent under FKs); fixed a circular-FK bug in `domain/chat`. **Phase 4 is complete.**
 7. **Analytics** — `domain` queries + `features` charts (`recharts`), one chart at
    a time, only when there's a real question.
 
