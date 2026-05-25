@@ -29,6 +29,7 @@
     "sdk:contract": "tsx scripts/sdk-contract.ts",
     "embed:probe": "tsx scripts/embed-probe.ts",
     "import:st": "tsx scripts/import-st.ts",
+    "embed:corpus": "tsx scripts/embed-corpus.ts",
     "prepare": "husky"
   },
   "keywords": [],
