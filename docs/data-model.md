@@ -193,14 +193,18 @@ export const embeddings = sqliteTable('embeddings', {
   entityType: text('entity_type').notNull(),
   entityId: text('entity_id').notNull(),
   model: text('model').notNull(),
-  // ⚠️ DEFERRED TO PHASE 3 (NOT in the Phase-2 schema). The native-vector column +
-  // index are added by a Phase-3 migration when RAG lands — verified end-to-end then.
-  // SPIKE-VALIDATED approach (libSQL NATIVE vectors, no sqlite-vec): declare the column
-  // via a Drizzle `customType` emitting `F32_BLOB(1024)`, `toDriver` via `vector32(...)`
-  // (watch drizzle insert-API caveat #3899), `fromDriver` via Float32Array; then:
-  //   embedding F32_BLOB(1024)
+  // ✅ DONE — Phase 3a (migration 0001). In src/db/schema.ts the native libSQL vector
+  // is a `vector32` customType emitting `F32_BLOB(1024)`: toDriver stores the RAW
+  // little-endian Float32 blob (dodges the drizzle #3899 `sql`vector32()`` insert
+  // caveat); fromDriver → Float32Array (copy to a fresh aligned buffer). The ANN index
+  // is HAND-ADDED to migration 0001 (drizzle-kit can't emit it):
   //   CREATE INDEX embeddings_ann ON embeddings (libsql_vector_idx(embedding));
-  // Query with vector_distance_cos(...) / vector_top_k('embeddings_ann', ...).
+  // Search (domain/search): vector_top_k('embeddings_ann', vector32(?), k) JOIN
+  // embeddings ON rowid, then ORDER BY vector_distance_cos (exact re-rank). Embedder =
+  // BGE-M3 ("Xenova/bge-m3", CLS pooling, normalized, 1024-dim) in embeddings/embedder
+  // (CPU ONNX; device:"cuda" flip later). NOTE: embeddings is global (no ownerId) —
+  // owner-scope search results when multi-user + real data land.
+  embedding: vector32('embedding', { dim: 1024 }),
   metadata: text('metadata', { mode: 'json' }),
   createdAt: integer('created_at').notNull(),
 });

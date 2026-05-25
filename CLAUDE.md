@@ -101,11 +101,14 @@ soft-delete trash bin. No tautological getById tests. Catch yourself building th
   client→tRPC→server loop verified (dev + prod).
 - **Providers + architecture:** ✅ Claude (sub) + OpenRouter adapters verified; the
   full layer cake stubbed and machine-enforced (server + client feature-slicing).
-- **Phase 2 — Schema + first chat:** ⏭ NEXT. Implement the Drizzle schema (full v1
+- **Phase 2 — Schema + first chat:** ✅ DONE (schema + first YGWYG turn end-to-end,
+  live-verified; + shadcn component system). The Drizzle schema (full v1
   spec in **`docs/data-model.md`** — characters/versions, personas, chats, messages,
   world books + junctions, presets, settings, assets, tags, embeddings), then
   `domain/chat` + `features/chat` + a tRPC router driving one YGWYG turn.
-- **Phase 3** embeddings + semantic search · **Phase 4** ST corpus importer ·
+- **Phase 3** embeddings + semantic search (**3a ✅** foundation: BGE-M3 + libSQL
+  F32_BLOB vectors proven; ranking polish + UI post-importer) · **Phase 4** ST corpus
+  importer (⏭ NEXT) ·
   **Phase 5** mode escape valve · **Phase 6** analytics (one chart at a time, only
   when there's a real question).
 

@@ -59,19 +59,22 @@ empty** — 100% rails, 0% product.
    `MessageInput`/`CreateChatForm` + home create-and-navigate; 4 domain integration
    tests (round-trip, stale-seq, resume, ownership). Deferred: greeting seeding, chat
    list, streaming, `message_variants` (raw mode), shadcn polish.
-3.5. **Component system (shadcn) — *before* the product UI** (the one cross-cutting
-   UI choice; locked in `CLAUDE.md`). `cn()` util + `@/` alias + dark theme tokens +
-   base primitives in `client/components/ui/`; port the 4 plain-Tailwind chat
-   components onto them. Cheap now (4 components), saves rewriting the corpus UI later.
-4. **The product:** `domain/corpus` + `embeddings` (_re-add
-   `@huggingface/transformers`_) + `domain/search` → `features/corpus-search`.
-   - ⚠️ **Carried over from Phase 2:** add the `embeddings.embedding` `F32_BLOB(1024)`
-     column + `CREATE INDEX … libsql_vector_idx(embedding)` via a migration HERE — the
-     Phase-2 db foundation shipped the table's *scalar* columns only (deliberate defer;
-     see `data-model.md` embeddings note). Verify the Drizzle `customType` insert
-     (`vector32`, watch #3899) + query (`vector_top_k` / `vector_distance_cos`)
-     end-to-end against a real BGE-M3 (1024-dim) embedding. Lift CSLS hubness +
-     segmentation from card-curator (`docs/corpus-import.md`).
+3.5. **Component system (shadcn)** ✅ — `@/` alias (tsconfig paths, no baseUrl + vite
+   resolve), `cn()` util (`client/lib/utils.ts`), dark zinc theme tokens in
+   `styles/globals.css`, `components.json` (so `shadcn add` works), base primitives
+   `components/ui/{button,input,textarea}`; 4 chat components ported. Deps: clsx,
+   tailwind-merge, class-variance-authority, @radix-ui/react-slot (lucide/tw-animate-css/
+   sonner deferred until used). Add new primitives via `shadcn add <x>` (uses @/).
+4. **The product.** **Phase 3a ✅ (foundation):** `embeddings` infra (BGE-M3 via
+   `@huggingface/transformers`, CPU ONNX, `embedder.ts`), the `F32_BLOB(1024)` vector
+   column + `libsql_vector_idx` ANN index (migration `0001`), `domain/corpus`
+   (embed+store) + `domain/search` (`knn`: `vector_top_k` → exact cosine re-rank), +
+   `search`/`corpus` trpc routers. Proven: deterministic vector test (`pnpm check`) +
+   live `pnpm embed:probe` (dim 1024, related 0.659 > unrelated 0.382).
+   **Remaining (post-importer, against the real corpus):** chat segmentation, CSLS
+   hubness, hybrid query, two-stage rerank, the `discover` feature, owner-scoped
+   results, and `features/corpus-search` (UI) — lift from card-curator per
+   `docs/corpus-import.md`.
 5. **Importer** (`jobs`) — walk the ST corpus → our schema. SillyTavern is cloned
    in `references/` for the exact card / world-info / JSONL formats.
 6. **Analytics** — `domain` queries + `features` charts (`recharts`), one chart at
