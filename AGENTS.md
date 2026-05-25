@@ -5,9 +5,12 @@ Doctrine for AI agents (and humans) working in neo-tavern. Read this before writ
 ## What this is
 
 A private, single-user RP frontend **and** a personal RAG/analytics layer over an
-RP corpus (400+ characters, hundreds of chats). Chat is incidental — **the corpus
-tool is the product.** Homelab-hosted behind authentik + caddy. One user: no auth
-code, no multi-tenant anything, no settings pages for things with one obvious default.
+RP corpus (400+ characters, hundreds of chats). **Two co-equal goals: a polished RP
+chat experience (a prettier SillyTavern — Marinara/Astra-grade) AND the corpus/RAG
+superpower (the killer differentiator).** Chat is NOT incidental (stance changed,
+owner-approved — see CLAUDE.md mission). Homelab-hosted behind authentik + caddy. One
+user: no auth code, no multi-tenant anything, no settings pages for things with one
+obvious default.
 
 ## Read first
 

@@ -8,10 +8,16 @@ enforced architecture see **`docs/architecture.md`**; deferred deps live in
 ## The mission
 
 A private, single-user RP frontend that replaces SillyTavern for my personal use,
-hosted in my homelab behind authentik + caddy. **The killer feature is not chat.**
-It's the **personal RAG / analytics layer over my entire RP corpus** — 400+
-characters, hundreds of chats: semantic search, theme analysis, co-occurrence.
-Chat is incidental; **the corpus tool is the product.** Build accordingly.
+hosted in my homelab behind authentik + caddy. **Two co-equal goals:** (1) a
+**polished RP chat experience** — a *prettier SillyTavern* for me (think
+Marinara-Engine / AstraProjecta: real message rendering, character/persona/world-info
+UX, swipes/edits, streaming), and (2) the **personal RAG / analytics superpower** over
+my entire RP corpus — 400+ characters, hundreds of chats: semantic search, theme
+analysis, co-occurrence. The corpus layer is the **killer differentiator** no other ST
+client has; the chat is the daily driver. Chat is **NOT** incidental — both matter.
+(STANCE CHANGED, owner-approved: the original brief framed chat as incidental and the
+corpus as "the product"; that's superseded — the corpus is built + validated, now the RP
+frontend gets first-class polish too.)
 
 **Auth & tenancy.** Zero auth *logic* in the app, no sessions, no CSRF — stateless
 per-request identity. Authentik terminates auth; identity = `X-Authentik-Username`,
@@ -103,9 +109,15 @@ mode.
 
 ## What NOT to build (slop guard)
 
+> **Reframed with the chat-first stance:** RP-frontend features are now IN scope — a real
+> chat UX (markdown render, avatars, streaming, swipes/edits), a character library/editor,
+> persona + world-info UI, app shell/nav. Those are *the work*, not slop. The guards below
+> still hold (they target specific bloat, not the RP frontend).
+
 No settings pages for one-user/one-obvious-default toggles. No theme switcher (one
-dark theme). No chub.ai browser. No TTS/STT/image-gen/sprites/expressions. No
-47-field character editor before chat works. No skeleton-loader library (a spinner
+dark theme — but make it *pretty*). No chub.ai browser. No TTS/STT/image-gen/sprites/
+expressions (unless I ask). No 47-field character editor *before a usable chat exists*
+(build the editor we need, not ST's everything). No skeleton-loader library (a spinner
 is fine). No illustrated empty states. No pagination under ~1000 items. No
 soft-delete trash bin. No tautological getById tests. Catch yourself building these
 → stop and ask.

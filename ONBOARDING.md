@@ -6,8 +6,9 @@ rather than repeating them, so it can't drift.
 ## What this is
 
 A private, **single-user** RP frontend + **personal RAG/analytics layer** over a SillyTavern
-corpus (~310 characters, hundreds of chats), self-hosted behind authentik + caddy. **The corpus
-tool is the product; chat is incidental.** Full mission + the non-obvious vision (YGWYG, the mode
+corpus (~310 characters, hundreds of chats), self-hosted behind authentik + caddy. **Two co-equal
+goals: a polished RP chat experience (a prettier SillyTavern) AND the corpus/RAG superpower.**
+Chat is NOT incidental (stance changed). Full mission + the non-obvious vision (YGWYG, the mode
 escape valve, World Info as explicit attachment) live in **`CLAUDE.md`** — read that first; it's
 the brief and it's auto-loaded for the AI agent every session.
 
