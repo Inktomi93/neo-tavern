@@ -1,5 +1,6 @@
 import { type FeatureExtractionPipeline, env as hf, pipeline } from "@huggingface/transformers";
 import { env } from "../env";
+import { getLog } from "../observability/logger";
 
 // Keep ALL model downloads self-contained in a repo-local, gitignored dir (not the OS HF
 // cache or node_modules/.cache). transformers.js `env` is a process-global singleton, so
@@ -36,11 +37,17 @@ export interface Embedder {
 // and is reused for every subsequent call (no per-op load/unload).
 let pipelinePromise: Promise<FeatureExtractionPipeline> | null = null;
 function getPipeline(): Promise<FeatureExtractionPipeline> {
-  pipelinePromise ??= pipeline("feature-extraction", MODEL_ID, {
-    device: env.EMBED_DEVICE,
-    dtype: env.EMBED_DTYPE,
-    session_options: { graphOptimizationLevel: "all" },
-  });
+  if (!pipelinePromise) {
+    getLog().info(
+      { model: MODEL_ID, device: env.EMBED_DEVICE, dtype: env.EMBED_DTYPE },
+      "embedder: loading model (one-time)",
+    );
+    pipelinePromise = pipeline("feature-extraction", MODEL_ID, {
+      device: env.EMBED_DEVICE,
+      dtype: env.EMBED_DTYPE,
+      session_options: { graphOptimizationLevel: "all" },
+    });
+  }
   return pipelinePromise;
 }
 

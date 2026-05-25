@@ -3,9 +3,11 @@
 // Pure. Token counting is a coarse chars/4 approximation everywhere — BGE-M3 has its own
 // tokenizer but loading a second one buys nothing at this corpus scale (advisor call).
 
-// Rough token estimate. Good enough for segmentation budgets + the degenerate-card filter.
+// Rough token estimate for the segmentation hot loop (windowing into ~2k-token chunks —
+// exactness there doesn't change retrieval; the real BGE-M3 tokenizer is used for the
+// budget-critical embed-pass batching). 3.67 chars/token measured on the real RP corpus.
 export function approxTokens(text: string): number {
-  return Math.ceil(text.length / 4);
+  return Math.ceil(text.length / 3.67);
 }
 
 /** Strip HTML, collapse whitespace/newlines, trim per line. Port of extract.py:_clean_text. */

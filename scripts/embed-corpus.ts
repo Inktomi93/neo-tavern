@@ -3,7 +3,6 @@ import { asc, eq } from "drizzle-orm";
 import { createDb, runMigrations } from "../src/db/client";
 import { characters, characterVersions, chats, messages } from "../src/db/schema";
 import {
-  approxTokens,
   buildCardEmbedText,
   createCorpusService,
   type EmbedItem,
@@ -11,21 +10,24 @@ import {
   MIN_SEARCH_TEXT_TOKENS,
   segmentChat,
 } from "../src/server/domain/corpus";
+import { createBgeTokenizer } from "../src/server/embeddings/tokenizer";
 import { env } from "../src/server/env";
 
 /**
  * Embed pass (Phase 4.6.2): index the imported corpus for semantic search. Embeds each
- * character's current-version card + each real_conversation chat's segments via BGE-M3,
- * BATCHED (one GPU pass per BATCH_SIZE texts — the throughput lever). Resumable: skips
- * already-embedded entities. SLOW on CPU; run on GPU via `pnpm embed:corpus:gpu`. Not in
- * `pnpm check`. entityId: card = "<characterId>", segment = "<chatId>:<segIndex>".
+ * character's current-version card + each real_conversation chat's segments via BGE-M3.
+ * Uses the REAL BGE-M3 tokenizer (native, fast) to: drop degenerate cards (< 150 tok),
+ * sort by real length, and pack TOKEN-BUDGET batches (cap padded tokens/batch, not a fixed
+ * count — fixed-count + long text OOMs). Resumable. GPU via `pnpm embed:corpus:gpu`.
+ * entityId: card = "<characterId>", segment = "<chatId>:<segIndex>".
  */
-const BATCH_SIZE = 32;
-// Context cap = BGE-M3's full 8192-token window (~4 chars/token). With length-bucketing
-// below, padding waste is already handled, so this is just "never exceed the model max"
-// (silent truncation otherwise). A longer-context model would raise this — see the model
-// note in docs/corpus-import.md.
+// Padded-token budget per GPU batch (max_seq_len × batch_size). With length-sorting this is
+// tight. BGE-M3 (568M) is small, so this is generous for the 48GB A6000s.
+const MAX_BATCH_TOKENS = 32768;
+// Coarse char pre-cap (~8192 tok · BGE-M3's own pipeline truncates at 8192 anyway) — just
+// avoids tokenizing/feeding a needlessly huge string. Real truncation is the pipeline's.
 const MAX_EMBED_CHARS = 8192 * 4;
+const TOKENIZE_CHUNK = 512;
 
 function strArray(v: unknown): string[] {
   return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
@@ -36,23 +38,20 @@ function cap(text: string): string {
 
 async function main(): Promise<void> {
   console.log(
-    `[embed] DB ${env.DATABASE_URL} · device=${env.EMBED_DEVICE} dtype=${env.EMBED_DTYPE} batch=${BATCH_SIZE}`,
+    `[embed] DB ${env.DATABASE_URL} · device=${env.EMBED_DEVICE} dtype=${env.EMBED_DTYPE} budget=${MAX_BATCH_TOKENS}tok`,
   );
   const db = await createDb(env.DATABASE_URL);
   await runMigrations(db);
   const corpus = createCorpusService(db);
-  const done = await corpus.existingKeys(); // resumability: skip what's already embedded
+  const tok = createBgeTokenizer();
+  const done = await corpus.existingKeys();
 
   const versions = await db.select().from(characterVersions);
   const versionById = new Map(versions.map((v) => [v.id, v]));
 
-  let cardsSkippedSmall = 0;
+  // ── Collect every embed target (cards + real_conversation segments) ──────
   let skipped = 0;
-  // Collect everything first, then sort by length so each GPU batch is similar-sized
-  // (minimizes padding waste — card-curator index.py:219 / sentence-transformers do the same).
   const targets: EmbedItem[] = [];
-
-  // ── Cards (current version per character) ───────────────────────────────
   for (const c of await db.select().from(characters)) {
     if (!c.currentVersionId) continue;
     const v = versionById.get(c.currentVersionId);
@@ -70,10 +69,6 @@ async function main(): Promise<void> {
       alternateGreetings: strArray(v.alternateGreetings),
       tags: strArray(v.tags),
     });
-    if (approxTokens(text) < MIN_SEARCH_TEXT_TOKENS) {
-      cardsSkippedSmall += 1; // degenerate-result filter — still directly retrievable
-      continue;
-    }
     targets.push({
       entityType: "character",
       entityId: c.id,
@@ -82,15 +77,11 @@ async function main(): Promise<void> {
     });
   }
 
-  // ── Chat segments (real_conversation only) ──────────────────────────────
   const allChats = await db.select().from(chats);
   const real = allChats.filter(
     (ch) => (ch.metadata as { bucket?: string } | null)?.bucket === "real_conversation",
   );
-  console.log(
-    `[embed] cards queued (${cardsSkippedSmall} too small) · ${real.length} chats to segment`,
-  );
-
+  console.log(`[embed] ${targets.length} cards · segmenting ${real.length} chats…`);
   let i = 0;
   for (const ch of real) {
     i += 1;
@@ -124,16 +115,43 @@ async function main(): Promise<void> {
         metadata: { characterId, chatId: ch.id, segIndex: seg.index },
       });
     }
-    if (i % 100 === 0) console.log(`[embed] segmented ${i}/${real.length} chats…`);
+    if (i % 100 === 0)
+      console.log(`[embed] segmented ${i}/${real.length} · ${targets.length} targets`);
   }
 
-  // Sort by length → consecutive batches hold similar-sized texts (minimal padding waste).
-  targets.sort((a, b) => a.text.length - b.text.length);
-  let embedded = 0;
-  for (let b = 0; b < targets.length; b += BATCH_SIZE) {
-    embedded += await corpus.embedAndStoreMany(targets.slice(b, b + BATCH_SIZE));
-    console.log(`[embed] ${embedded}/${targets.length} embedded…`);
+  // ── Real token counts → drop degenerate cards → sort → token-budget batch ──
+  console.log(`[embed] tokenizing ${targets.length} targets (real BGE-M3)…`);
+  const toks: number[] = [];
+  for (let b = 0; b < targets.length; b += TOKENIZE_CHUNK) {
+    toks.push(...(await tok.countBatch(targets.slice(b, b + TOKENIZE_CHUNK).map((t) => t.text))));
   }
+  const withToks = targets
+    .map((t, idx) => ({ item: t, tokens: toks[idx] ?? 0 }))
+    // degenerate filter: tiny CARDS match everything (still directly retrievable). config.py:76
+    .filter((x) => x.item.entityType !== "character" || x.tokens >= MIN_SEARCH_TEXT_TOKENS)
+    .sort((a, b) => a.tokens - b.tokens); // length-sort → tight padded batches
+  const cardsSkippedSmall =
+    targets.filter((t) => t.entityType === "character").length -
+    withToks.filter((x) => x.item.entityType === "character").length;
+
+  let embedded = 0;
+  let batch: EmbedItem[] = [];
+  let batchMax = 0;
+  const flush = async (): Promise<void> => {
+    if (batch.length > 0) {
+      embedded += await corpus.embedAndStoreMany(batch);
+      batch = [];
+      batchMax = 0;
+      console.log(`[embed] ${embedded}/${withToks.length} embedded…`);
+    }
+  };
+  for (const { item, tokens } of withToks) {
+    const newMax = Math.max(batchMax, tokens);
+    if (batch.length > 0 && newMax * (batch.length + 1) > MAX_BATCH_TOKENS) await flush();
+    batch.push(item);
+    batchMax = Math.max(batchMax, tokens);
+  }
+  await flush();
 
   console.log(
     `[embed] ✅ ${embedded} embedded · ${cardsSkippedSmall} cards too small · ${skipped} already-present skipped`,

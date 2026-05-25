@@ -39,6 +39,7 @@
   "license": "UNLICENSED",
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.150",
+    "@anush008/tokenizers": "^0.6.0",
     "@hono/node-server": "^2.0.3",
     "@huggingface/transformers": "^4.2.0",
     "@libsql/client": "^0.17.3",

@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import type { Db } from "../../../db/client";
 import { createEmbedder, type Embedder } from "../../embeddings/embedder";
+import { getLog } from "../../observability/logger";
 
 export interface SearchHit {
   entityType: string;
@@ -33,6 +34,10 @@ export function createSearchService(db: Db, deps: SearchServiceDeps = {}): Searc
         JOIN embeddings e ON e.rowid = v.id
         ORDER BY dist ASC
       `);
+      getLog().debug(
+        { k, queryChars: queryText.length, hits: rows.length, nearest: rows[0]?.dist },
+        "search: knn",
+      );
       return rows.map((row) => ({
         entityType: row.entityType,
         entityId: row.entityId,
