@@ -150,6 +150,8 @@ read before touching imports) → `docs/data-model.md` (schema) → the doc for 
 
 **Doc map:**
 - **`AGENTS.md`** — working doctrine: the enforcement is real, references are not the bible.
+- **`docs/conventions.md`** — the recurring tooling/lint/logging traps + how past each (READ
+  before fighting Biome/tsc: the index-key conflict, format-before-`check`, `tsx -e`, vector quirks).
 - **`docs/build-plan.md`** — bottom-up build order + the de-risk spike results (all passed).
 - **`docs/architecture.md`** — the enforced layer cake + folder map + the barrel tradeoff.
 - **`docs/data-model.md`** — the full v1 database schema spec.

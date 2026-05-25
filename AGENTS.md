@@ -30,6 +30,9 @@ on pre-commit. Green = ship. It must pass before you call anything done.
   `import type` for types, no default exports outside config/route files, etc.
   **Fix the code, don't loosen the rule.** If a rule is genuinely wrong for a case,
   scope an override *and document why* in the config — never silently widen it.
+  **`docs/conventions.md` is the concrete trap list** — the Biome⇄tsc index-key conflict,
+  the format-before-`check` reflex, logging, the strict-TS gotchas, the vector-index quirks,
+  `tsx -e`. Read it before fighting the linter; we keep re-dancing these otherwise.
 - Tools are scoped to `src` (+ `scripts`/`tests`). Add a new top-level dir and you
   must confirm biome/tsc/vitest/knip/dependency-cruiser still ignore what they should.
 - Don't install a dependency before it has a consumer (knip flags dead deps). Check
