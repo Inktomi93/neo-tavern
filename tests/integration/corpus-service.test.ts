@@ -1,4 +1,5 @@
 import { expect, test } from "vitest";
+import { characters, users } from "../../src/db/schema";
 import { createCorpusService, embeddingKey } from "../../src/server/domain/corpus";
 import { createSearchService } from "../../src/server/domain/search";
 import type { Embedder } from "../../src/server/embeddings/embedder";
@@ -60,6 +61,28 @@ test("embedAndStoreMany batch-inserts retrievable vectors in one pass", async ()
   const search = createSearchService(db, { embedder: fakeEmbedder });
   const hits = await search.knn({ queryText: "delta", k: 3 });
   expect(hits[0]?.entityId).toBe("b2");
+});
+
+test("owner-scoped knn returns only the requesting owner's entities", async () => {
+  const db = await freshDb();
+  const now = Date.now();
+  await db.insert(users).values([
+    { id: "uA", handle: "owner-a", createdAt: now },
+    { id: "uB", handle: "owner-b", createdAt: now },
+  ]);
+  await db.insert(characters).values([
+    { id: "cA", ownerId: "uA", handle: "char-a", createdAt: now },
+    { id: "cB", ownerId: "uB", handle: "char-b", createdAt: now },
+  ]);
+  const corpus = createCorpusService(db, { embedder: fakeEmbedder });
+  // same text → same vector → both are equally near the query
+  await corpus.embedAndStore({ entityType: "character", entityId: "cA", text: "alpha" });
+  await corpus.embedAndStore({ entityType: "character", entityId: "cB", text: "alpha" });
+
+  const search = createSearchService(db, { embedder: fakeEmbedder });
+  expect((await search.knn({ queryText: "alpha", k: 10 })).length).toBe(2); // unscoped: both
+  const scoped = await search.knn({ queryText: "alpha", k: 10, ownerId: "uA" });
+  expect(scoped.map((h) => h.entityId)).toEqual(["cA"]); // scoped: only owner A's
 });
 
 test("a duplicate (entity, model) insert errors loudly (no silent second vector)", async () => {
