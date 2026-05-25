@@ -161,16 +161,27 @@ export const characterVersionWorldEntries = sqliteTable('cv_world_entries', {
   scope: text('scope').default('always'),
 }, (t) => ({ pk: primaryKey({ columns: [t.characterVersionId, t.entryId] }) }));
 
+// Presets use the identity / content-version / pin triad (copy-on-write, like characters) —
+// migration 0007. config + schemaVersion live on preset_versions, so messages.presetVersionId
+// is an IMMUTABLE provenance record (a mutable preset would rewrite past generation history).
 export const presets = sqliteTable('presets', {
   id: text('id').primaryKey(),
   ownerId: text('owner_id').notNull().references(() => users.id),
   name: text('name').notNull(),
-  kind: text('kind').notNull(),
-  config: text('config', { mode: 'json' }).notNull(),
-  schemaVersion: integer('schema_version').notNull().default(1), // config-blob upgrade path
+  kind: text('kind').notNull(), // descriptive library label (free text), NOT a structural type
+  currentVersionId: text('current_version_id'), // → preset_versions.id (SET NULL, circular)
   createdAt: integer('created_at').notNull(),
   updatedAt: integer('updated_at').notNull(),
 });
+
+export const presetVersions = sqliteTable('preset_versions', {
+  id: text('id').primaryKey(),
+  presetId: text('preset_id').notNull(), // → presets.id (CASCADE)
+  version: integer('version').notNull(),
+  config: text('config', { mode: 'json' }).notNull(),
+  schemaVersion: integer('schema_version').notNull().default(1), // config-blob upgrade path
+  createdAt: integer('created_at').notNull(),
+}); // UNIQUE(presetId, version)
 
 export const settings = sqliteTable('settings', {
   key: text('key').primaryKey(),
@@ -329,22 +340,30 @@ export const taggables = sqliteTable('taggables', {
   (1) **table/column shape → Drizzle migrations** (the migration history *is* the
   version; every table gets it free, no per-table version column);
   (2) **JSON-blob shape → an explicit `schemaVersion` + pure migrate-fns**, but ONLY for
-  blobs read *structurally* that *evolve* — `user_settings.config`, `presets.config`
+  blobs read *structurally* that *evolve* — `user_settings.config`, `preset_versions.config`
   (load → if `schemaVersion < current`, migrate → Zod-validate → write back); this
   replaces ST's scattered `if (x === undefined)` duck-typing;
-  **⚠️ STANCE CHANGED (approved, PENDING migration — 0007 at time of writing):** presets move
-  from type-2 to **type-3 content versioning** (a `presets`/`preset_versions` triad, copy-on-write
-  like characters) — because `messages.presetId` recording a *mutable* preset rewrites past
-  generation provenance, which breaks corpus analytics. `schemaVersion` rides along on
-  `preset_versions`. See `docs/handoff-relational-fixes.md` (number-agnostic — takes the next
-  free migration; 0005=hub_score, 0006=source_text already claimed those); this section gets
-  rewritten when it lands. Also pending: **enforced internal FKs** (there are none today beyond
-  `ownerId` — a documented gap) with a CASCADE/RESTRICT policy.
-  (3) **domain/content → `character_versions.version`** (canon history — a different
-  concept). Opaque/archival blobs (`character_versions.raw`, `messages.rawRequest/
+  (3) **domain/content → `character_versions.version` AND `preset_versions.version`** (canon
+  history). **Presets are type-3 as of migration 0007** (a `presets`/`preset_versions` triad,
+  copy-on-write like characters): a mutable preset would silently rewrite the recorded basis of
+  every past message (`messages.presetVersionId`), breaking corpus analytics — exactly what
+  content-versioning prevents. `schemaVersion` (the type-2 blob-shape version) rides along on
+  `preset_versions`. Opaque/archival blobs (`character_versions.raw`, `messages.rawRequest/
   rawResponse`, `chats.metadata`) are write-once — **not versioned.** Discriminator:
   *do I parse this on read AND will its shape change?* yes → version; column →
   migrations cover it; archival → leave it.
+- **Referential integrity — enforced FKs (migration 0007).** Internal links are real foreign
+  keys with an explicit cascade policy (before 0007 only `ownerId → users` existed; internal
+  links were plain text). The shape: **CASCADE** down ownership/containment (a deleted chat takes
+  its messages/variants/session_entries/junctions; a deleted character takes its versions; a
+  deleted preset takes its versions); **RESTRICT** on provenance pins (`chats.characterVersionId`,
+  `chats`/`messages.presetVersionId`) so you can't delete a version a chat/message pinned — the
+  intended effect is that deleting a character/preset *with chats* fails atomically (CASCADE→version
+  hits the RESTRICT), enforcing **archive-don't-delete**; **SET NULL** for the circular
+  `currentVersionId` pointers and optional refs (`chats.personaId`, self-ref `parentChatId`/
+  `parentId`). Polymorphic refs (`embeddings.(entityType,entityId)`, `taggables.(entityType,
+  entityId)`) genuinely cannot be FKs and stay plain text. Verified on the real corpus:
+  `PRAGMA foreign_key_check` returns zero rows after `pnpm import:st`.
 
 ## Importing from SillyTavern (validated against real cards + chats)
 

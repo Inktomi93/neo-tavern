@@ -1,3 +1,4 @@
+import { eq } from "drizzle-orm";
 import { expect, test } from "vitest";
 import { characters, characterVersions, chats, users } from "../../src/db/schema";
 import { createCorpusService } from "../../src/server/domain/corpus";
@@ -29,6 +30,8 @@ test("find enriches knn hits — character hits carry name+tags, segment hits ca
   const db = await freshDb();
   const now = Date.now();
   await db.insert(users).values({ id: "uA", handle: "owner-a", createdAt: now });
+  // Character before version (FK), then repoint currentVersionId (find resolves the card via it).
+  await db.insert(characters).values({ id: "A", ownerId: "uA", handle: "aragorn", createdAt: now });
   await db.insert(characterVersions).values({
     id: "cvA",
     characterId: "A",
@@ -38,9 +41,7 @@ test("find enriches knn hits — character hits carry name+tags, segment hits ca
     tags: ["fantasy"],
     createdAt: now,
   });
-  await db
-    .insert(characters)
-    .values({ id: "A", ownerId: "uA", handle: "aragorn", currentVersionId: "cvA", createdAt: now });
+  await db.update(characters).set({ currentVersionId: "cvA" }).where(eq(characters.id, "A"));
   await db.insert(chats).values({
     id: "chatA1",
     ownerId: "uA",

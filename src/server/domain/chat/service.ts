@@ -85,11 +85,13 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
     // takes over later). firstMessage is stored on the version but NOT seeded as a
     // message yet — greeting-as-assistant-turn seeding into session_entries is a
     // follow-up (see docs/sdk-notes.md). The chat starts empty; the user opens it.
+    // Circular FK (characters.currentVersionId ↔ character_versions.characterId, migration
+    // 0007): insert the character with a NULL currentVersionId, then the version, then repoint
+    // — same order the importer uses. Setting currentVersionId up front violates the FK.
     await db.insert(characters).values({
       id: characterId,
       ownerId,
       handle: newId(),
-      currentVersionId: versionId,
       createdAt: now,
     });
     await db.insert(characterVersions).values({
@@ -101,6 +103,10 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
       firstMessage: params.firstMessage ?? null,
       createdAt: now,
     });
+    await db
+      .update(characters)
+      .set({ currentVersionId: versionId })
+      .where(eq(characters.id, characterId));
     await db.insert(chats).values({
       id: chatId,
       ownerId,

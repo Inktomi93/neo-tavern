@@ -4,6 +4,7 @@
 // drizzle's casing has live bugs; explicit is deterministic).
 import { sql } from "drizzle-orm";
 import {
+  type AnySQLiteColumn,
   customType,
   index,
   integer,
@@ -79,7 +80,12 @@ export const characters = sqliteTable(
       .notNull()
       .references(() => users.id),
     handle: text("handle").notNull().unique(), // → unique(ownerId, handle) under multi-user
-    currentVersionId: text("current_version_id"),
+    // Circular: points at the active version (which back-references this character). SET NULL
+    // (a bare pointer); the version itself is RESTRICT-protected while a chat pins it.
+    currentVersionId: text("current_version_id").references(
+      (): AnySQLiteColumn => characterVersions.id,
+      { onDelete: "set null" },
+    ),
     importedFrom: text("imported_from"),
     importHash: text("import_hash"),
     starred: integer("starred", { mode: "boolean" }).default(false),
@@ -94,7 +100,9 @@ export const characterVersions = sqliteTable(
   "character_versions",
   {
     id: text("id").primaryKey(),
-    characterId: text("character_id").notNull(),
+    characterId: text("character_id")
+      .notNull()
+      .references(() => characters.id, { onDelete: "cascade" }), // versions die with the character
     version: integer("version").notNull(),
     name: text("name").notNull(),
     description: text("description").notNull(),
@@ -125,15 +133,25 @@ export const chats = sqliteTable(
       .notNull()
       .references(() => users.id),
     title: text("title").notNull(),
-    characterVersionId: text("character_version_id").notNull(), // pins the version this chat ran on
-    personaId: text("persona_id"),
-    presetId: text("preset_id"),
+    // RESTRICT: can't delete a pinned version — archive the character instead.
+    characterVersionId: text("character_version_id")
+      .notNull()
+      .references(() => characterVersions.id, { onDelete: "restrict" }),
+    personaId: text("persona_id").references(() => personas.id, { onDelete: "set null" }),
+    // The chat's default preset config for its next turn. RESTRICT preserves provenance.
+    presetVersionId: text("preset_version_id").references(
+      (): AnySQLiteColumn => presetVersions.id,
+      { onDelete: "restrict" },
+    ),
     mode: text("mode", { enum: ["sdk", "raw"] })
       .notNull()
       .default("sdk"),
     provider: text("provider").notNull(), // 'anthropic-sdk' | 'anthropic-direct' | 'openrouter'
     sessionId: text("session_id"), // SDK session; null after conversion to raw / for imports
-    parentChatId: text("parent_chat_id"), // set when this chat is a fork
+    // Self-ref fork link. SET NULL so a fork survives its parent's deletion.
+    parentChatId: text("parent_chat_id").references((): AnySQLiteColumn => chats.id, {
+      onDelete: "set null",
+    }),
     convertedAt: integer("converted_at"),
     forkedAt: integer("forked_at"),
     // ST import provenance. importedFrom = the source .jsonl filename — the key that
@@ -159,9 +177,14 @@ export const messages = sqliteTable(
   "messages",
   {
     id: text("id").primaryKey(),
-    chatId: text("chat_id").notNull(),
+    chatId: text("chat_id")
+      .notNull()
+      .references(() => chats.id, { onDelete: "cascade" }), // "nuke the chat" cleans up its messages
     seq: integer("seq").notNull(), // monotonic per-chat — canonical order + concurrency token
-    parentId: text("parent_id"), // null in sdk/YGWYG (linear); reserved for raw-mode branching
+    // null in sdk/YGWYG (linear); reserved for raw-mode branching. Self-ref, SET NULL.
+    parentId: text("parent_id").references((): AnySQLiteColumn => messages.id, {
+      onDelete: "set null",
+    }),
     role: text("role", { enum: ["user", "assistant", "system"] }).notNull(),
     content: text("content").notNull(),
     toolCalls: text("tool_calls", { mode: "json" }),
@@ -173,7 +196,12 @@ export const messages = sqliteTable(
     cacheReadTokens: integer("cache_read_tokens"),
     cacheWriteTokens: integer("cache_write_tokens"),
     costUsd: real("cost_usd"),
-    presetId: text("preset_id"),
+    // Immutable provenance: the preset VERSION this message was generated under. RESTRICT.
+    presetVersionId: text("preset_version_id").references(
+      (): AnySQLiteColumn => presetVersions.id,
+      { onDelete: "restrict" },
+    ),
+    reasoningEffort: text("reasoning_effort"), // per-turn provenance (e.g. low|medium|high) — analytics axis
     rawRequest: text("raw_request", { mode: "json" }), // null in sdk-mode (body not exposed)
     rawResponse: text("raw_response", { mode: "json" }),
     // Which message_variants.idx is the rendered/selected swipe. null = no variants
@@ -196,11 +224,14 @@ export const messageVariants = sqliteTable(
   "message_variants",
   {
     id: text("id").primaryKey(),
-    messageId: text("message_id").notNull(),
+    messageId: text("message_id")
+      .notNull()
+      .references(() => messages.id, { onDelete: "cascade" }), // swipes die with the message
     idx: integer("idx").notNull(), // position in the swipe pool (0-based)
     content: text("content").notNull(), // the swipe text, verbatim
     model: text("model"), // swipe_info[idx].extra.model
     provider: text("provider"), // swipe_info[idx].extra.api
+    reasoningEffort: text("reasoning_effort"), // each swipe can differ
     tokensIn: integer("tokens_in"),
     tokensOut: integer("tokens_out"),
     genStarted: integer("gen_started"), // ms epoch
@@ -223,7 +254,9 @@ export const worldBooks = sqliteTable("world_books", {
 
 export const worldEntries = sqliteTable("world_entries", {
   id: text("id").primaryKey(),
-  worldBookId: text("world_book_id").notNull(),
+  worldBookId: text("world_book_id")
+    .notNull()
+    .references(() => worldBooks.id, { onDelete: "cascade" }),
   title: text("title").notNull(),
   content: text("content").notNull(),
   legacyKeys: text("legacy_keys", { mode: "json" }), // ST keyword triggers — import compat only, never scanned
@@ -235,8 +268,12 @@ export const worldEntries = sqliteTable("world_entries", {
 export const chatWorldEntries = sqliteTable(
   "chat_world_entries",
   {
-    chatId: text("chat_id").notNull(),
-    entryId: text("entry_id").notNull(),
+    chatId: text("chat_id")
+      .notNull()
+      .references(() => chats.id, { onDelete: "cascade" }),
+    entryId: text("entry_id")
+      .notNull()
+      .references(() => worldEntries.id, { onDelete: "cascade" }),
     scope: text("scope").default("always"),
     pinned: integer("pinned", { mode: "boolean" }).default(true),
   },
@@ -246,26 +283,55 @@ export const chatWorldEntries = sqliteTable(
 export const characterVersionWorldEntries = sqliteTable(
   "cv_world_entries",
   {
-    characterVersionId: text("cv_id").notNull(),
-    entryId: text("entry_id").notNull(),
+    characterVersionId: text("cv_id")
+      .notNull()
+      .references(() => characterVersions.id, { onDelete: "cascade" }),
+    entryId: text("entry_id")
+      .notNull()
+      .references(() => worldEntries.id, { onDelete: "cascade" }),
     scope: text("scope").default("always"),
   },
   (t) => [primaryKey({ columns: [t.characterVersionId, t.entryId] })],
 );
 
 // ───────────────────────── Config, assets, search, tags ─────────────────────────
+// Presets use the identity / content-version / pin triad (copy-on-write, like characters):
+// editing a version no chat/message pins mutates in place; editing a pinned version forks a
+// new row. This is what keeps `messages.presetVersionId` an IMMUTABLE provenance record (a
+// mutable preset would silently rewrite the recorded basis of every past message). The
+// identity row holds NO config — `config` + `schemaVersion` live on preset_versions.
 export const presets = sqliteTable("presets", {
   id: text("id").primaryKey(),
   ownerId: text("owner_id")
     .notNull()
     .references(() => users.id),
   name: text("name").notNull(),
-  kind: text("kind").notNull(),
-  config: text("config", { mode: "json" }).notNull(),
-  schemaVersion: integer("schema_version").notNull().default(1), // config-blob upgrade path
+  kind: text("kind").notNull(), // descriptive library label (free text), NOT a structural type
+  // Circular: the active version (which back-references this preset). SET NULL (bare pointer).
+  currentVersionId: text("current_version_id").references(
+    (): AnySQLiteColumn => presetVersions.id,
+    { onDelete: "set null" },
+  ),
   createdAt: integer("created_at").notNull(),
   updatedAt: integer("updated_at").notNull(),
 });
+
+// Immutable content versions of a preset. config = the whole sampling/scaffold bundle;
+// schemaVersion = the type-2 blob-shape version (kept for migrate-fns on the config blob).
+export const presetVersions = sqliteTable(
+  "preset_versions",
+  {
+    id: text("id").primaryKey(),
+    presetId: text("preset_id")
+      .notNull()
+      .references(() => presets.id, { onDelete: "cascade" }), // versions die with the preset
+    version: integer("version").notNull(),
+    config: text("config", { mode: "json" }).notNull(),
+    schemaVersion: integer("schema_version").notNull().default(1),
+    createdAt: integer("created_at").notNull(),
+  },
+  (t) => [uniqueIndex("preset_versions_preset_ver_unq").on(t.presetId, t.version)],
+);
 
 // App-global key/value (one-time flags etc.). Per-user prefs live in user_settings.
 export const settings = sqliteTable("settings", {
@@ -330,7 +396,10 @@ export const tags = sqliteTable("tags", {
 export const taggables = sqliteTable(
   "taggables",
   {
-    tagId: text("tag_id").notNull(),
+    tagId: text("tag_id")
+      .notNull()
+      .references(() => tags.id, { onDelete: "cascade" }),
+    // entityType/entityId are POLYMORPHIC (a tag on any entity) — cannot be a real FK; left as text.
     entityType: text("entity_type").notNull(),
     entityId: text("entity_id").notNull(),
   },
@@ -344,7 +413,9 @@ export const sessionEntries = sqliteTable(
   "session_entries",
   {
     id: text("id").primaryKey(),
-    chatId: text("chat_id").notNull(),
+    chatId: text("chat_id")
+      .notNull()
+      .references(() => chats.id, { onDelete: "cascade" }), // resume cache dies with the chat
     sessionId: text("session_id").notNull(), // SDK session id (== chats.session_id)
     subpath: text("subpath"), // SessionKey.subpath (subagents); null = main transcript
     seq: integer("seq").notNull(), // append order

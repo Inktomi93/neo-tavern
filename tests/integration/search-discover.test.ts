@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import type { Db } from "../../src/db/client";
-import { characterVersions, chats, users } from "../../src/db/schema";
+import { characters, characterVersions, chats, users } from "../../src/db/schema";
 import { createCorpusService } from "../../src/server/domain/corpus";
 import { createSearchService } from "../../src/server/domain/search";
 import type { Embedder } from "../../src/server/embeddings/embedder";
@@ -33,6 +33,11 @@ async function seedWorld(db: Db): Promise<void> {
   await db.insert(users).values([
     { id: "uA", handle: "owner-a", createdAt: now },
     { id: "uB", handle: "owner-b", createdAt: now },
+  ]);
+  // characters must exist before their versions (FK character_versions.characterId, 0007).
+  await db.insert(characters).values([
+    { id: "A", ownerId: "uA", handle: "aragorn", createdAt: now },
+    { id: "B", ownerId: "uB", handle: "bob", createdAt: now },
   ]);
   await db.insert(characterVersions).values([
     {
