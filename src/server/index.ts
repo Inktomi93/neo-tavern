@@ -2,15 +2,25 @@ import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { Hono } from "hono";
+import { createDb, runMigrations } from "../db/client";
+import { resolveUsername } from "./auth/trust-header";
+import { createChatService } from "./domain/chat";
 import { env } from "./env";
 import { registerDebugRoutes } from "./observability/debug";
 import { logger } from "./observability/logger";
 import { observability } from "./observability/middleware";
-import { createContext } from "./trpc/context";
+import { createContext, type Services } from "./trpc/context";
 import { appRouter } from "./trpc/router";
 import { APP_VERSION } from "./version";
 
 const IS_PROD = env.NODE_ENV === "production";
+
+// Composition root: this is the one place allowed to wire db + auth + domain
+// together. The db instance is created here and injected into the domain services;
+// trpc only ever sees the services (the layer cake keeps db/auth out of trpc).
+const db = await createDb(env.DATABASE_URL);
+await runMigrations(db);
+const services: Services = { chat: createChatService(db) };
 
 const app = new Hono();
 
@@ -27,7 +37,13 @@ app.all("/api/trpc/*", (c) =>
     endpoint: "/api/trpc",
     req: c.req.raw,
     router: appRouter,
-    createContext,
+    // Resolve identity per-request at the auth seam, then hand the request the
+    // resolved username + the shared services.
+    createContext: ({ req }) =>
+      createContext({
+        username: resolveUsername(req.headers, env.NEO_PROXY_SECRET, env.DEFAULT_USER_HANDLE),
+        services,
+      }),
   }),
 );
 

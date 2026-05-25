@@ -21,6 +21,16 @@ const envSchema = z.object({
   // Set it (any value) to enable; requests must present it. Keep unset in prod
   // images unless you actually want the debug surface reachable.
   DEBUG_TOKEN: z.string().min(1).optional(),
+
+  // Database — the libSQL file URL (dev: a local file; prod: the mounted volume).
+  DATABASE_URL: z.string().min(1).default("file:./neo-tavern.db"),
+
+  // Auth/tenancy (see CLAUDE.md). Identity = X-Authentik-Username, trusted ONLY when
+  // caddy forwards it with a matching X-Neo-Proxy secret; otherwise (direct LAN/IP
+  // access) we fall back to the owner. UNSET secret = header never trusted = always
+  // the default user, which is correct for local dev (no caddy in front).
+  DEFAULT_USER_HANDLE: z.string().min(1).default("owner"), // set to your authentik username so both access paths map to one user
+  NEO_PROXY_SECRET: z.string().min(1).optional(),
 });
 
 export const env = envSchema.parse(process.env);

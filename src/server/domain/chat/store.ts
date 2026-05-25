@@ -1,0 +1,76 @@
+import type { SessionKey, SessionStore, SessionStoreEntry } from "@anthropic-ai/claude-agent-sdk";
+import { and, asc, desc, eq, isNull } from "drizzle-orm";
+import type { Db } from "../../../db/client";
+import { sessionEntries } from "../../../db/schema";
+import { newId } from "../_shared/ids";
+
+// The DB-backed SessionStore: the SDK's resume substrate, persisted to our
+// `session_entries` table instead of disk (validated in CACHE=1 sdk:play). The raw
+// SDK transcript, opaque — SEPARATE from `messages` (our clean canon). Constructed
+// per-chat so the rows carry our chatId; the SDK keys by SessionKey (sessionId +
+// optional subpath for subagents).
+export class DbSessionStore implements SessionStore {
+  private readonly db: Db;
+  private readonly chatId: string;
+
+  constructor(db: Db, chatId: string) {
+    this.db = db;
+    this.chatId = chatId;
+  }
+
+  private subpathFilter(subpath: string | undefined) {
+    return subpath === undefined
+      ? isNull(sessionEntries.subpath)
+      : eq(sessionEntries.subpath, subpath);
+  }
+
+  async append(key: SessionKey, entries: SessionStoreEntry[]): Promise<void> {
+    if (entries.length === 0) {
+      return;
+    }
+    const subpath = key.subpath ?? null;
+    const last = await this.db
+      .select({ seq: sessionEntries.seq })
+      .from(sessionEntries)
+      .where(and(eq(sessionEntries.sessionId, key.sessionId), this.subpathFilter(key.subpath)))
+      .orderBy(desc(sessionEntries.seq))
+      .limit(1);
+
+    let seq = (last[0]?.seq ?? -1) + 1;
+    const now = Date.now();
+    const rows = entries.map((entry) => ({
+      id: newId(),
+      chatId: this.chatId,
+      sessionId: key.sessionId,
+      subpath,
+      seq: seq++,
+      uuid: typeof entry.uuid === "string" ? entry.uuid : null,
+      type: entry.type,
+      entry,
+      createdAt: now,
+    }));
+
+    // Upsert semantics: frames with a uuid dedup on the (session_id, subpath, uuid)
+    // partial unique index (SDK replays uuids on retry / import); frames without a
+    // uuid (titles, mode markers) always insert. onConflictDoNothing covers both.
+    await this.db.insert(sessionEntries).values(rows).onConflictDoNothing();
+  }
+
+  async load(key: SessionKey): Promise<SessionStoreEntry[] | null> {
+    const rows = await this.db
+      .select({ entry: sessionEntries.entry })
+      .from(sessionEntries)
+      .where(and(eq(sessionEntries.sessionId, key.sessionId), this.subpathFilter(key.subpath)))
+      .orderBy(asc(sessionEntries.seq));
+
+    if (rows.length === 0) {
+      return null; // "never written" — the SDK starts a fresh session
+    }
+    return rows.map((row) => row.entry as SessionStoreEntry);
+  }
+
+  // We don't use subagent transcripts in chat; the SDK probes this during resume.
+  listSubkeys(): Promise<string[]> {
+    return Promise.resolve([]);
+  }
+}
