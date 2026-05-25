@@ -13,10 +13,6 @@ test("buildCardEmbedText: name first, placeholders normalized, HTML stripped, em
     personality: null, // skipped
     scenario: "A tavern.",
     firstMessage: null,
-    exampleMessages: null,
-    creatorNotes: null,
-    systemPrompt: null,
-    postHistoryInstructions: null,
     alternateGreetings: ["Hello again, {{user}}."],
     tags: ["fantasy", "tavern"],
   });
@@ -26,6 +22,21 @@ test("buildCardEmbedText: name first, placeholders normalized, HTML stripped, em
   expect(text).toContain("Scenario: A tavern.");
   expect(text).not.toContain("Personality"); // null field omitted
   expect(text).toContain("Alternate Greetings:\nHello again, User.");
+});
+
+test("buildCardEmbedText excludes instruction/meta fields from the embedding signal", () => {
+  // mes_example / system_prompt / post_history / creator_notes aren't accepted — only
+  // character-identity fields are embedded (card-curator EMBED_FIELDS).
+  const text = buildCardEmbedText({
+    name: "Aria",
+    description: "a bard",
+    personality: null,
+    scenario: null,
+    firstMessage: null,
+    alternateGreetings: [],
+    tags: [],
+  });
+  expect(text).toBe("Name: Aria\nDescription: a bard");
 });
 
 // ── Segmentation ──────────────────────────────────────────────────────────────

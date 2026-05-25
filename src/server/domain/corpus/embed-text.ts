@@ -33,23 +33,23 @@ export function normalizePlaceholders(text: string, charName: string, userName: 
 // filtered from the index (still directly retrievable). card-curator config.py:76.
 export const MIN_SEARCH_TEXT_TOKENS = 150;
 
+// Only character-IDENTITY fields are embedded. card-curator's EMBED_FIELDS deliberately
+// excludes mes_example / system_prompt / post_history_instructions / creator_notes — those
+// are instructions/meta that dilute the identity signal and hurt retrieval. (They're still
+// stored on character_versions + directly retrievable; just not in the embed text.)
 export interface CardEmbedFields {
   name: string;
   description: string | null;
   personality: string | null;
   scenario: string | null;
   firstMessage: string | null;
-  exampleMessages: string | null;
-  creatorNotes: string | null;
-  systemPrompt: string | null;
-  postHistoryInstructions: string | null;
   alternateGreetings: string[];
   tags: string[];
 }
 
-// Field order: core identity first (last-token pooling weights later text less), optional
-// fields appended after. Port of extract.py:143-186 (without the token-budget drop —
-// BGE-M3 truncates at 8192 anyway, and our cards are far smaller).
+// Field order = card-curator config.py:63 EMBED_FIELDS (order matters — last-token pooling
+// weights later text less): name, tags, description, personality, scenario, first_mes, then
+// the optional alternate_greetings. Port of extract.py:143-186.
 export function buildCardEmbedText(card: CardEmbedFields, userName = "User"): string {
   const n = card.name;
   const field = (label: string, value: string | null): string | null => {
@@ -65,11 +65,6 @@ export function buildCardEmbedText(card: CardEmbedFields, userName = "User"): st
     field("Personality", card.personality),
     field("Scenario", card.scenario),
     field("First Message", card.firstMessage),
-    field("Examples", card.exampleMessages),
-    // optional / lower-signal fields last
-    field("System Prompt", card.systemPrompt),
-    field("Post History Instructions", card.postHistoryInstructions),
-    field("Creator Notes", card.creatorNotes),
   ];
   if (card.alternateGreetings.length > 0) {
     const joined = card.alternateGreetings

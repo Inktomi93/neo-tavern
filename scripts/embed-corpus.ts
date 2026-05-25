@@ -67,10 +67,6 @@ async function main(): Promise<void> {
       personality: v.personality,
       scenario: v.scenario,
       firstMessage: v.firstMessage,
-      exampleMessages: v.exampleMessages,
-      creatorNotes: v.creatorNotes,
-      systemPrompt: v.systemPrompt,
-      postHistoryInstructions: v.postHistoryInstructions,
       alternateGreetings: strArray(v.alternateGreetings),
       tags: strArray(v.tags),
     });
