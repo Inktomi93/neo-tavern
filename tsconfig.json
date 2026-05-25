@@ -20,6 +20,11 @@
     "esModuleInterop": true,
     "allowJs": false,
 
+    // shadcn convention: `@/…` → the client root (so `shadcn add` generates resolvable
+    // imports). Client-only by convention; server/db stay relative. No baseUrl —
+    // bundler resolution resolves these relative to this config (baseUrl is deprecated).
+    "paths": { "@/*": ["./src/client/*"] },
+
     // Strictness — fully on. These are the flags that hurt to retrofit later.
     "strict": true,
     "noUncheckedIndexedAccess": true,

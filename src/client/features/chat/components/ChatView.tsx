@@ -19,12 +19,12 @@ export function ChatView({ chatId }: { chatId: string }) {
     <div className="flex min-h-dvh flex-col">
       <div className="flex-1 overflow-y-auto">
         {messages.isLoading ? (
-          <p className="p-4 text-sm text-zinc-400">loading…</p>
+          <p className="p-4 text-muted-foreground text-sm">loading…</p>
         ) : (
           <MessageList messages={list} />
         )}
         {isStale ? (
-          <p className="px-4 text-sm text-amber-400">
+          <p className="px-4 text-amber-400 text-sm">
             This chat advanced elsewhere — your view was re-synced; resend your message.
           </p>
         ) : null}

@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
 
 export function MessageInput({
   disabled,
@@ -20,26 +22,22 @@ export function MessageInput({
 
   return (
     <form
-      className="flex gap-2 border-zinc-800 border-t p-4"
+      className="flex gap-2 border-t p-4"
       onSubmit={(event) => {
         event.preventDefault();
         submit();
       }}
     >
-      <textarea
-        className="flex-1 resize-none rounded bg-zinc-900 p-2 text-sm"
+      <Textarea
+        className="min-h-0 flex-1"
         rows={2}
         value={value}
         placeholder="Write your turn…"
         onChange={(event) => setValue(event.target.value)}
       />
-      <button
-        type="submit"
-        disabled={disabled}
-        className="self-end rounded bg-zinc-100 px-4 py-2 text-sm text-zinc-900 disabled:opacity-50"
-      >
+      <Button type="submit" disabled={disabled} className="self-end">
         {disabled ? "…" : "Send"}
-      </button>
+      </Button>
     </form>
   );
 }

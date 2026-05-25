@@ -1,4 +1,7 @@
 import { useState } from "react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { useCreateChat } from "../hooks/use-chat";
 
 export function CreateChatForm({ onCreated }: { onCreated: (chatId: string) => void }) {
@@ -25,32 +28,25 @@ export function CreateChatForm({ onCreated }: { onCreated: (chatId: string) => v
         submit();
       }}
     >
-      <input
-        className="rounded bg-zinc-900 p-2 text-sm"
+      <Input
         placeholder="Chat title"
         value={title}
         onChange={(event) => setTitle(event.target.value)}
       />
-      <input
-        className="rounded bg-zinc-900 p-2 text-sm"
+      <Input
         placeholder="Character name"
         value={characterName}
         onChange={(event) => setCharacterName(event.target.value)}
       />
-      <textarea
-        className="resize-none rounded bg-zinc-900 p-2 text-sm"
+      <Textarea
         rows={3}
         placeholder="Character description"
         value={characterDescription}
         onChange={(event) => setCharacterDescription(event.target.value)}
       />
-      <button
-        type="submit"
-        disabled={create.isPending}
-        className="rounded bg-zinc-100 px-4 py-2 text-sm text-zinc-900 disabled:opacity-50"
-      >
+      <Button type="submit" disabled={create.isPending} className="self-start">
         {create.isPending ? "Creating…" : "New chat"}
-      </button>
+      </Button>
     </form>
   );
 }
