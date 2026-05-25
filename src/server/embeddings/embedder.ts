@@ -1,5 +1,11 @@
-import { type FeatureExtractionPipeline, pipeline } from "@huggingface/transformers";
+import { type FeatureExtractionPipeline, env as hf, pipeline } from "@huggingface/transformers";
 import { env } from "../env";
+
+// Keep ALL model downloads self-contained in a repo-local, gitignored dir (not the OS HF
+// cache or node_modules/.cache). transformers.js `env` is a process-global singleton, so
+// setting it here also covers the Phase-4.6.3 reranker. Allow remote download into it.
+hf.cacheDir = env.MODEL_CACHE_DIR;
+hf.allowRemoteModels = true;
 
 // Local, in-process embeddings: BGE-M3 (1024-dim, locked in dependencies.md) on
 // onnxruntime-node. Tuned per ORT CUDA best-practice for a text transformer:

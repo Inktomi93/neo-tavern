@@ -36,6 +36,10 @@ const envSchema = z.object({
   // L2-normalize (cosine of an fp16 vs fp32 embedding of the same text ≈ 0.9999), so a
   // cuda+fp16 corpus index and cpu+fp32 queries share one space. The GPU launcher sets fp16.
   EMBED_DTYPE: z.enum(["fp32", "fp16"]).default("fp32"),
+  // Where transformers.js downloads/caches model weights (BGE-M3, the reranker). Pinned
+  // to a repo-local, gitignored dir so model artifacts stay self-contained — not leaking
+  // into node_modules/.cache or an OS-global HF cache. Resolved relative to cwd (repo root).
+  MODEL_CACHE_DIR: z.string().min(1).default("./.models"),
 
   // Auth/tenancy (see CLAUDE.md). Identity = X-Authentik-Username, trusted ONLY when
   // caddy forwards it with a matching X-Neo-Proxy secret; otherwise (direct LAN/IP

@@ -24,6 +24,10 @@ corpus-staging/
 # (reproducible via `pnpm cuda:setup`); the materialized venv is not.
 tools/cuda/.venv/
 
+# Model weights (BGE-M3, reranker) downloaded by transformers.js — repo-local + self-
+# contained (MODEL_CACHE_DIR), re-downloadable, never committed.
+.models/
+
 # logs / os
 *.log
 .DS_Store
