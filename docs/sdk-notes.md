@@ -103,12 +103,14 @@ asking the model** — three signals, in order of effort:
    `plugin skills loaded: N`, `plugin commands loaded: N`, plus every API request
    and its `source` (it even exposed a hidden `generate_session_title` call). With
    our config you'll see `0 hooks, 0 plugin skills` — proof nothing leaked.
-3. **The literal request body is NOT exposed.** Tried `debug`, the `stderr`
-   callback, `debugFile`, and `ANTHROPIC_LOG=debug` — the bundled runtime logs
-   request *metadata* (endpoint, source, request id) but never the assembled
-   system prompt / messages. The only way to see the literal bytes is **HTTP
-   wire-capture** (route the subprocess via a logging proxy), which is fragile
-   with sub-OAuth — not built, and the canary + audit make it rarely necessary.
+3. **The literal request body isn't in the logs — but the SDK has an escape
+   hatch.** `debug`, the `stderr` callback, `debugFile`, and `ANTHROPIC_LOG=debug`
+   all log request *metadata* (endpoint, source, request id) but never the
+   assembled system prompt / messages. To see the literal bytes the SDK exposes
+   `sandbox.network.tlsTerminate` (`sdk.d.ts:5087`, `[EXPERIMENTAL]`): in-process
+   TLS termination so a per-request filter sees the HTTPS request body — no
+   external proxy. Not wired up (the canary + audit make it rarely necessary), but
+   it's the supported path when we need the exact `cache_control` placement.
 
 Bottom line: the provider config (`settingSources:[]`, `mcpServers:{}`,
 `tools:[]`, `CLAUDE_CODE_DISABLE_CLAUDE_MDS=true`) holds injection at the floor,
@@ -138,11 +140,104 @@ message (an assistant turn that the model didn't generate) and imported ST chats
 `domain/chat` will build on (nailing the exact transcript-entry shape is a Phase 2
 task — capture a real one via the store to get the format).
 
+## Caching (validated — `CACHE=1 pnpm sdk:play`)
+
+**Caching has to work — verified what we can control and what we can't, then measured it.**
+
+**What we control.** The SDK's one typed knob is `SYSTEM_PROMPT_DYNAMIC_BOUNDARY`
+(`sdk.d.ts:1808`) — a marker in a `string[]` `systemPrompt` that splits the static
+(cacheable) prefix from the dynamic suffix. The runtime owns cache_control
+*placement*, but the **TTL is controllable via env vars** read by the `claude`
+binary (found by `strings` on the executable — NOT in the typed `Options`, but we
+set the subprocess env in `buildClaudeSdkEnv()`):
+
+- `FORCE_PROMPT_CACHING_5M` → 5-minute cache
+- `ENABLE_PROMPT_CACHING_1H` (+ `_BEDROCK`) → 1-hour cache
+- `DISABLE_PROMPT_CACHING` (+ `_HAIKU` / `_OPUS` / `_SONNET`) → off
+
+**Sub-mode default TTL is 1h** (measured — the runtime opts in; the raw-API default
+of 5m does not apply here). For human-paced RP that's the *right* default: step away
+40 min, come back, and the character/system prefix is still a cache hit. So we leave
+it at 1h in sdk-mode; 5m only helps in raw-mode where you pay per write and churn
+fast. **No change to `buildClaudeSdkEnv()` needed** — 1h is already on.
+
+**The TTL is provable from the response, no waiting:** `result.usage.cache_creation`
+carries `{ ephemeral_5m_input_tokens, ephemeral_1h_input_tokens }` (runtime-exposed
+though the `.d.ts` doesn't type it). Worth recording into the `messages` token
+columns alongside `cache{Creation,Read}InputTokens`.
+
+Anthropic caching is a **prefix cache**: it matches from the start of the prompt
+forward and stops at the first divergence — so a mutation's cost is proportional
+to how far from the *end* it happens. Measured (Haiku, ~4.6k-token static lore, a
+per-run nonce so each invocation writes its own cache):
+
+| turn | usage | meaning |
+|---|---|---|
+| 1 fresh | `cacheCreate≈4674 cacheRead=0` | the runtime caches our custom system prompt (default to the 1h bucket) |
+| 2 resume (full) | `cacheRead≈4674 input=10` | resume across a separate subprocess hits — prompt assembly is **deterministic**, only the new message is fresh |
+| 3 resume (truncated to turn 1) | `cacheRead≈4674` | a **fork/swipe keeps the cached prefix**; only the ~200-token tail re-caches |
+
+Consequences for the design:
+- **Append (normal YGWYG turn)** and **swipe (regen last turn)** and **fork from a
+  point** all branch at/after a cached prefix → cache-cheap. Confirmed for fork.
+- **Editing a buried turn** diverges the prefix at the edit point → everything
+  after re-caches (cost ∝ tail length). *Reasoned from prefix mechanics, NOT yet
+  measured here* — the truncation test only proves prefixes stay cached.
+- The expensive static prefix (character/system) is paid **once** and read free
+  thereafter, including across forks — so YGWYG's append-only path is also the
+  cache-optimal path.
+
+Not covered by this probe (honest gaps): **actual TTL expiry** (proved which bucket
+via `cache_creation`, didn't wait out the window — a chat reopened after it is a
+cold first turn regardless); **mid-history edit divergence**; **raw-mode** (separate
+path, our own `cache_control`). Numbers are Haiku-specific; mechanics are
+model-independent.
+
+## Spawn latency & the session model (measured — `LATENCY=1 pnpm sdk:play`)
+
+Cold one-shot resume (a fresh subprocess per message — the proxy model) vs a warm
+streaming session (one held subprocess), isolating spawn as `overhead = wall − api`:
+
+| path | overhead/msg (steady-state) | meaning |
+|---|---|---|
+| **COLD** (`query({resume})` per msg) | **~0.8s** | spawn + session-materialize, paid every message |
+| **WARM** (one streaming session) | **~5ms** | `wall ≈ api`, no spawn — paid once at open |
+
+**Decision: sdk-mode is STATELESS — one `query({ resume, sessionStore })` per
+message.** The 0.8s rides on top of multi-second generation; our *lean* spawn already
+beats the proxy's plugin-bloated one; and stateless means no subprocess lifecycle to
+manage and trivial editing (every turn already resumes from a chosen branch point, so
+"click another character" is just a DB read — nothing warm to tear down). A warm
+session (~0.78s saved/msg, proven via the streaming `InputQueue` in the probe) is a
+**future drop-in optimization**, not built — the warm pool would be premature. Caveat:
+0.8s is spawn+materialize on a 4-turn transcript; re-measure on long chats (bigger
+`session_entries` → bigger temp-JSONL materialize).
+
+## Edits / swipes — capability vs. discipline (resolved)
+
+The brief's "no edits in sdk-mode" was a *discipline*, not a limit — **proven, not
+assumed.** Because `load()` feeds the subprocess whatever transcript we return, and
+`getSessionMessages()` reads it back, we have full read/write over the transcript:
+
+- **Fork / swipe** (drop trailing frames, resume) — *executed live* in the CACHE
+  probe; cache prefix survives.
+- **Edit a buried frame** (change content, resume) — the identical `load()` mechanism,
+  so it works; the only open question is its **cache cost** (mid-history divergence
+  re-caches the tail), the one thing we flagged-but-didn't-measure. `EDIT` probe TODO.
+- **Can't edit inside a warm session** (the live subprocess already "saw" the
+  original); an edit = mutate `session_entries` + fresh resume from the branch point.
+  In stateless mode that's just the normal path, so edits are free to bolt on.
+
+So swipes/edits get a home as **branched sessions** (a new session forked at a `seq`,
+original intact) whenever we choose to expose them — sdk-mode stays YGWYG by default,
+raw-mode is where they're cache-cheap.
+
 ## How this maps to neo-tavern
 
-- **sdk-mode chat** = `query({ prompt, options: { resume: chat.sessionId, … } })`,
-  persist `result.session_id` on the chat row. Append-only = each turn resumes.
-- **Escape-valve fork** = `forkSession(sessionId)` → new resumable session.
+- **sdk-mode chat** = **stateless** `query({ prompt, options: { resume: chat.sessionId,
+  sessionStore: dbStore } })` per message; persist `result.session_id` on the chat row.
+- **Escape-valve fork / swipe** = `forkSession(sessionId)` (or resume from a truncated
+  `session_entries` slice) → new branched session, original preserved.
 - **Token/cost accounting** for the `messages` table = the `result.modelUsage` block.
 - **Streaming to the client** = forward `stream_event` deltas.
 - **Debugging a bad turn** = `DEBUG=1 pnpm sdk:play` with the offending prompt, or

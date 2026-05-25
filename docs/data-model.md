@@ -272,6 +272,40 @@ first message is the character's greeting (== card `first_mes`).
   JSONL frame format; that's the Phase 4 task) and `resume`. Imported chats are
   `mode:'raw'` from day zero (the SDK can't continue them anyway).
 
+## SDK session persistence — in our DB, not on disk (validated)
+
+The Agent SDK persists a chat's transcript so it can `resume`. By default that's a
+JSONL file under `~/.claude/projects/`. But `query({ options: { sessionStore } })`
+takes a **custom `SessionStore`**, and — verified live — its `load()` is the
+resume source (the SDK materializes a throwaway temp file from it). So **our
+libSQL is the canonical session store; the disk file is transient SDK scratch we
+never touch.** A `DbSessionStore implements SessionStore` needs a table:
+
+```typescript
+// The SDK's transcript frames (opaque: 'user' | 'assistant' | 'ai-title' |
+// 'queue-operation' | 'last-prompt' | …). This is the SDK's resume substrate —
+// SEPARATE from `messages` (our clean, user-facing canon mirrored from the
+// stream for display/search/analytics).
+export const sessionEntries = sqliteTable('session_entries', {
+  id: text('id').primaryKey(),
+  chatId: text('chat_id').notNull(),         // our chat
+  sessionId: text('session_id').notNull(),   // SDK session id (== chats.session_id)
+  subpath: text('subpath'),                  // SessionKey.subpath (subagents); null = main transcript
+  seq: integer('seq').notNull(),             // append order
+  uuid: text('uuid'),                        // SDK entry uuid — idempotency key (nullable: titles/tags have none)
+  type: text('type').notNull(),
+  entry: text('entry', { mode: 'json' }).notNull(), // the raw frame, stored opaquely
+  createdAt: integer('created_at').notNull(),
+});
+// Unique index on (session_id, subpath, uuid) WHERE uuid IS NOT NULL — backs
+// append()'s upsert/dedup (the SDK replays uuids on retry / importSessionToStore).
+```
+
+- **`append(key, entries)`** → upsert each entry by `uuid` (insert frames without a uuid).
+- **`load(key)`** → select all rows for `(session_id, subpath)` ordered by `seq`, return the `entry` JSONs (or `null` if none). The SDK never byte-compares — JSON round-trip is fine.
+- `listSessions` / `listSessionSummaries` are optional (we list from `chats`); stub or use `foldSessionSummary`.
+- This also unlocks the **fork-and-convert escape valve** and **ST imports** (seed `session_entries`, then `resume`) without ever touching `~/.claude/projects`.
+
 ## Open question (Phase 3, not now)
 
 Embedding model: **BGE-M3** (default, 1024-dim) vs **Qwen3-Embedding-4B** (SOTA).

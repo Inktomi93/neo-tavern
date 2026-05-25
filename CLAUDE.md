@@ -19,16 +19,26 @@ app trusts it. **Zero auth code in the app.** No multi-user, no permissions.
 ## RP philosophy (the non-obvious vision — easy to lose)
 
 ### YGWYG — "you get what you generate" (the core discipline)
-Hardcore-ironman RP. In `sdk` mode (default): **no swipes, no edits to past
-messages, no regenerating.** Each chat is one Claude Agent SDK session, append-only
-linear messages. Whatever Claude generates IS canon — write your way through, or
-nuke the chat. The SDK's forward-flowing session model fits this; we don't fight it.
+Hardcore-ironman RP. In `sdk` mode (default): **no swipes, no edits, no regen.** Not
+because the SDK forbids it — we *proved* it doesn't: the session transcript is ours
+via the DB-backed SessionStore, so truncate / edit / fork + resume all work (validated
+in `CACHE=1 pnpm sdk:play`). The constraint is **chosen discipline, not a wall.** The
+swipe/edit machinery exists and stays switched OFF in sdk-mode by default; whatever
+Claude generates IS canon — write your way through, or nuke the chat. Append-only
+linear messages; the DB is the source of truth. (Earlier framing called this "the
+SDK's forward-flowing model fits" — that was copium around a false "can't edit" claim;
+YGWYG is a default toggle a chat can leave, not a cage.)
 
 ### Mode escape valve (later, not MVP)
 A chat has `mode: 'sdk' | 'raw'`. `sdk` = YGWYG, runs on the Max subscription (free).
-`raw` = converted, paid per token via OpenRouter / direct Anthropic, swipes+edits
-work. Conversion is **one-way**; fork-and-convert is preferred (keeps canon intact).
-Imported ST chats land as `raw` from day zero (the SDK can't continue them).
+`raw` = paid per token via OpenRouter / direct Anthropic. Swipes/edits/forks are the
+*same move in both modes* — a resume from a chosen branch point — so the divide isn't
+capability, it's economics + cleanliness: `raw` is where they're **first-class and
+cache-cheap** (we own the messages array + `cache_control`), whereas an sdk-mode edit
+re-caches the tail (the prefix cache survives only a clean cut, measured). A swipe/fork
+= a new session branched at a `seq`; the original stays intact. Conversion is
+**one-way**; fork-and-convert is preferred. Imported ST chats land as `raw` from day
+zero (the SDK can't continue them).
 
 ### Other locked product principles
 - **Append-only conversation log is the source of truth** — not a prompt template
@@ -39,8 +49,16 @@ Imported ST chats land as `raw` from day zero (the SDK can't continue them).
 - **PNG character cards are transport only** (import/export); the DB row is
   canonical. Chats live in SQLite rows, not JSONL. Asset binaries on a mounted
   volume, referenced by hash.
-- **Cache strategy (raw mode):** explicit `cache_control` breakpoints — stable
-  system+character, rolling history every N turns, fresh tail. sdk mode: the SDK handles it.
+- **Session/runtime model (sdk mode): STATELESS — one `query({resume})` per
+  message.** Cold spawn ≈0.8s (measured, `LATENCY=1 pnpm sdk:play`); no long-lived
+  subprocess to babysit, and editing stays trivial (every turn already resumes from a
+  branch point). A warm streaming session (~5ms/msg, proven) is a future toggle, not
+  built. The DB-backed SessionStore is canon; the SDK's local JSONL is transient scratch.
+- **Cache strategy:** sdk mode — the runtime places `cache_control`, defaults to a
+  **1h TTL** (env-overridable: `FORCE_PROMPT_CACHING_5M` / `ENABLE_PROMPT_CACHING_1H`),
+  and the cached prefix survives resume *and* fork (measured) — so stateless costs no
+  cache. raw mode — we place explicit breakpoints: stable system+character, rolling
+  history every N turns, fresh tail.
 
 ## Locked decisions (current — supersedes the original brief where noted)
 
