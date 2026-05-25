@@ -15,6 +15,10 @@ data/
 *.db-shm
 *.sqlite
 
+# ST corpus extraction staging (docker cp dumps the full private corpus here;
+# never committed). The small curated fixtures under tests/fixtures/ ARE committed.
+corpus-staging/
+
 # logs / os
 *.log
 .DS_Store

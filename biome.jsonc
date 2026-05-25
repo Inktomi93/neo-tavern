@@ -227,6 +227,20 @@
       "linter": { "rules": { "style": { "useNamingConvention": "off" } } }
     },
     {
+      // The corpus importer parses SillyTavern's external, multi-spec wire JSON,
+      // whose field names are snake_case by spec (first_mes, char_name, insertion_order…).
+      // Keeping those names visible makes the port auditable against the ST spec +
+      // card-curator, so useNamingConvention is off here; useLiteralKeys is off for the
+      // bracket access tsc's noPropertyAccessFromIndexSignature requires on raw entries.
+      "includes": ["src/server/domain/corpus/import/**", "tests/integration/*-parser.test.ts"],
+      "linter": {
+        "rules": {
+          "style": { "useNamingConvention": "off" },
+          "complexity": { "useLiteralKeys": "off" }
+        }
+      }
+    },
+    {
       // The ONLY sanctioned barrels: a feature's public API (server domain
       // features + client features). The dependency-cruiser front-door rules
       // force callers to enter a feature via its index, so these index files
