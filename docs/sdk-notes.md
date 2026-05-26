@@ -147,19 +147,22 @@ task — capture a real one via the store to get the format).
 **What we control.** The SDK's one typed knob is `SYSTEM_PROMPT_DYNAMIC_BOUNDARY`
 (`sdk.d.ts:1808`) — a marker in a `string[]` `systemPrompt` that splits the static
 (cacheable) prefix from the dynamic suffix. The runtime owns cache_control
-*placement*, but the **TTL is controllable via env vars** read by the `claude`
-binary (found by `strings` on the executable — NOT in the typed `Options`, but we
-set the subprocess env in `buildClaudeSdkEnv()`):
+*placement* AND the TTL — and the TTL is **NOT env-controllable.**
 
-- `FORCE_PROMPT_CACHING_5M` → 5-minute cache
-- `ENABLE_PROMPT_CACHING_1H` (+ `_BEDROCK`) → 1-hour cache
-- `DISABLE_PROMPT_CACHING` (+ `_HAIKU` / `_OPUS` / `_SONNET`) → off
+> ⚠️ **CORRECTION (supersedes an earlier claim in this doc).** There is **no
+> `FORCE_PROMPT_CACHING_5M` / `ENABLE_PROMPT_CACHING_1H` / `DISABLE_PROMPT_CACHING`
+> env knob** that we set to steer TTL — that was wrong (a `strings`-on-the-binary
+> guess that didn't pan out). The agent-sdk runtime places `cache_control` itself and
+> uses its **own internal TTL** (the `extended_cache_ttl` beta, effectively ~1h). We do
+> NOT set any caching env var in `buildClaudeSdkEnv()`, and shouldn't.
 
-**Sub-mode default TTL is 1h** (measured — the runtime opts in; the raw-API default
-of 5m does not apply here). For human-paced RP that's the *right* default: step away
-40 min, come back, and the character/system prefix is still a cache hit. So we leave
-it at 1h in sdk-mode; 5m only helps in raw-mode where you pay per write and churn
-fast. **No change to `buildClaudeSdkEnv()` needed** — 1h is already on.
+**Effective TTL is ~1h** (SDK-internal). For human-paced RP that's the right behavior:
+step away 40 min, come back, and the character/system prefix is still a cache hit. On
+the **free Max sub** this is allowance, not dollars. For **paid Claude** the 1h *write*
+costs ~2× the 5m rate, so mode 2 (agent-sdk + openrouter) inherits that ~2× — which is
+exactly why the cost-controlled paid-Claude path is **mode 3** (chat-completions +
+openrouter), where the openrouter runner places an explicit 5m `cache_control` directive
+we control (see the OpenRouter section below).
 
 **The TTL is provable from the response, no waiting:** `result.usage.cache_creation`
 carries `{ ephemeral_5m_input_tokens, ephemeral_1h_input_tokens }` (runtime-exposed
@@ -406,7 +409,7 @@ wrong — measured, the minimal viable shape is much smaller** (`domain/chat/see
 | disable auto-compaction | `DISABLE_AUTO_COMPACT=1` (subprocess env) | ✅ verified |
 | auto-compaction threshold | `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=N` (% of window) | ✅ verified |
 | **compaction prompt** | send **`/compact <instructions>`** as the turn prompt → `trigger:"manual"`, steers the summary | ✅ verified |
-| cache TTL | `FORCE_PROMPT_CACHING_5M` / `ENABLE_PROMPT_CACHING_1H` (env) | ✅ (caching section) |
+| cache TTL | ✖ NOT settable — SDK-internal (~1h `extended_cache_ttl`); no env knob (see the caching section's correction) | ✖ |
 | system prompt + static/dynamic split | `systemPrompt` (string[]) + `SYSTEM_PROMPT_DYNAMIC_BOUNDARY` | ✅ |
 | model / resume / store | `model`, `resume`, `sessionStore` options | ✅ |
 | **max output tokens** | `CLAUDE_CODE_MAX_OUTPUT_TOKENS` (env) | ✅ verified (`scripts/env-knob-probe.ts`) — caps the reply; **don't set absurdly low** (64 errored to empty; use a sane value) |
@@ -434,14 +437,21 @@ rows above from candidate to ✅/✖. Re-run after an SDK upgrade.
 turn + trigger manual `/compact <RP-tuned instructions>` before the window fills → steered, RP-grade
 compaction on the free sub. Env knobs are NOT yet in `buildClaudeSdkEnv()` — that's the build step.
 
-## Raw mode — OpenRouter (`@openrouter/sdk` + Responses API)
+## OpenRouter runner — `@openrouter/sdk` (Chat Completions + Responses)
 
-The OTHER provider (Phase 5 escape valve, non-Claude / paid). Built on the **official `@openrouter/sdk`**
-(v0.12.35) + the **Responses API** — deliberately **not** the `openai` package (removed) and **not**
-card-curator (its chat is a local llama-server). Working reference: `/home/inktomi/discovery/scaffold/index.ts`.
+The non-agent-sdk runner (modes 3 & 4), built on the **official `@openrouter/sdk`** — deliberately
+**not** the `openai` package (removed). `providers/openrouter.ts` is the adapter. TWO endpoints, both
+returning the provider-agnostic `ChatTurnResult` / throwing `TurnError`:
 
-- **Client + call:** `new OpenRouter({ apiKey })` → `await client.beta.responses.send({ responsesRequest: {...} })`.
-  The class method THROWS typed errors. `providers/openrouter.ts` is the adapter (`runRawTurn`, `listOpenRouterModels`).
+- **Chat Completions** — `client.chat.send({ chatRequest })` → `runChatCompletionTurn`. The broad
+  catalog (mode 3). This is the **cost-controlled paid-Claude path**: for Anthropic models it places a
+  **per-block 5m `cache_control` on the STATIC system block** (pins the cache breakpoint at the stable
+  prompt → reused every turn) and pins `provider:{order:["Anthropic"]}` so the directive is honored.
+- **Responses** — `client.beta.responses.send({ responsesRequest })` → `runRawTurn`. OpenAI-style
+  (mode 4). Anthropic gets the top-level `cacheControl` directive; others get a stable `promptCacheKey`.
+
+Plus the live model catalog (`listOpenRouterModels`) + account info (credits/generations/providers/
+endpoints) over the rest of the SDK surface — all exposed via tRPC.
 - **The Responses API splits `instructions` (system) from `input` (conversation)** — maps onto our
   `assemblePrompt` static/dynamic: static → `instructions` (cached via `promptCacheKey`), conversation → `input`
   items (user/assistant; never start with assistant — pad a user stub). Params (`temperature`/`topP`/penalties/
@@ -460,24 +470,29 @@ card-curator (its chat is a local llama-server). Working reference: `/home/inkto
   `response.completed` (usage), `response.failed`/`incomplete`. Not wired yet (non-streaming for now).
 - The SDK also exposes image-gen + routing metadata + more — for later.
 
-### Anthropic-via-Responses caching + best practices — MEASURED (`scripts/raw-probe.ts`, live Opus 4.7)
+### OpenRouter caching for Anthropic — the working recipe (measured)
 
-**Caching is NOT working as shipped.** `runRawTurn` sets `promptCacheKey` (the OpenAI mechanism); a live
-2-call probe with an identical ~3000-token prefix showed `cacheRead=0` on both → no caching. The fix
-(OpenRouter docs, verified field names):
-- The **Responses API caches Anthropic only via a top-level `anthropic_cache_control` field** —
-  `{type:"ephemeral", ttl:"1h"}` (the chat-completions API uses `cache_control` / per-block breakpoints;
-  Responses is automatic-only via this one field). `promptCacheKey` is a no-op for Anthropic.
-- ⚠️ **`@openrouter/sdk@0.12.35` (latest) does NOT type `anthropic_cache_control`** — and Speakeasy SDKs
-  strip unknown fields, so it can't be sent through `beta.responses.send`. Enabling caching needs a
-  **raw `fetch` to `/api/v1/responses`** (lose the SDK's typed errors for that path, or hybrid) until the SDK
-  adds the field. This is the core of #48.
+`cache_control` is **Anthropic-only** on OpenRouter; non-Anthropic models cache automatically with no
+field. `isAnthropicModel(model)` gates it. The SDK DOES type the field as `cacheControl` (camelCase) — no
+raw `fetch` needed. The recipe in `providers/openrouter.ts`:
+- **Chat Completions (mode 3):** a **per-block `cacheControl` on the STATIC system text block** — this
+  pins the breakpoint at the stable system prompt so it's written once and reused every turn. (A
+  top-level directive instead pins the breakpoint at the LAST block — the volatile newest user message —
+  so no reusable cache forms; measured, `cacheWrite` stayed 0.) The dynamic half goes in a second
+  uncached block after it, mirroring sdk-mode's boundary. **5m default TTL** (no `ttl` field): 1h needs
+  the `anthropic-beta: extended-cache-ttl` header the SDK doesn't send AND costs ~2× — 5m covers
+  back-to-back RP turns cheaply (the ST recipe). Proven: cacheWrite→cacheRead, ~11× cheaper on the read.
+- **Responses (mode 4):** the **top-level `cacheControl` directive** for Anthropic; non-Anthropic gets a
+  stable `promptCacheKey` (sha1 of model+instructions) so the provider's automatic cache routes consistently.
+- **Provider pinning:** for Anthropic we pin `provider:{order:["Anthropic"]}` (order-only, fallbacks stay
+  ON) — an UNPINNED Anthropic route can land on an endpoint that silently ignores `cache_control` (measured:
+  0 cache). A caller-supplied `providerRouting` (from `chats.metadata`) wins.
 - **Min cache thresholds (per model):** Opus 4.7/4.6/4.5 + Haiku 4.5 = **4096 tok**; Sonnet 4.6 = 2048;
-  Sonnet 4.5/Opus 4.1 = 1024. (The raw-probe's 3003-tok prefix was BELOW Opus 4.7's 4096 floor — a second
-  reason it didn't cache.) Cached tokens report as `prompt_tokens_details.cached_tokens` → already read as
-  `usage.inputTokensDetails.cachedTokens` (→ `ChatTurnUsage.cacheReadTokens`).
-- **Sticky routing:** after a cached request OpenRouter keeps the same provider warm → DON'T churn
-  `provider` routing between turns (and consider pinning `provider.order:["anthropic"]` for Claude).
+  Sonnet 4.5/Opus 4.1 = 1024 — a prefix below the floor won't cache. Cached tokens report as
+  `prompt_tokens_details.cached_tokens` → read as `usage.inputTokensDetails.cachedTokens`
+  (→ `ChatTurnUsage.cacheReadTokens`).
+- **Sticky routing:** after a cached request OpenRouter keeps the provider warm → DON'T churn `provider`
+  routing between turns. (History-depth breakpoints à la ST → a later refinement, #48.)
 
 **Other Responses best practices for Anthropic (the SDK DOES type these — usable now):**
 - `reasoning` (ReasoningConfig: `effort` xhigh/high/medium/low/minimal/none, `enabled`, `maxTokens`, `summary`).
