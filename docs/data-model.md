@@ -51,6 +51,15 @@ and is regenerable from `messages` (if they ever diverge, `messages` wins). `seq
 - Because the agent-sdk runner is **stateless** (a fresh `query({resume})` per message),
   `result.usage` is per-turn → `tokensIn/Out` + cache tokens + `costUsd` are a direct copy (no
   cumulative differencing). These feed analytics.
+- **Per-turn provenance columns record what ACTUALLY ran**, normalized so cross-mode
+  filtering/analytics stays honest. The "why did generation stop?" signal is **two columns**:
+  `finish_reason` (migration 0013) is the *normalized* cross-mode vocab (`stop|length|filter|tool|
+  other`, via `providers/turn.ts` `normalizeFinishReason` — the queryable one, e.g. a "truncated"
+  UI badge), while `stop_reason` keeps the raw provider string (`stop_reason`/`finish_reason`) as
+  provenance. `reasoning_effort` stores the resolved effort (analytics axis); `gen_started`/
+  `gen_finished` (migration 0012, epoch-ms UTC) hold generation timing — populated by the ST
+  importer from a message's top-level fields; live turns carry per-gen timing on `message_variants`.
+  All nullable (null for imports / not-provided).
 - `session_entries.subpath` stores **`""`** (not NULL) for the main transcript: the uuid-dedup
   unique index `(session_id, subpath, uuid) WHERE uuid IS NOT NULL` is defeated by a NULL
   `subpath` (SQLite treats every NULL as distinct), so `""` keeps idempotency honest. The store
