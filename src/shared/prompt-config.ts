@@ -33,6 +33,9 @@ export const MARKER_TYPES = [
   "world_info",
   "chat_history",
   "memory",
+  // The compaction summary (chats.compactSummary) — placed here, it lets the stateless openrouter
+  // runner pick up from the compaction point (the summary stands in for the compacted-away turns).
+  "compact_summary",
 ] as const;
 export type MarkerType = (typeof MARKER_TYPES)[number];
 

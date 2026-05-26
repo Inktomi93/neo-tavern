@@ -287,3 +287,80 @@ describe("manual compaction", () => {
     expect(await svc.compact({ username: "u1", chatId: "ch2" })).toEqual({ compacted: false });
   });
 });
+
+describe("cross-mode compaction pickup (openrouter)", () => {
+  test("an openrouter chat with a compact summary sends post-anchor history + the summary in-prompt", async () => {
+    const now = Date.now();
+    // Capture what the openrouter runner receives.
+    let seenHistory: { role: string; content: string }[] = [];
+    let seenStatic = "";
+    const svc = createChatService(db, {
+      runChatCompletion: async (p) => {
+        seenHistory = p.history;
+        seenStatic = p.systemPrompt.static;
+        return { ...fakeTurn(), sessionId: "" };
+      },
+    });
+
+    await db.insert(users).values({ id: "u1", handle: "u1", createdAt: now });
+    await db.insert(characters).values({ id: "c1", ownerId: "u1", handle: "p", createdAt: now });
+    await db.insert(characterVersions).values({
+      id: "v1",
+      characterId: "c1",
+      version: 1,
+      name: "P",
+      description: "d",
+      createdAt: now,
+    });
+    await db.update(characters).set({ currentVersionId: "v1" }).where(eq(characters.id, "c1"));
+    // Preset with the {{compact_summary}} marker.
+    await db
+      .insert(presets)
+      .values({ id: "p1", ownerId: "u1", name: "x", kind: "x", createdAt: now, updatedAt: now });
+    await db.insert(presetVersions).values({
+      id: "pv1",
+      presetId: "p1",
+      version: 1,
+      schemaVersion: 1,
+      config: {
+        schemaVersion: 1,
+        sections: [{ type: "marker", id: "cs", name: "Summary", marker: "compact_summary" }],
+        params: {},
+      },
+      createdAt: now,
+    });
+    // chat-completions chat, compacted at seq 2, with a stored summary.
+    await db.insert(chats).values({
+      id: "ch1",
+      ownerId: "u1",
+      title: "t",
+      characterVersionId: "v1",
+      api: "chat-completions",
+      source: "openrouter",
+      presetVersionId: "pv1",
+      compactSummary: "Earlier: they met at dawn.",
+      compactedAtSeq: 2,
+      messageCount: 4,
+      createdAt: now,
+      updatedAt: now,
+    });
+    await db.insert(messages).values([
+      { id: "m1", chatId: "ch1", seq: 1, role: "user", content: "pre-1", createdAt: now },
+      { id: "m2", chatId: "ch1", seq: 2, role: "assistant", content: "pre-2", createdAt: now },
+      { id: "m3", chatId: "ch1", seq: 3, role: "user", content: "post-3", createdAt: now },
+      { id: "m4", chatId: "ch1", seq: 4, role: "assistant", content: "post-4", createdAt: now },
+    ]);
+
+    const result = await svc.send({
+      username: "u1",
+      chatId: "ch1",
+      expectedSeq: 4,
+      content: "now-5",
+    });
+
+    expect(result.status).toBe("ok");
+    // History excludes the pre-anchor turns (seq ≤ 2); the summary stands in for them.
+    expect(seenHistory.map((m) => m.content)).toEqual(["post-3", "post-4", "now-5"]);
+    expect(seenStatic).toContain("Earlier: they met at dawn.");
+  });
+});

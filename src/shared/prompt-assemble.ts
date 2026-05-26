@@ -59,6 +59,9 @@ export interface AssembleContext {
   worldEntries: AssembleWorldEntry[];
   /** Recent message texts, for keyword-WI matching. */
   recentMessages: string[];
+  /** The chat's compaction summary, when in a mode that injects it (the stateless openrouter path).
+   *  Rendered by the {{compact_summary}} marker; null/absent → nothing rendered. */
+  compactSummary?: string | null;
 }
 
 // Metadata about what assembly did — for debug visibility (NOT the prompt text). The caller
@@ -71,6 +74,9 @@ export interface AssembleTrace {
   worldInfoIncluded: number;
   /** The trigger keys that fired keyword entries — answers "why did this lore appear". */
   matchedKeys: string[];
+  /** True when the {{compact_summary}} marker rendered the chat's summary — the signal the caller
+   *  uses to "pick up from the compaction point" (rebuild history from seq > compactedAtSeq). */
+  compactSummaryIncluded: boolean;
 }
 
 export interface AssembledPrompt {
@@ -188,6 +194,16 @@ function renderMarker(section: MarkerSection, ctx: AssembleContext, trace: Assem
         : "";
     case "world_info":
       return renderWorldInfo(ctx, section.scope ?? "always", trace);
+    // The compaction summary stands in for the compacted-away turns (stateless openrouter path).
+    // Records into the trace so the caller knows to rebuild history from the compaction anchor.
+    case "compact_summary": {
+      const summary = ctx.compactSummary?.trim();
+      if (!summary) {
+        return "";
+      }
+      trace.compactSummaryIncluded = true;
+      return `Summary of the conversation so far:\n${summary}`;
+    }
     // sdk-mode: history lives in the resumed session; memory retrieval is deferred. Both
     // render empty here (raw mode / a later retrieval pass will fill them).
     case "chat_history":
@@ -221,6 +237,7 @@ export function assemblePrompt(config: PromptConfig, ctx: AssembleContext): Asse
     dynamicSections: [],
     worldInfoIncluded: 0,
     matchedKeys: [],
+    compactSummaryIncluded: false,
   };
   let bucket = staticParts;
   let bucketSections = trace.staticSections;

@@ -69,7 +69,11 @@ only ✅-tracking in the repo; keep it one line.
   (`DISABLE_AUTO_COMPACT` + the domain auto-fires a steered `/compact` after a turn once context-fill
   crosses `thresholdPct`, default 0.85) · `off` (disabled; owner triggers `chat.compact` manually).
   RP-tuned default instructions; agent-sdk only; opt-in (default `auto` = no behavior change).
-  Compactions land in `chat_events`. (Owned-context `load()` still optional/deferred.)
+  Compactions land in `chat_events`. **Cross-mode portability:** a `/compact` captures the summary +
+  the canon anchor onto `chats.compactSummary`/`compactedAtSeq`; the `{{compact_summary}}` prompt
+  marker injects it and the stateless openrouter runner "picks up from the compaction point" (history
+  from seq > anchor), carried across `forkChat`. Canon (`messages`) is never touched — pre-compaction
+  stays fully viewable. (Owned-context `load()` still optional/deferred.)
 - **#44 — `chats.pinnedPersonaId`** (true persona-switch divergence): today one `personaId` serves
   both the pinned (card `{{user}}`) and active (user-field `{{user}}`) roles — `assemblePrompt`
   already resolves them separately. Add an immutable `pinnedPersonaId` (captured at chat open) so

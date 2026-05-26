@@ -167,6 +167,13 @@ export const chats = sqliteTable(
     // (provenance). Validation is at selection time (the picker), not on the send hot path.
     model: text("model"),
     sessionId: text("session_id"), // SDK session; null after conversion to raw / for imports
+    // Compaction artifact (portable across modes). A /compact (managed or manual) captures the
+    // SDK's summary here + the canon `seq` it covers (compactedAtSeq). agent-sdk handles compaction
+    // natively in its session, but the STATELESS openrouter runner uses these to "pick up from the
+    // compaction point": inject the summary via the {{compact_summary}} marker + rebuild history
+    // from seq > compactedAtSeq. Canon (messages) is untouched — pre-compaction stays viewable.
+    compactSummary: text("compact_summary"),
+    compactedAtSeq: integer("compacted_at_seq"),
     // Self-ref fork link. SET NULL so a fork survives its parent's deletion.
     parentChatId: text("parent_chat_id").references((): AnySQLiteColumn => chats.id, {
       onDelete: "set null",

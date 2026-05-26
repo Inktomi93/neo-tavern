@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, asc, desc, eq, inArray, lt, lte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, lt, lte, sql } from "drizzle-orm";
 import type { Db } from "../../../db/client";
 import {
   characters,
@@ -82,6 +82,23 @@ const DEFAULT_COMPACT_INSTRUCTIONS =
 
 // Managed-compaction default: fire when the context is this fraction full (overridable per preset).
 const MANAGED_COMPACT_DEFAULT_PCT = 0.85;
+
+// A session-frame message.content is a string OR an array of content blocks — flatten to text.
+function frameContentToText(content: unknown): string {
+  if (typeof content === "string") {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  return content
+    .map((b) =>
+      b !== null && typeof b === "object" && typeof (b as { text?: unknown }).text === "string"
+        ? (b as { text: string }).text
+        : "",
+    )
+    .join("");
+}
 
 export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatService {
   const runTurn = deps.runTurn ?? runChatTurn;
@@ -186,6 +203,32 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
     );
   }
 
+  // After a /compact, the SDK writes the summary as a synthetic `user` frame in the session store
+  // ("This session is being continued from a previous conversation… Summary: …"). Recover that text
+  // so it becomes our portable artifact. Best-effort + defensive about the frame shape — a format
+  // change just yields null (caller degrades to full canon). Scans the few most-recent user frames.
+  async function extractCompactSummary(sessionId: string): Promise<string | null> {
+    const rows = await db
+      .select({ entry: sessionEntries.entry })
+      .from(sessionEntries)
+      .where(and(eq(sessionEntries.sessionId, sessionId), eq(sessionEntries.type, "user")))
+      .orderBy(desc(sessionEntries.seq))
+      .limit(10);
+    for (const row of rows) {
+      const frame = row.entry;
+      if (frame === null || typeof frame !== "object") {
+        continue;
+      }
+      const message = (frame as { message?: unknown }).message;
+      const content = (message as { content?: unknown } | undefined)?.content;
+      const text = frameContentToText(content);
+      if (text.toLowerCase().includes("session is being continued")) {
+        return text;
+      }
+    }
+    return null;
+  }
+
   async function maxSeq(chatId: string): Promise<number> {
     const last = await db
       .select({ seq: messages.seq })
@@ -287,6 +330,9 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
         ...cvWi.map((r) => toWorldEntry(r, "character")),
       ],
       recentMessages: recent.map((r) => r.content).reverse(),
+      // Only the STATELESS openrouter runner injects the summary (the agent-sdk session carries
+      // compaction natively — injecting it there would double up). So agent-sdk chats see null.
+      compactSummary: chat.api === "agent-sdk" ? null : chat.compactSummary,
     };
   }
 
@@ -455,20 +501,25 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
   }
 
   // Raw-mode rebuilds the conversation from canon every turn (no SDK session). user/assistant
-  // turns only — system content is carried by the assembled `instructions`, not `input`. `beforeSeq`
-  // bounds it to seq < beforeSeq (a swipe regenerates the turn from the history BEFORE the user msg).
+  // turns only — system content is carried by the assembled `instructions`, not `input`.
+  //  • beforeSeq → seq < beforeSeq (a swipe regenerates from the history BEFORE the user msg).
+  //  • afterSeq → seq > afterSeq (compaction pickup: the {{compact_summary}} marker stands in for
+  //    everything ≤ the compaction anchor, so we only resend the turns after it).
   async function loadCanonHistory(
     chatId: string,
-    beforeSeq?: number,
+    bounds: { beforeSeq?: number | undefined; afterSeq?: number | undefined } = {},
   ): Promise<{ role: "user" | "assistant"; content: string }[]> {
+    const filters = [eq(messages.chatId, chatId)];
+    if (bounds.beforeSeq !== undefined) {
+      filters.push(lt(messages.seq, bounds.beforeSeq));
+    }
+    if (bounds.afterSeq !== undefined) {
+      filters.push(gt(messages.seq, bounds.afterSeq));
+    }
     const rows = await db
       .select({ role: messages.role, content: messages.content })
       .from(messages)
-      .where(
-        beforeSeq === undefined
-          ? eq(messages.chatId, chatId)
-          : and(eq(messages.chatId, chatId), lt(messages.seq, beforeSeq)),
-      )
+      .where(and(...filters))
       .orderBy(asc(messages.seq));
     return rows
       .filter((r): r is { role: "user" | "assistant"; content: string } => r.role !== "system")
@@ -690,10 +741,16 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
         } else {
           // openrouter runner: rebuild the conversation from canon (incl. the user message just
           // inserted) → chat.send or beta.responses (by api). No session store; routing rides through.
+          // Compaction pickup: when the {{compact_summary}} marker put the summary in the prompt,
+          // resend only the turns AFTER the compaction anchor (the summary covers the rest).
+          const afterSeq =
+            systemPrompt.trace.compactSummaryIncluded && chat.compactedAtSeq !== null
+              ? chat.compactedAtSeq
+              : undefined;
           turn = await openRouterRunner(routing.api)({
             model: routing.model,
             systemPrompt,
-            history: await loadCanonHistory(params.chatId),
+            history: await loadCanonHistory(params.chatId, { afterSeq }),
             generation: routing.params,
             providerRouting: routing.providerRouting,
           });
@@ -913,6 +970,10 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
     const model = sameProvider ? source.model : null;
     // agent-sdk target gets a fresh valid-UUID session (seeded below); openrouter target has none.
     const sessionId = params.targetApi === "agent-sdk" ? randomUUID() : null;
+    // Carry the compaction artifact only if the fork point includes the compaction anchor (so the
+    // forked range is genuinely "post-compaction"); a fork before it predates compaction → none.
+    // This is what lets a compacted agent-sdk chat fork into openrouter and pick up from the summary.
+    const carryCompaction = source.compactedAtSeq !== null && source.compactedAtSeq <= params.atSeq;
     await db.insert(chats).values({
       id: newChatId,
       ownerId,
@@ -924,6 +985,8 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
       source: params.targetSource,
       model,
       sessionId,
+      compactSummary: carryCompaction ? source.compactSummary : null,
+      compactedAtSeq: carryCompaction ? source.compactedAtSeq : null,
       parentChatId: params.chatId,
       forkedAt: now,
       messageCount: canon.length,
@@ -1091,7 +1154,9 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
         .limit(1);
       const lastUser = userRows[0] ?? null;
       const regenPrompt = lastUser?.content ?? OPEN_SCENE_PROMPT;
-      const history = await loadCanonHistory(params.chatId, lastUser?.seq ?? tip.seq);
+      const history = await loadCanonHistory(params.chatId, {
+        beforeSeq: lastUser?.seq ?? tip.seq,
+      });
 
       const [assembleCtx, promptConfig] = await Promise.all([
         buildAssembleContext(chat),
@@ -1387,13 +1452,28 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
         generation: args.generation,
         resume: args.sessionId,
       });
+      const newSessionId = turn.sessionId || args.sessionId;
+      // Capture the SDK's summary + the canon anchor it covers → the portable, cross-mode artifact
+      // (openrouter mode reads these to pick up from the compaction point). Best-effort: if we can't
+      // recover the summary frame, leave compactSummary/anchor untouched (degrade to full canon).
+      const summary = await extractCompactSummary(newSessionId);
+      const anchorSeq = summary !== null ? await maxSeq(args.chatId) : null;
       await db
         .update(chats)
-        .set({ sessionId: turn.sessionId || args.sessionId, updatedAt: Date.now() })
+        .set({
+          sessionId: newSessionId,
+          ...(summary !== null ? { compactSummary: summary, compactedAtSeq: anchorSeq } : {}),
+          updatedAt: Date.now(),
+        })
         .where(eq(chats.id, args.chatId));
       await recordTurnEvents(args.chatId, null, turn.events);
       getLog().info(
-        { chatId: args.chatId, trigger: args.trigger, events: turn.events.length },
+        {
+          chatId: args.chatId,
+          trigger: args.trigger,
+          events: turn.events.length,
+          summaryCaptured: summary !== null,
+        },
         "chat: compacted",
       );
       return true;
