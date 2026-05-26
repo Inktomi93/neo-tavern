@@ -13,7 +13,7 @@ A layer may import anything **below** it, never above or sideways.
 | --- | --- | --- | --- |
 | **shared** | `src/shared/` | Types + Zod schemas shared across the client/server boundary. The foundation. | external only |
 | **db** | `src/db/` | Drizzle schema + libSQL client + migrations. | shared |
-| **infrastructure** | `src/server/{providers,embeddings,auth}/`, `src/server/env.ts` | Adapters to external systems (Claude SDK, OpenRouter, embeddings), auth header trust, config. | db, shared |
+| **infrastructure** | `src/server/{providers,embeddings,auth,storage}/`, `src/server/env.ts` | Adapters to external systems (Claude SDK, OpenRouter, embeddings, the CAS blob store), auth header trust, config. | db, shared (`storage` = shared only, no db) |
 | **domain** | `src/server/domain/` | Business logic (chats, characters, corpus search). Orchestrates infrastructure. | infrastructure, db, shared |
 | **drivers** | `src/server/trpc/` · `src/server/jobs/` | THIN drivers that call **down** into domain — tRPC transport (request/response) and background jobs (corpus embedding pass, agent jobs). Reach db/infra **only through domain**; the two never import each other. | domain, shared (+ env, version) |
 | **entry** | `src/server/index.ts` | Hono composition root. Wires drivers + serves the client. | everything server |
@@ -99,9 +99,10 @@ src/
 │   ├── auth/            # INFRA — X-Authentik-Username trust
 │   ├── providers/       # INFRA — claude-sdk.ts, openrouter.ts
 │   ├── embeddings/      # INFRA — BGE-M3 / vectors (Phase 3)
+│   ├── storage/         # INFRA — content-addressed blob store (cas.ts) — shared-only, NO db
 │   ├── domain/          # BUSINESS LOGIC — one dir per feature
 │   │   ├── _shared/     #   cross-feature domain helpers (the only shared escape)
-│   │   └── <feature>/   #   chat/, corpus/, debug/, import/, models/, search/ — entered via index.ts
+│   │   └── <feature>/   #   assets/, chat/, corpus/, debug/, import/, models/, search/ — entered via index.ts
 │   ├── jobs/            # DRIVER — IN-SERVER background workers (reach db only via domain)
 │   └── trpc/            # DRIVER — transport
 │       ├── context.ts
@@ -139,8 +140,8 @@ for thin **in-server** background workers. `tools/` (root) holds the uv-vendored
 
 - **Layer direction:** `shared-is-foundation`, `db-is-foundation`,
   `client-no-backend-runtime` (type-only exception), `server-no-client`,
-  `below-drivers-no-driver`, `infra-below-domain`, `drivers-through-domain`,
-  `no-cross-driver`.
+  `below-drivers-no-driver`, `infra-below-domain`, `storage-is-blob-io` (the CAS adapter imports
+  shared only — never db/domain/drivers), `drivers-through-domain`, `no-cross-driver`.
 - **Client internals:** `client-lib-is-foundation`, `client-state-below-view`,
   `client-ui-is-pure`, `client-routes-are-leaves`, `client-foundations-no-features`.
 - **Features (server + client):** `domain-no-cross-feature`,

@@ -96,9 +96,12 @@ only ✅-tracking in the repo; keep it one line.
 - **#46 — Docker/compose image + Playwright E2E**: one image into the authentik+caddy stack, port
   8788 (don't expose to untrusted nets — the header-trust invariant). One happy-path E2E per
   critical flow (chat turn, corpus search); no screenshot diffs.
-- **#47 — corpus extras** (deferred by choice): (1) find-similar / find-duplicates (cosine ≥ 0.92
-  `vector_top_k` self-join); (2) CLIP image embeddings for visual card similarity (separate vector
-  dim; a re-index away).
+- **#47 — corpus extras**: (1) find-similar / find-duplicates (cosine ≥ 0.92 `vector_top_k`
+  self-join) — deferred. (2) Image embeddings for visual card similarity — **landing built**: the
+  content-addressed asset store (`storage/cas.ts` + `domain/assets`: store/backfill/GC/fsck; avatars
+  wired on import + `pnpm assets:backfill`) and the `image_embeddings` table (migration 0016,
+  SigLIP-2 so400m **1152-dim**, its own `libsql_vector_idx` — NOT the 1024-dim text space). The
+  visual **embed pass** (embed FROM the blob by hash) is the remaining follow-up. See `docs/assets.md`.
 
 **Untracked sub-items (fold into the issues above when they land):**
 - Character library + a FOCUSED editor (name/description/personality/scenario/greetings/

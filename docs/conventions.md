@@ -56,9 +56,17 @@ transformers.js `session_options`, OS env vars) trip `useNamingConvention`. Two 
 - **`tsx -e '<code with top-level await>'` FAILS** ("Top-level await not supported with the cjs
   output format"). Write a temp `.ts` file and run `pnpm exec tsx file.ts` instead (then `rm`).
 - **drizzle-kit can't emit `libsql_vector_idx`** — hand-add the ANN `CREATE INDEX` to the
-  generated migration SQL (see `0001`). Migrations are **additive**: never regenerate `0000–N`;
+  generated migration SQL (see `0001`/`0016`). Migrations are **additive**: never regenerate `0000–N`;
   hand-read the generated SQL (the SQLite differ sometimes recreates more than intended — confirm
   it doesn't drop columns/indexes from earlier migrations).
+- **The drizzle-kit snapshots are FROZEN at `0010`; `0011+` are HAND-WRITTEN** (no snapshot/journal
+  regen). So `drizzle-kit generate` diffs against stale state (it still thinks `chats` has the
+  retired `mode`/`provider` cols) AND it **prompts interactively** (no TTY in CI/web → it errors out).
+  **Don't fight it — hand-write the migration**: copy the proven table-recreate shape from `0007`
+  (SQLite can't `ALTER ADD CONSTRAINT`, so an FK on an existing column = `PRAGMA foreign_keys=OFF` →
+  `__new_*` table → copy → drop → rename → recreate indexes → `ON`), use plain `ALTER TABLE ADD/DROP
+  COLUMN` where possible (`0011`/`0016`), then add the `_journal.json` entry by hand. Validate by
+  running the suite (`freshDb` applies every migration — a wrong column list fails the import tests).
 - **`pnpm exec tsx`**, not bare `tsx` (not always on PATH).
 
 ## libSQL / native vectors  (VERIFIED — corrected after an over-cautious earlier claim)

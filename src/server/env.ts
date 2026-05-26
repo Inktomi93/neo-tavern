@@ -34,6 +34,12 @@ const envSchema = z.object({
   // Database — the libSQL file URL (dev: a local file; prod: the mounted volume).
   DATABASE_URL: z.string().min(1).default("file:./neo-tavern.db"),
 
+  // Content-addressed asset blob root (card PNGs, avatars). A sharded CAS tree
+  // (src/server/storage/cas.ts) keyed by sha-256; the DB holds metadata, bytes live here.
+  // Prod: a path on the mounted volume; dev default sits under the gitignored data/ dir.
+  // caddy serves these statically in prod (docs/assets.md) — the app never streams bytes.
+  ASSETS_DIR: z.string().min(1).default("./data/assets"),
+
   // Embedding ONNX execution provider. "cpu" (default) runs BGE-M3 on the CPU runtime —
   // fine for short query embeds (~0.04s) and the safe default for tests/dev. "cuda" runs
   // the in-process onnxruntime-node CUDA EP (~24× faster on long text — used for the

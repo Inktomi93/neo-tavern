@@ -67,6 +67,20 @@ module.exports = {
       to: { path: "^src/server/domain/" },
     },
     {
+      name: "storage-is-blob-io",
+      comment:
+        "src/server/storage (the CAS filesystem adapter) is pure blob I/O at the infra-foundation level: it imports only shared + external (+ env). Never db, domain, the drivers, or other infra — domain/assets orchestrates it with the assets index rows.",
+      severity: "error",
+      from: { path: "^src/server/storage/" },
+      to: {
+        path: [
+          "^src/db/",
+          "^src/server/(domain|trpc|jobs|providers|embeddings|auth)/",
+          "^src/client/",
+        ],
+      },
+    },
+    {
       name: "observability-is-foundation",
       comment:
         "Logging/observability is a foundation utility (like env) that every layer imports via getLog(). It must not reach UP into domain, the drivers, or the client.",
@@ -80,7 +94,7 @@ module.exports = {
         "Drivers stay THIN: tRPC routers AND background jobs reach the database and infrastructure adapters THROUGH the domain layer, never directly. Keeps query/search/embedding/conversion logic in domain (testable in isolation) instead of sprawled across routers or workers. Drivers may still import domain, shared, env, and version.",
       severity: "error",
       from: { path: "^src/server/(trpc|jobs)/" },
-      to: { path: ["^src/db/", "^src/server/(providers|embeddings|auth)/"] },
+      to: { path: ["^src/db/", "^src/server/(providers|embeddings|auth|storage)/"] },
     },
     {
       name: "no-cross-driver",

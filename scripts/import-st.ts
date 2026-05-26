@@ -1,7 +1,9 @@
 import process from "node:process";
 import { createDb, runMigrations } from "../src/db/client";
+import { createAssetsService } from "../src/server/domain/assets";
 import { collectBundlesFromDir, createImportService } from "../src/server/domain/import";
 import { env } from "../src/server/env";
+import { createCas } from "../src/server/storage/cas";
 
 /**
  * SillyTavern corpus importer (composition-root CLI). Walks a staged profile dir, parses
@@ -16,6 +18,8 @@ async function main(): Promise<void> {
   const db = await createDb(env.DATABASE_URL);
   await runMigrations(db);
   const svc = createImportService(db, { ownerHandle: env.DEFAULT_USER_HANDLE });
+  // The card PNG is the avatar: store it in the CAS and pin the asset onto the version row.
+  const assets = createAssetsService(db, createCas(env.ASSETS_DIR));
 
   const { bundles, orphanChatDirs, unreadableCards } = await collectBundlesFromDir(dir);
   console.log(
@@ -33,6 +37,10 @@ async function main(): Promise<void> {
     branches: 0,
   };
   for (const bundle of bundles) {
+    if (bundle.card.cardBytes) {
+      const stored = await assets.store(bundle.card.cardBytes, "card", "image/png");
+      bundle.card.avatarAssetId = stored.assetId;
+    }
     const r = await svc.importCharacter(bundle);
     totals.characters += 1;
     if (r.versionBumped) totals.versionBumps += 1;

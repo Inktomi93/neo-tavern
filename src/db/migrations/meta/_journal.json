@@ -113,6 +113,13 @@
       "when": 1779850000000,
       "tag": "0015_chat_compact_summary",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "6",
+      "when": 1779860000000,
+      "tag": "0016_assets_cas_and_image_embeddings",
+      "breakpoints": true
     }
   ]
 }

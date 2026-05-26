@@ -122,12 +122,18 @@ on a model swap. `hubScore` (CSLS, migration 0005) + `sourceText` (for the reran
 along. Search: `vector_top_k('embeddings_ann', vector32(?), k)` → exact cosine re-rank → CSLS
 adjust → optional cross-encoder rerank. See `docs/corpus-import.md`.
 
-## Assets are content-addressed
-`hash` is unique; binaries (avatars, imported card PNGs) live on the mounted volume and are
-referenced by hash; the DB row is metadata only. Image **bytes never go in the DB.** Image
-*analysis* (vision tags, themes, visual embeddings) is a batch/import job, not a hot path — the
-derived signal lands in the DB, the bytes don't. **`assets` are global — NO `ownerId`** (dedup by
-hash, refcounted).
+## Assets are content-addressed (CAS — migration 0016)
+`hash` (sha-256, unique) IS the locator: binaries (card PNGs, persona avatars) live on the mounted
+volume in a sharded CAS tree (`src/server/storage/cas.ts`, `<h0:2>/<h2:4>/<hash>`), the DB row is
+metadata only. **No `path` column** (the hash → `cas.blobPath` resolves it; a re-rooted volume needs
+no DB rewrite). Image **bytes never go in the DB.** **`assets` are global — NO `ownerId`** (dedup by
+hash — identical art across users is one blob). **NO refcount column** (refcounts drift) — GC is
+**mark-sweep** over the avatar refs (`character_versions`/`personas.avatarAssetId` → `assets.id` ON
+DELETE SET NULL, the FKs 0007 skipped), with a grace window so it can't race an in-flight import.
+A card blob's hash equals `characters.importHash` (same whole-file sha-256) → a built-in integrity
+check on the forward-import + backfill paths. Image *analysis* (visual embeddings) is a batch job —
+the derived vector lands in `image_embeddings` (a SEPARATE 1152-dim SigLIP space, NOT the 1024-dim
+text `embeddings`), the bytes don't. Full design + the caddy serving contract: **`docs/assets.md`**.
 
 ## Multi-user: designed, single-user implemented
 Every top-level *owned* entity carries `ownerId → users.id` (personas, characters, chats,
