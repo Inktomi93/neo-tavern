@@ -28,8 +28,8 @@ export interface RoutableChat {
  * rebuilt from canon):
  *   • runner "agent-sdk"  serves BOTH sources — max-pro-sub (free, buildClaudeSdkEnv) and openrouter
  *     (paid Anthropic skin, buildClaudeOpenRouterEnv). `source` picks the env; the pipeline is identical.
- *   • runner "openrouter" is the @openrouter/sdk path (responses today; chat-completions is designed
- *     but not yet built — the resolver throws for it).
+ *   • runner "openrouter" is the @openrouter/sdk path, serving BOTH apis — chat-completions
+ *     (chat.send, the broad catalog) and responses (beta.responses, OpenAI-style).
  */
 export type TurnRouting =
   | {

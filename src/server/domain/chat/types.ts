@@ -214,10 +214,8 @@ export class ChatNotFoundError extends Error {
   }
 }
 
-// A chat operation that's invalid for the chat's current state, or not yet implemented.
-// `reason` lets the transport pick the right code (BAD_REQUEST vs NOT_IMPLEMENTED) without
-// importing @trpc/server into the domain. fork_sdk_unsupported = the deferred raw→sdk
-// seeding primitive (shared with greeting seeding); see docs/build-plan.md.
+// A chat operation that's invalid for the chat's current state. `reason` lets the transport map it
+// to the right error code without importing @trpc/server into the domain (wrong direction).
 export type ChatOpReason =
   | "invalid_provider"
   | "invalid_fork_point"

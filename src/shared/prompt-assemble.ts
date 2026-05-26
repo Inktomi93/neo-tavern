@@ -18,8 +18,8 @@ import {
 //    rewrites the card's references to {{user}}.
 //  • USER-authored sections (literal blocks, the persona marker, chat-attached world-info) use the
 //    CURRENT ACTIVE persona, so your own framing follows who you're playing now.
-// (Today both resolve to the chat's single persona; they diverge once persona-switching lands —
-//  see docs + chats.personaId / a future pinnedPersonaId.)
+// (The pin is chats.pinnedPersonaId (migration 0017); chats.personaId is the active persona. They're
+//  equal at open today and diverge once the active-persona-switch API — frontend — lands.)
 
 export interface AssembleCharacter {
   name: string;
