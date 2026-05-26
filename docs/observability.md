@@ -37,6 +37,12 @@ Two things: **structured logging** (pino) and an **in-process debug API** you
   mapped `kind`/`retryable`. **Prompt assembly** logs `"chat: prompt assembled"` at debug (preset
   source, static/dynamic sizes, section ids, world-info matched keys) — metadata only, never the
   prompt text — so "why did/didn't this fire" is curl-able.
+- **Chat-turn signal (domain, both modes).** The chat service logs `"chat turn complete"` at
+  **info** (`chatId` + `seq`/`tokensIn`/`tokensOut`/`costUsd`/`contextWindow`/`finishReason`/
+  `compactions`) — the one line that ties cost/tokens to a `chatId` at the default level (the
+  provider-level lines above carry no `chatId`). The dry-run counterpart is the
+  `chat.previewAssembly` tRPC query: the static/dynamic halves + assembly trace + resolved
+  api/source/model a chat's next turn would use, without spending a turn.
 
 ## Debug API — `curl` it, don't tail
 
@@ -50,6 +56,9 @@ callers must present it via `x-debug-token:` header or `?token=`.
 | `GET /api/_debug/logs?level=&requestId=&q=&limit=` | recent structured logs (filtered) |
 | `GET /api/_debug/errors?limit=` | recent error-level logs |
 | `GET /api/_debug/requests?limit=` | recent requests (method, path, status, ms) |
+| `GET /api/_debug/db/stats` | row counts per table |
+| `GET /api/_debug/db/integrity` | FK / integrity check |
+| `GET /api/_debug/db/chat/:id` | chat inspector — messages, variants, provenance, and the persisted `chat_events` (compaction/retry/rate-limit/status/auth) for one chat |
 
 Every response carries an **`X-Request-Id`** header — the correlation key:
 
