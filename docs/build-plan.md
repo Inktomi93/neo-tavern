@@ -37,8 +37,8 @@ only ✅-tracking in the repo; keep it one line.
   one unified `GenerationParams` vocab, canonical epoch-ms-UTC time, managed compaction +
   cross-mode `{{compact_summary}}`, persisted `chat_events`, the preset CRUD service (#43,
   `preset.*` router), the content-addressed asset store (#47 infra), and the `/api/_debug` read
-  surface, `chats.pinnedPersonaId` (#44). **Remaining backend:** the `{{memory}}` marker (#40).
-  **The chat frontend that renders all of it is the main thing left** — see backlog.
+  surface, `chats.pinnedPersonaId` (#44), the `{{memory}}` marker (#40). **The chat backend is
+  now complete** — the chat frontend that renders all of it is what's left. See backlog.
 - **Phase 6 — analytics:** not started (one chart at a time, only for a real question).
 
 ## Deferred backlog (what's parked + where it belongs)
@@ -69,10 +69,15 @@ only ✅-tracking in the repo; keep it one line.
   `includePartialMessages` → `stream_event` deltas (the `onEvent` seam exists); raw-mode Responses
   stream events. Also enables **live-push / multi-device sync** (the auto-refresh half — today it
   converges on refresh). Caddy: disable proxy buffering for `text/event-stream` + keepalives.
-- **#40 — `{{memory}}` marker** (vector retrieval over chat history — the corpus-RAG superpower
-  applied to live chat): embed chat-message chunks (new entityType, owner+chat scoped), knn scoped
-  to this chat, protect recent N, threshold + optional rerank, inject into the dynamic
-  (cache-safe) system-prompt half. Reuses the embedding stack. Complements #41.
+- **#40 — `{{memory}}` marker:** ✅ **DONE** (the SillyTavern `vectors` model — see that extension).
+  First-class `GenerationParams.memory` knob (`enabled` + `queryMessages`/`insert`/`protect`/`minScore`/
+  `chunkChars`/`rerank`, ST defaults 2/3/5/0.25/400). `domain/chat/memory.ts` embeds this chat's
+  messages lazily (entityType `chat_message`, per-message ≤chunkChars), then each turn queries with the
+  recent N and retrieves the top `insert` relevant OLDER messages (exact in-process cosine over just
+  this chat's vectors — not the global ANN; excludes the recent `protect`; ≥`minScore`; optional
+  cross-encoder rerank). The block fills the **placeable `{{memory}}` marker** in the dynamic
+  (cache-safe) half — runner-agnostic, `assemblePrompt` stays pure (`ctx.memory`, like `compactSummary`).
+  Opt-in; the marker's in the default config (renders nothing until the knob is on).
 - **#41 — managed compaction:** ✅ **DONE.** `GenerationParams.compaction` (`shared/generation.ts`):
   mode `auto` (SDK default; `thresholdPct` → `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`) · `managed`
   (`DISABLE_AUTO_COMPACT` + the domain auto-fires a steered `/compact` after a turn once context-fill

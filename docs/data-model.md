@@ -120,7 +120,10 @@ model changes. (agent-sdk carries compaction natively in its session, so the mar
 `1024` matches BGE-M3; the `model` column + the column dimension are the only things that change
 on a model swap. `hubScore` (CSLS, migration 0005) + `sourceText` (for the reranker, 0006) ride
 along. Search: `vector_top_k('embeddings_ann', vector32(?), k)` → exact cosine re-rank → CSLS
-adjust → optional cross-encoder rerank. See `docs/corpus-import.md`.
+adjust → optional cross-encoder rerank. See `docs/corpus-import.md`. Entity types: `character` +
+`chat_segment` (the corpus, batch-embedded) and **`chat_message`** (live chat-history memory — the
+`{{memory}}` marker, #40: entityId `<chatId>:<messageId>:<chunkIdx>`, embedded lazily, retrieved by
+**exact in-process cosine scoped to one chat**, NOT the global ANN — see `domain/chat/memory.ts`).
 
 ## Assets are content-addressed (CAS — migration 0016)
 `hash` (sha-256, unique) IS the locator: binaries (card PNGs, persona avatars) live on the mounted

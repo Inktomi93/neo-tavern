@@ -50,6 +50,24 @@ export const generationParamsSchema = z.object({
       instructions: z.string().optional(),
     })
     .optional(),
+  // Memory — chat-history retrieval (the SillyTavern `vectors` extension model). Runner-AGNOSTIC: it
+  // fills the {{memory}} prompt marker in the DYNAMIC (cache-safe) half, so it works in every mode.
+  // First-class opt-in toggle. When `enabled`, domain/chat embeds this chat's messages (lazily,
+  // per-message, ≤`chunkChars`) and EACH TURN queries with the recent `queryMessages` to inject the
+  // top `insert` relevant OLDER messages — excluding the most recent `protect` (already in context) —
+  // above `minScore` cosine similarity, optionally cross-encoder `rerank`ed. Defaults mirror ST. The
+  // marker's PLACEMENT (which half / where) is the preset's job; this knob is the behavior + params.
+  memory: z
+    .object({
+      enabled: z.boolean().optional(),
+      queryMessages: z.number().int().positive().optional(), // recent msgs forming the query (ST: 2)
+      insert: z.number().int().positive().optional(), // how many to retrieve (ST: 3)
+      protect: z.number().int().nonnegative().optional(), // recent msgs shielded from retrieval (ST: 5)
+      minScore: z.number().min(0).max(1).optional(), // min cosine similarity (ST score_threshold: 0.25)
+      chunkChars: z.number().int().positive().optional(), // split a message into ≤N-char chunks (ST: 400)
+      rerank: z.boolean().optional(), // second-stage cross-encoder rerank of the candidates
+    })
+    .optional(),
 });
 export type GenerationParams = z.infer<typeof generationParamsSchema>;
 

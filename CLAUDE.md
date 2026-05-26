@@ -183,7 +183,7 @@ is the main thing missing. Run `pnpm check` (must be green) and skim recent comm
   — reorderable sections + a cache `boundary`, NOT normalized rows. `assemblePrompt`
   (`shared/prompt-assemble.ts`) → static/dynamic system halves.
 - **Generation knobs are ONE provider-agnostic vocab** (`GenerationParams`, `shared/generation.ts`,
-  in the preset `config.params`): temperature/topP/maxOutputTokens/thinking/effort/maxBudgetUsd/compaction.
+  in the preset `config.params`): temperature/topP/maxOutputTokens/thinking/effort/maxBudgetUsd/compaction/memory.
   Each runner translates it (agent-sdk → typed `thinking`/`effort`/`maxBudgetUsd` Options + env;
   openrouter → request params + `reasoning`); a knob a runner can't honor is a no-op. Reasoning on
   agent-sdk is the TYPED `effort`/`thinking` Options (verified), NOT the env vars; `effort` is

@@ -28,6 +28,8 @@ import {
   parsePromptConfig,
   type WorldInfoScope,
 } from "../../../shared/prompt-config";
+import { createEmbedder, type Embedder } from "../../embeddings/embedder";
+import { createReranker, type Reranker } from "../../embeddings/reranker";
 import { getLog } from "../../observability/logger";
 import { type ClaudeSource, runChatTurn } from "../../providers/claude-sdk";
 import { runChatCompletionTurn, runRawTurn } from "../../providers/openrouter";
@@ -35,6 +37,7 @@ import { type ChatTurnResult, TurnError, type TurnEvent } from "../../providers/
 import { newId } from "../_shared/ids";
 import { withChatLock } from "../_shared/lock";
 import { ensureUser } from "../_shared/users";
+import { retrieveMemory } from "./memory";
 import { resolveTurnRouting } from "./routing";
 import { buildSeedFrames, GREETING_USER_STUB, type SeedTurn } from "./seed";
 import { DbSessionStore } from "./store";
@@ -64,6 +67,11 @@ export interface ChatServiceDeps {
   runTurn?: typeof runChatTurn;
   runRaw?: typeof runRawTurn;
   runChatCompletion?: typeof runChatCompletionTurn;
+  // Embedding stack for the {{memory}} marker (chat-history RAG). Injectable so memory retrieval is
+  // testable with a fake embedder (no model/GPU in `pnpm check`). Defaults = the real in-process
+  // BGE-M3 + cross-encoder (lazy singletons — never loaded unless a chat actually uses memory).
+  embedder?: Embedder;
+  reranker?: Reranker;
 }
 
 // Recent message texts the keyword-WI marker scans. Small + tunable; includes the just-inserted
@@ -104,6 +112,8 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
   const runTurn = deps.runTurn ?? runChatTurn;
   const runRaw = deps.runRaw ?? runRawTurn;
   const runChatCompletion = deps.runChatCompletion ?? runChatCompletionTurn;
+  const embedder = deps.embedder ?? createEmbedder();
+  const reranker = deps.reranker ?? createReranker();
 
   // The openrouter runner picks the endpoint by api: chat.send (broad catalog) vs beta.responses.
   function openRouterRunner(api: "chat-completions" | "responses"): typeof runRawTurn {
@@ -316,6 +326,28 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
       .orderBy(desc(messages.seq))
       .limit(RECENT_MESSAGE_WINDOW);
 
+    // Memory ({{memory}} marker): chat-history RAG, opt-in via GenerationParams.memory.enabled AND
+    // an enabled memory marker in the config (no marker ⇒ retrieval would render nowhere, so skip
+    // the work). resolveConfig is a cheap re-resolve (the caller resolves it again in parallel).
+    let memory: string | null = null;
+    const config = await resolveConfig(chat);
+    const memCfg = config.params.memory;
+    const hasMemoryMarker = config.sections.some(
+      (s) => s.type === "marker" && s.marker === "memory" && s.enabled,
+    );
+    if (memCfg?.enabled === true && hasMemoryMarker) {
+      memory = await retrieveMemory(
+        db,
+        { embedder, reranker },
+        {
+          chatId: chat.id,
+          params: memCfg,
+          charName: cv?.name ?? "Assistant",
+          userName: activePersona?.name ?? "User",
+        },
+      );
+    }
+
     return {
       character: cv
         ? {
@@ -338,6 +370,7 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
       // Only the STATELESS openrouter runner injects the summary (the agent-sdk session carries
       // compaction natively — injecting it there would double up). So agent-sdk chats see null.
       compactSummary: chat.api === "agent-sdk" ? null : chat.compactSummary,
+      memory,
     };
   }
 
