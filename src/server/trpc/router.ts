@@ -9,11 +9,13 @@ export const appRouter = t.router({
   echo: publicProcedure
     .input(z.object({ message: z.string().min(1) }))
     .query(({ input }) => ({ message: input.message })),
-  // The model toggle reads from here; selection gets bound to a chat later.
+  // sdk-mode model toggle (the static Claude catalog). Selection gets bound to a chat later.
   models: publicProcedure.query(() => ({
     available: CHAT_MODELS,
     defaultId: DEFAULT_CHAT_MODEL_ID,
   })),
+  // raw-mode model picker — the LIVE OpenRouter catalog (fetched + cached via domain → provider).
+  rawModels: publicProcedure.query(({ ctx }) => ctx.services.models.rawCatalog()),
   chat: chatRouter,
   corpus: corpusRouter,
   search: searchRouter,

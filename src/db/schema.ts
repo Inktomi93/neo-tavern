@@ -108,11 +108,13 @@ export const characterVersions = sqliteTable(
     description: text("description").notNull(),
     personality: text("personality"),
     scenario: text("scenario"),
-    firstMessage: text("first_message"),
+    // All greetings unified into ONE ordered array: [0] = the primary first message (ST's
+    // first_mes), the rest = alternates. Folded from the old first_message + alt_greetings — they
+    // ARE the same swipeable set in ST's opening-message UI. Empty array = no seeded opening.
+    greetings: text("greetings", { mode: "json" }),
     exampleMessages: text("example_messages"),
     systemPrompt: text("system_prompt"),
     postHistoryInstructions: text("post_history_instructions"),
-    alternateGreetings: text("alt_greetings", { mode: "json" }),
     tags: text("tags", { mode: "json" }),
     creatorNotes: text("creator_notes"),
     avatarAssetId: text("avatar_asset_id"),
@@ -147,6 +149,12 @@ export const chats = sqliteTable(
       .notNull()
       .default("sdk"),
     provider: text("provider").notNull(), // 'anthropic-sdk' | 'anthropic-direct' | 'openrouter'
+    // The chat's model for its NEXT turn — mode-agnostic (an sdk-mode Claude id from
+    // shared/models.ts, or a raw-mode OpenRouter id from the live catalog). null = fall back
+    // to the mode's default in resolveTurnRouting. Sits beside mode/provider (next-turn routing
+    // config); messages.model records what ACTUALLY ran (provenance). Validation is at selection
+    // time (the picker), not on the send hot path. (migration 0010)
+    model: text("model"),
     sessionId: text("session_id"), // SDK session; null after conversion to raw / for imports
     // Self-ref fork link. SET NULL so a fork survives its parent's deletion.
     parentChatId: text("parent_chat_id").references((): AnySQLiteColumn => chats.id, {
@@ -195,7 +203,20 @@ export const messages = sqliteTable(
     tokensOut: integer("tokens_out"),
     cacheReadTokens: integer("cache_read_tokens"),
     cacheWriteTokens: integer("cache_write_tokens"),
+    // Split of cacheWriteTokens by TTL bucket (result.usage.cache_creation) — sub-mode
+    // defaults to the 1h bucket (measured). Lets analytics separate 5m vs 1h cache writes.
+    cacheCreation5mTokens: integer("cache_creation_5m_tokens"),
+    cacheCreation1hTokens: integer("cache_creation_1h_tokens"),
     costUsd: real("cost_usd"),
+    // Turn-runtime metadata from the SDK result (modelUsage + result). contextWindow + the
+    // running input token total drive the context-fill meter the chat UI shows; ttftMs is
+    // latency UX; terminalReason/apiErrorStatus explain how a turn ended / what transient
+    // errors retries survived. All nullable — populated by runChatTurn, null for imports.
+    contextWindow: integer("context_window"),
+    maxOutputTokens: integer("max_output_tokens"),
+    ttftMs: integer("ttft_ms"),
+    terminalReason: text("terminal_reason"),
+    apiErrorStatus: integer("api_error_status"),
     // Immutable provenance: the preset VERSION this message was generated under. RESTRICT.
     presetVersionId: text("preset_version_id").references(
       (): AnySQLiteColumn => presetVersions.id,
@@ -417,7 +438,7 @@ export const sessionEntries = sqliteTable(
       .notNull()
       .references(() => chats.id, { onDelete: "cascade" }), // resume cache dies with the chat
     sessionId: text("session_id").notNull(), // SDK session id (== chats.session_id)
-    subpath: text("subpath"), // SessionKey.subpath (subagents); null = main transcript
+    subpath: text("subpath"), // SessionKey.subpath (subagents); "" = main transcript (NOT null — null defeats the uuid unique-index dedup; see store.ts)
     seq: integer("seq").notNull(), // append order
     uuid: text("uuid"), // SDK entry uuid — idempotency key (nullable: titles/tags have none)
     type: text("type").notNull(),

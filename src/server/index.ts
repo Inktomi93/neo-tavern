@@ -6,6 +6,7 @@ import { createDb, runMigrations } from "../db/client";
 import { resolveUsername } from "./auth/trust-header";
 import { createChatService } from "./domain/chat";
 import { createCorpusService } from "./domain/corpus";
+import { createModelsService } from "./domain/models";
 import { createSearchService } from "./domain/search";
 import { env } from "./env";
 import { registerDebugRoutes } from "./observability/debug";
@@ -25,6 +26,7 @@ await runMigrations(db);
 const services: Services = {
   chat: createChatService(db),
   corpus: createCorpusService(db),
+  models: createModelsService(),
   search: createSearchService(db),
 };
 

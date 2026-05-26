@@ -1,12 +1,35 @@
 import { and, asc, desc, eq } from "drizzle-orm";
 import type { Db } from "../../../db/client";
-import { characters, characterVersions, chats, messages } from "../../../db/schema";
-import { DEFAULT_CHAT_MODEL_ID } from "../../../shared/models";
+import {
+  characters,
+  characterVersions,
+  characterVersionWorldEntries,
+  chats,
+  chatWorldEntries,
+  messages,
+  personas,
+  presetVersions,
+  worldEntries,
+} from "../../../db/schema";
+import {
+  type AssembleContext,
+  type AssemblePersona,
+  type AssembleWorldEntry,
+  assemblePrompt,
+} from "../../../shared/prompt-assemble";
+import {
+  DEFAULT_PROMPT_CONFIG,
+  type PromptConfig,
+  parsePromptConfig,
+  type WorldInfoScope,
+} from "../../../shared/prompt-config";
 import { getLog } from "../../observability/logger";
-import { type ChatTurnResult, runChatTurn } from "../../providers/claude-sdk";
+import { type ChatTurnResult, ClaudeTurnError, runChatTurn } from "../../providers/claude-sdk";
+import { type RawTurnParams, runRawTurn } from "../../providers/openrouter";
 import { newId } from "../_shared/ids";
 import { withChatLock } from "../_shared/lock";
 import { ensureUser } from "../_shared/users";
+import { resolveTurnRouting } from "./routing";
 import { DbSessionStore } from "./store";
 import {
   ChatNotFoundError,
@@ -17,16 +40,21 @@ import {
   type SendResult,
 } from "./types";
 
-// The runner is injectable so the turn logic is testable with a fake (no sub queries
-// in `pnpm check`); production uses the real SDK turn.
+// Both runners are injectable so the turn logic is testable with fakes (no sub queries / no
+// network in `pnpm check`); production uses the real adapters. Which one runs is decided per
+// turn by resolveTurnRouting (./routing), the single owner of model + provider selection.
 export interface ChatServiceDeps {
   runTurn?: typeof runChatTurn;
+  runRaw?: typeof runRawTurn;
 }
 
-const PROVIDER = "anthropic-sdk";
+// Recent message texts the keyword-WI marker scans. Small + tunable; includes the just-inserted
+// user message (send inserts it before assembling), which is what should trigger keyword WI.
+const RECENT_MESSAGE_WINDOW = 6;
 
 export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatService {
   const runTurn = deps.runTurn ?? runChatTurn;
+  const runRaw = deps.runRaw ?? runRawTurn;
 
   function toView(row: typeof messages.$inferSelect): MessageView {
     return {
@@ -74,6 +102,114 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
     return last[0]?.seq ?? 0;
   }
 
+  function toWorldEntry(
+    row: {
+      content: string;
+      enabled: boolean | null;
+      priority: number | null;
+      legacyKeys: unknown;
+      scope: string | null;
+    },
+    source: AssembleWorldEntry["source"],
+  ): AssembleWorldEntry {
+    const scope: WorldInfoScope = row.scope === "keyword" ? "keyword" : "always";
+    const keys = Array.isArray(row.legacyKeys)
+      ? row.legacyKeys.filter((k): k is string => typeof k === "string")
+      : [];
+    return {
+      content: row.content,
+      scope,
+      keys,
+      priority: row.priority ?? 0,
+      enabled: row.enabled ?? true,
+      source,
+    };
+  }
+
+  // Load the chat's data into an assembly context: the character version, the PINNED persona
+  // (chats.personaId — the native "persona pin": {{user}} resolves from the chat's bound persona,
+  // immune to any later global-persona change, no card mutation), attached world-info from BOTH
+  // junctions (chat-level + character-version-level), and the recent messages for keyword-WI.
+  async function buildAssembleContext(chat: typeof chats.$inferSelect): Promise<AssembleContext> {
+    const cvRows = await db
+      .select()
+      .from(characterVersions)
+      .where(eq(characterVersions.id, chat.characterVersionId))
+      .limit(1);
+    const cv = cvRows[0];
+
+    // The chat's persona. Today it serves as BOTH the pinned (card-field) and active
+    // (user-field) persona; they diverge once persona-switching + a pinned column land.
+    let persona: AssemblePersona | null = null;
+    if (chat.personaId !== null) {
+      const personaRows = await db
+        .select({ name: personas.name, description: personas.description })
+        .from(personas)
+        .where(eq(personas.id, chat.personaId))
+        .limit(1);
+      persona = personaRows[0] ?? null;
+    }
+
+    const wiSelect = {
+      content: worldEntries.content,
+      enabled: worldEntries.enabled,
+      priority: worldEntries.priority,
+      legacyKeys: worldEntries.legacyKeys,
+    };
+    const chatWi = await db
+      .select({ ...wiSelect, scope: chatWorldEntries.scope })
+      .from(chatWorldEntries)
+      .innerJoin(worldEntries, eq(chatWorldEntries.entryId, worldEntries.id))
+      .where(eq(chatWorldEntries.chatId, chat.id));
+    const cvWi = await db
+      .select({ ...wiSelect, scope: characterVersionWorldEntries.scope })
+      .from(characterVersionWorldEntries)
+      .innerJoin(worldEntries, eq(characterVersionWorldEntries.entryId, worldEntries.id))
+      .where(eq(characterVersionWorldEntries.characterVersionId, chat.characterVersionId));
+
+    const recent = await db
+      .select({ content: messages.content })
+      .from(messages)
+      .where(eq(messages.chatId, chat.id))
+      .orderBy(desc(messages.seq))
+      .limit(RECENT_MESSAGE_WINDOW);
+
+    return {
+      character: cv
+        ? {
+            name: cv.name,
+            description: cv.description,
+            personality: cv.personality,
+            scenario: cv.scenario,
+            exampleMessages: cv.exampleMessages,
+            systemPrompt: cv.systemPrompt,
+            postHistoryInstructions: cv.postHistoryInstructions,
+          }
+        : { name: "Assistant", description: "" },
+      pinnedPersona: persona,
+      activePersona: persona,
+      worldEntries: [
+        ...chatWi.map((r) => toWorldEntry(r, "chat")),
+        ...cvWi.map((r) => toWorldEntry(r, "character")),
+      ],
+      recentMessages: recent.map((r) => r.content).reverse(),
+    };
+  }
+
+  // The prompt structure for this chat: its pinned preset version's config, else the default.
+  async function resolveConfig(chat: typeof chats.$inferSelect): Promise<PromptConfig> {
+    if (chat.presetVersionId === null) {
+      return DEFAULT_PROMPT_CONFIG;
+    }
+    const rows = await db
+      .select({ config: presetVersions.config })
+      .from(presetVersions)
+      .where(eq(presetVersions.id, chat.presetVersionId))
+      .limit(1);
+    const raw = rows[0]?.config;
+    return raw === undefined ? DEFAULT_PROMPT_CONFIG : parsePromptConfig(raw);
+  }
+
   async function create(params: CreateChatParams): Promise<{ chatId: string }> {
     const ownerId = await ensureUser(db, params.username);
     const now = Date.now();
@@ -82,9 +218,9 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
     const chatId = newId();
 
     // Minimal character + v1 inline (the skeleton owns this; a real characters domain
-    // takes over later). firstMessage is stored on the version but NOT seeded as a
-    // message yet — greeting-as-assistant-turn seeding into session_entries is a
-    // follow-up (see docs/sdk-notes.md). The chat starts empty; the user opens it.
+    // takes over later). The single form greeting becomes greetings[0]; it's stored on the
+    // version but NOT seeded as a message yet — greeting-as-assistant-turn seeding (+ alternates
+    // as message_variants) is a follow-up. Empty greetings → chat starts empty (user opens it).
     // Circular FK (characters.currentVersionId ↔ character_versions.characterId, migration
     // 0007): insert the character with a NULL currentVersionId, then the version, then repoint
     // — same order the importer uses. Setting currentVersionId up front violates the FK.
@@ -100,7 +236,7 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
       version: 1,
       name: params.characterName,
       description: params.characterDescription,
-      firstMessage: params.firstMessage ?? null,
+      greetings: params.firstMessage ? [params.firstMessage] : [],
       createdAt: now,
     });
     await db
@@ -113,12 +249,29 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
       title: params.title,
       characterVersionId: versionId,
       mode: "sdk",
-      provider: PROVIDER,
+      provider: "anthropic-sdk",
+      // model left null → resolveTurnRouting falls back to DEFAULT_CHAT_MODEL_ID. A picker / the
+      // future create options set it; mode-conversion (5D) sets the raw model.
       createdAt: now,
       updatedAt: now,
     });
 
     return { chatId };
+  }
+
+  // Raw-mode rebuilds the conversation from canon every turn (no SDK session). user/assistant
+  // turns only — system content is carried by the assembled `instructions`, not `input`.
+  async function loadCanonHistory(
+    chatId: string,
+  ): Promise<{ role: "user" | "assistant"; content: string }[]> {
+    const rows = await db
+      .select({ role: messages.role, content: messages.content })
+      .from(messages)
+      .where(eq(messages.chatId, chatId))
+      .orderBy(asc(messages.seq));
+    return rows
+      .filter((r): r is { role: "user" | "assistant"; content: string } => r.role !== "system")
+      .map((r) => ({ role: r.role, content: r.content }));
   }
 
   async function listMessages(params: {
@@ -157,13 +310,100 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
         createdAt: Date.now(),
       });
 
-      const store = new DbSessionStore(db, params.chatId);
-      const turn: ChatTurnResult = await runTurn({
-        prompt: params.content,
-        model: DEFAULT_CHAT_MODEL_ID,
-        sessionStore: store,
-        ...(chat.sessionId ? { resume: chat.sessionId } : {}),
-      });
+      // Assemble the character/system prompt from the chat's pinned preset + its character,
+      // persona, and attached world-info. Built fresh each turn (the recent-message scan for
+      // keyword-WI includes the message just inserted above). static → cached prefix; dynamic →
+      // after the boundary. The chat had NO character prompt before this.
+      const [assembleCtx, promptConfig] = await Promise.all([
+        buildAssembleContext(chat),
+        resolveConfig(chat),
+      ]);
+      const systemPrompt = assemblePrompt(promptConfig, assembleCtx);
+
+      // The single point where model + provider are chosen (no hardcoded model anywhere here).
+      const routing = resolveTurnRouting(chat, promptConfig);
+
+      // Prompt assembly + routing are otherwise opaque — log what they produced so "why did/didn't
+      // this world-info fire / which persona / which model+provider / how big is the cached prefix"
+      // is curl-able via /api/_debug. METADATA ONLY (counts, section ids, trigger keys, ids) —
+      // never the prompt text.
+      getLog().debug(
+        {
+          chatId: params.chatId,
+          mode: routing.mode,
+          provider: routing.provider,
+          model: routing.model,
+          preset: chat.presetVersionId === null ? "default" : "pinned",
+          staticChars: systemPrompt.static.length,
+          dynamicChars: systemPrompt.dynamic.length,
+          staticSections: systemPrompt.trace.staticSections,
+          dynamicSections: systemPrompt.trace.dynamicSections,
+          worldInfoAttached: assembleCtx.worldEntries.length,
+          worldInfoIncluded: systemPrompt.trace.worldInfoIncluded,
+          matchedKeys: systemPrompt.trace.matchedKeys,
+          hasPersona: assembleCtx.activePersona !== null,
+        },
+        "chat: prompt assembled",
+      );
+
+      let turn: ChatTurnResult;
+      try {
+        if (routing.mode === "sdk") {
+          // sdk-mode: stateless resume-per-message through our DB-backed SessionStore.
+          turn = await runTurn({
+            prompt: params.content,
+            model: routing.model,
+            sessionStore: new DbSessionStore(db, params.chatId),
+            systemPrompt,
+            ...(chat.sessionId ? { resume: chat.sessionId } : {}),
+          });
+        } else {
+          // raw-mode: rebuild the conversation from canon (incl. the user message just inserted)
+          // → OpenRouter Responses turn. No session store; provider routing rides through.
+          const rawParams: RawTurnParams["params"] = {
+            ...(routing.params.temperature !== undefined
+              ? { temperature: routing.params.temperature }
+              : {}),
+            ...(routing.params.maxOutputTokens !== undefined
+              ? { maxOutputTokens: routing.params.maxOutputTokens }
+              : {}),
+          };
+          turn = await runRaw({
+            model: routing.model,
+            systemPrompt,
+            history: await loadCanonHistory(params.chatId),
+            params: rawParams,
+            providerRouting: routing.providerRouting,
+          });
+        }
+      } catch (error) {
+        if (error instanceof ClaudeTurnError) {
+          // Atomic send: the generation failed, so roll the user message back out (no
+          // :memory:-safe transaction; the per-chat lock guarantees no racer) — the chat
+          // returns to its prior coherent tip and the client surfaces a typed error.
+          await db
+            .delete(messages)
+            .where(and(eq(messages.chatId, params.chatId), eq(messages.seq, userSeq)));
+          getLog().warn(
+            {
+              chatId: params.chatId,
+              kind: error.kind,
+              retryable: error.retryable,
+              sdkError: error.sdkError,
+              resultSubtype: error.resultSubtype,
+            },
+            "chat turn failed — rolled back user message",
+          );
+          return {
+            status: "error",
+            code: error.kind,
+            retryable: error.retryable,
+            ...(error.resetsAt !== undefined ? { resetsAt: error.resetsAt } : {}),
+            messages: await listByChat(params.chatId),
+          };
+        }
+        throw error; // unexpected (non-provider) failure — let it propagate
+      }
 
       await db.insert(messages).values({
         id: newId(),
@@ -172,12 +412,19 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
         role: "assistant",
         content: turn.reply,
         model: turn.usage.model,
-        provider: PROVIDER,
+        provider: routing.provider,
         stopReason: turn.stopReason,
         tokensIn: turn.usage.tokensIn,
         tokensOut: turn.usage.tokensOut,
         cacheReadTokens: turn.usage.cacheReadTokens,
         cacheWriteTokens: turn.usage.cacheWriteTokens,
+        cacheCreation5mTokens: turn.usage.cacheCreation5mTokens,
+        cacheCreation1hTokens: turn.usage.cacheCreation1hTokens,
+        contextWindow: turn.usage.contextWindow,
+        maxOutputTokens: turn.usage.maxOutputTokens,
+        ttftMs: turn.ttftMs,
+        terminalReason: turn.terminalReason,
+        apiErrorStatus: turn.apiErrorStatus,
         costUsd: turn.usage.costUsd,
         createdAt: Date.now(),
       });
@@ -185,7 +432,9 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
       await db
         .update(chats)
         .set({
-          sessionId: turn.sessionId || chat.sessionId,
+          // sessionId is an sdk-mode concept (the resume handle); raw-mode has none, so don't
+          // touch it there (avoid leaning on runRaw returning a falsy sessionId).
+          ...(routing.mode === "sdk" ? { sessionId: turn.sessionId || chat.sessionId } : {}),
           messageCount: (chat.messageCount ?? 0) + 2,
           totalTokensIn: (chat.totalTokensIn ?? 0) + turn.usage.tokensIn,
           totalTokensOut: (chat.totalTokensOut ?? 0) + turn.usage.tokensOut,
@@ -193,7 +442,19 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
         })
         .where(eq(chats.id, params.chatId));
 
-      getLog().debug({ chatId: params.chatId, seq: userSeq + 1 }, "chat turn complete");
+      // chatId-scoped turn summary (the provider already logs each event at its own level;
+      // this adds the chat context + the context-fill signal the UI will show).
+      getLog().debug(
+        {
+          chatId: params.chatId,
+          seq: userSeq + 1,
+          tokensIn: turn.usage.tokensIn,
+          contextWindow: turn.usage.contextWindow,
+          compactions: turn.events.filter((event) => event.kind === "compaction").length,
+          rateLimit: turn.rateLimit?.status,
+        },
+        "chat turn complete",
+      );
       return { status: "ok", messages: await listByChat(params.chatId) };
     });
   }

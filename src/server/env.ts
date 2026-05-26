@@ -1,5 +1,11 @@
 import process from "node:process";
+import dotenv from "dotenv";
 import { z } from "zod";
+
+// Load a local .env BEFORE parsing. override:true so a checked-in .env (dev) wins over a stale
+// shell export (e.g. an old OPENROUTER_API_KEY lingering in the environment). In prod there's no
+// .env file, so this is a no-op and the deployment's real env vars stand. .env is gitignored.
+dotenv.config({ override: true });
 
 // The ONLY place that touches process.env. Everything else imports `env` and
 // reads known, typed keys (env.PORT) — which is dot access on a real property,

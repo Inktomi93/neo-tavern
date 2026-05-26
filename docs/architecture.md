@@ -86,7 +86,9 @@ flowchart TD
 src/
 ├── shared/              # FOUNDATION — types + schemas (client + server)
 │   ├── schemas/         #   zod schemas shared across the boundary
-│   └── models.ts        #   chat model catalog (latest Claude per tier)
+│   ├── models.ts        #   sdk-mode chat model catalog (latest Claude per tier)
+│   ├── prompt-config.ts #   PromptConfig (the versioned preset blob: sections + cache boundary)
+│   └── prompt-assemble.ts #  pure assemblePrompt(config, ctx) → static/dynamic system prompt
 ├── db/                  # PERSISTENCE (Phase 2)
 │   ├── schema.ts        #   Drizzle tables
 │   ├── client.ts        #   libSQL connection
@@ -99,7 +101,7 @@ src/
 │   ├── embeddings/      # INFRA — BGE-M3 / vectors (Phase 3)
 │   ├── domain/          # BUSINESS LOGIC — one dir per feature
 │   │   ├── _shared/     #   cross-feature domain helpers (the only shared escape)
-│   │   └── <feature>/   #   chat/, corpus/, import/, search/ — entered via index.ts
+│   │   └── <feature>/   #   chat/, corpus/, import/, models/, search/ — entered via index.ts
 │   ├── jobs/            # DRIVER — IN-SERVER background workers (reach db only via domain)
 │   └── trpc/            # DRIVER — transport
 │       ├── context.ts

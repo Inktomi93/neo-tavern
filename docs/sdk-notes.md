@@ -245,3 +245,185 @@ raw-mode is where they're cache-cheap.
 - **Streaming to the client** = forward `stream_event` deltas.
 - **Debugging a bad turn** = `DEBUG=1 pnpm sdk:play` with the offending prompt, or
   the app's own `/api/_debug` (see `observability.md`).
+
+## The chat runtime — which SDK events we handle (implemented, Phase-5 prepwork)
+
+`query()` yields a 30-member `SDKMessage` union; a daily-driver RP chat must do more
+than scrape the reply. `runChatTurn` spawns + resumes, then delegates the whole
+stream to **`consumeTurnStream(stream, ctx)`** (exported, in `providers/claude-sdk.ts`)
+— split out so the mapping is unit-testable with a hand-built stream (no subprocess;
+see `claude-sdk.test.ts`). It returns a `ChatTurnResult` and **throws `ClaudeTurnError`
+on any failure result.**
+
+| SDK message | What we do | Surfaced as |
+|---|---|---|
+| `assistant` (text blocks) | accumulate the reply, capture `stop_reason` | `result.reply` |
+| `result` success | sum `modelUsage` (tokens/cost/**contextWindow**/maxOutputTokens), read `usage.cache_creation` 5m/1h split, `ttft_ms`, `terminal_reason`, `api_error_status` | `result.usage` + columns |
+| `result` error (`error_during_execution`/`max_turns`/`max_budget_usd`/`max_structured_output_retries`) | classify → **throw `ClaudeTurnError`** | typed error |
+| `system`/`compact_boundary` | record trigger/pre·post-tokens; **INFO log** (stream event — the persisted frame is separate, see below) | `events[].compaction` |
+| `system`/`api_retry` | record attempt/delay/code; **WARN** (or **ERROR** if the code is an auth failure — the ban canary) | `events[].api_retry` |
+| `system`/`status` | record `SDKStatus` + `compact_result` | `events[].status` |
+| `rate_limit_event` | snapshot status/resetsAt/type; **WARN** when throttled/rejected | `events[].rate_limit` + `result.rateLimit` |
+| `auth_status` | **WARN unconditionally** — auth changing mid-turn is the ban-risk canary | `events[].auth_status` |
+| `system`/`init` | apiKeySource etc. — the input-token canary on the result is the durable signal | (debug) |
+| `stream_event` | no-op (we don't set `includePartialMessages` yet — see below) | — |
+| tool / task / hook / memory / permission / plugin / mirror_error / … | can't fire with our locked config (`tools:[]`, no MCP, no subagents); **logged at debug, never crash** | (debug) |
+
+**`ClaudeTurnError` is provider-agnostic on purpose.** Its `kind`
+(`rate_limit | auth_failed | billing | invalid | model_unavailable | server | max_output
+| aborted | unknown`) + `retryable` + `resetsAt` are the **single vocabulary the transport
+and UI key off** — the raw-mode (OpenRouter/direct) adapter in Phase 5 maps its own
+failures onto the *same* `kind`s, so the error surface never gets re-derived per provider.
+The raw SDK code (`sdkError`, `resultSubtype`) rides along as a side detail. `domain/chat`
+catches it, **rolls the user message back out** (atomic send — the chat returns to its prior
+tip), and returns `SendResult{ status:"error", code, retryable, resetsAt? }`.
+
+**Per-turn metadata persists** on `messages` (migration 0008): `contextWindow`,
+`maxOutputTokens`, `cacheCreation5mTokens`/`1h`, `ttftMs`, `terminalReason`,
+`apiErrorStatus` — the context-fill meter + latency UX + analytics axes.
+
+**Compaction — MEASURED, not assumed** (`pnpm sdk:compaction`; force it cheaply with
+`CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` — auto-compact triggers at a *percentage* of the model's
+context window, not a token count). What actually happens on a long chat:
+- The `compact_boundary` arrives as a **stream event** (we log it + record `events[].compaction`).
+  Its `compact_metadata` in practice carries only `trigger`/`pre_tokens`/`post_tokens`/`duration_ms`
+  — **no `preserved_messages` relink** (that field exists in the type but was absent in every
+  real compaction observed).
+- What's **persisted** to the store is *not* a "compact_boundary"-typed frame — it's a
+  `type:"system", subtype:"compact_boundary"` marker (content `"Conversation compacted"`,
+  camelCase `compactMetadata`) that **resets the chain root** (`parentUuid:null`; old frames kept
+  only via `logicalParentUuid`) — so the boundary literally becomes "the start of the conversation"
+  — **plus a synthetic `user` frame** holding a real LLM-generated prose summary ("This session is
+  being continued from a previous conversation…"). Compaction costs an LLM call (~6–20s).
+- Old pre-compaction frames stay in the store; resume uses the compacted state (~`post_tokens`) and
+  does **not** re-compact every turn. `DbSessionStore` round-trips these real frames in `seq` order
+  (`chat-session-store.test.ts`).
+- ⚠️ **Fidelity caveat for tool-less RP — but it's controllable.** *Auto* compaction uses NULL/default
+  instructions: a generic coding-agent summary that even ends with "read the full transcript at
+  `/tmp/claude-resume-*.jsonl`" (an affordance the model can't use with `tools:[]`), so specific early
+  details recall unreliably. **BUT the compaction prompt is steerable** (verified):
+  - **Manual `/compact <instructions>`** (send as the turn prompt) → `trigger:"manual"`; the instructions
+    steer the summary. "Preserve the badge number 4471-DELTA" survived *and* was recalled on resume. The
+    instructions guide rather than replace CC's template (the coding skeleton + `/tmp` line persist), but
+    the facts you name survive — so the lossiness was the default prompt, not a hard limit.
+  - **`DISABLE_AUTO_COMPACT=1`** (env, verified) suppresses auto-compaction; **`CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=N`**
+    (env, verified) fires it at N% of the window. Candidates from the env finder (`DISCOVER=compact|context`,
+    unverified): `CLAUDE_CODE_MAX_CONTEXT_TOKENS`, `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, `DISABLE_COMPACT`,
+    `CLAUDE_CODE_DISABLE_1M_CONTEXT`, `USE_API_CONTEXT_MANAGEMENT`.
+  - **The lever:** `DISABLE_AUTO_COMPACT=1` + we trigger manual `/compact <RP-tuned instructions>` when
+    `contextWindow` (captured per turn) fills → RP-grade steered compaction on the free sub, a middle path
+    between accepting lossy auto-compaction and fully owned context (raw mode / custom `load()`). Not baked
+    into `buildClaudeSdkEnv()` — a build decision for the compaction-strategy work. (`pnpm sdk:compaction`)
+
+That probe also confirmed **seeding a session from frames works** (raw→sdk / import) — but the
+resume `sessionId` must be a **valid UUID** (an arbitrary string is rejected) and the frame shape is
+the full structure above (`queue-operation`/`user`/`ai-title`/two `assistant`/`last-prompt` per turn,
+with `parentUuid` chains), not just user/assistant turns.
+
+(Separately, the store test pinned a real bug: the uuid-dedup unique index is defeated by a NULL
+`subpath` because SQLite treats NULLs as distinct, so the main transcript now stores `""` not NULL.)
+
+**Deferred (no consumer yet):** token-delta streaming (`includePartialMessages` +
+`stream_event` parsing) — the `onEvent` sink is wired as the seam, but delta-forwarding
+lands with the SSE chat UI. A persisted `chat_events` table — the log ring + `events[]`
+return suffice until the UI needs history.
+
+## Observed shapes & the compaction control surface (measured — `pnpm sdk:compaction`)
+
+The concrete reference for building on this (haiku; *shapes* are model-independent). **Two channels,
+don't conflate them:** *SessionStore frames* = what `append()` receives and we persist to
+`session_entries` (the resume substrate); *stream messages* = the `SDKMessage`s `query()` yields to
+`consumeTurnStream` (observability + the reply). Same concept (e.g. compaction) appears in BOTH, with
+different shapes/casing.
+
+### SessionStore frames the SDK writes, per turn
+
+| frame `type` | per turn | `uuid`? | key fields | what it is |
+|---|---|---|---|---|
+| `queue-operation` | 2 | no | `operation` (enqueue/dequeue), `timestamp`, `sessionId` | internal queue marker |
+| `user` | 1 | yes | `parentUuid`, `promptId`, `message{role,content}`, `permissionMode`, `cwd`, `gitBranch`, `version` | the user turn |
+| `assistant` | 2 | yes | `parentUuid`, `message{model,id,content,stop_reason}`, `requestId` | **one thinking frame + one text frame** |
+| `ai-title` | 0–2 | no | `aiTitle`, `sessionId` | auto chat title (intermittent; repeats/updates) |
+| `last-prompt` | 1 | no | `lastPrompt`, `leafUuid`, `sessionId` | resume bookmark |
+
+- Frames link via a **`parentUuid` chain** (each → the prior frame's uuid).
+- uuid-less frames (`queue-operation`/`ai-title`/`last-prompt`) bypass our dedup index → always insert.
+- **Seeding (raw→sdk / import) must reproduce this whole structure**, not just user/assistant — and the
+  resume `sessionId` must be a real UUID (an arbitrary string is rejected outright).
+
+### Compaction frames (persisted to the store)
+
+| frame | shape |
+|---|---|
+| boundary | `{type:"system", subtype:"compact_boundary", content:"Conversation compacted", parentUuid:null, logicalParentUuid:<last user uuid>, compactMetadata:{trigger,preTokens,postTokens,durationMs}, uuid, slug, …}` |
+| summary | a `user` frame whose `message.content` = *"This session is being continued from a previous conversation… Summary: …"* (the LLM summary prose) |
+
+- `parentUuid:null` on the boundary **resets the chain root** — it becomes "the start of the convo";
+  pre-compaction frames stay in the store but hang off `logicalParentUuid` only.
+- **Casing split:** persisted frame is **camelCase** (`compactMetadata.preTokens`); the *stream* message
+  is **snake_case** (`compact_metadata.pre_tokens`). `preserved_messages`/`preserved_segment` are typed
+  but were **absent** in every compaction observed.
+
+### Turn message stream (what `query()` yields)
+
+| turn | order (minus `stream_event` deltas) |
+|---|---|
+| normal | `system/init → [rate_limit_event] → assistant(thinking) → assistant(text) → result/success` |
+| auto-compaction | `system/init → system/status(compacting) → system/compact_boundary(trigger:auto) → user(summary) → assistant → result/success` |
+| manual `/compact` | `system/status → system/init → system/compact_boundary(trigger:manual) → user → user(summary) → result/success` (**no assistant** — `/compact` compacts, doesn't generate) |
+
+`rate_limit_event` ordering floats; `system/init` appears every turn (each is a fresh subprocess).
+
+### Settable vs read-only
+
+**Settable — we control these:**
+
+| knob | how | status |
+|---|---|---|
+| disable auto-compaction | `DISABLE_AUTO_COMPACT=1` (subprocess env) | ✅ verified |
+| auto-compaction threshold | `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=N` (% of window) | ✅ verified |
+| **compaction prompt** | send **`/compact <instructions>`** as the turn prompt → `trigger:"manual"`, steers the summary | ✅ verified |
+| cache TTL | `FORCE_PROMPT_CACHING_5M` / `ENABLE_PROMPT_CACHING_1H` (env) | ✅ (caching section) |
+| system prompt + static/dynamic split | `systemPrompt` (string[]) + `SYSTEM_PROMPT_DYNAMIC_BOUNDARY` | ✅ |
+| model / resume / store | `model`, `resume`, `sessionStore` options | ✅ |
+| effective context size | `CLAUDE_CODE_MAX_CONTEXT_TOKENS` (env) | ⚠ candidate (finder, unverified) |
+| other compaction env | `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, `DISABLE_COMPACT`, `CLAUDE_CODE_DISABLE_1M_CONTEXT`, `USE_API_CONTEXT_MANAGEMENT`, `CLAUDE_CODE_COLD_COMPACT`, `CLAUDE_AFTER_LAST_COMPACT`, `CLAUDE_CODE_DISABLE_PRECOMPACT_SKIP` | ⚠ candidate |
+| inline `settings.autoCompactEnabled` / `autoCompactWindow` | typed `Options.settings` | ✖ did NOT change behavior in test (window=2000 never fired) — **use the env vars instead** |
+
+**Read-only — reported back, capture for analytics/UX but can't dictate:**
+- `compact_metadata` (stream): `trigger`, `pre_tokens`, `post_tokens`, `duration_ms`.
+- `modelUsage` (result): `inputTokens`, `outputTokens`, `cacheReadInputTokens`, `cacheCreationInputTokens`,
+  **`contextWindow`**, `maxOutputTokens`, `costUSD`; plus `usage.cache_creation.ephemeral_5m/1h_input_tokens`.
+- `rate_limit_info`: `status`, `resetsAt`, `rateLimitType`, `utilization`.
+- SDK-stamped frame metadata: `uuid`, `parentUuid`, `logicalParentUuid`, `promptId`, `requestId`, `cwd`,
+  `gitBranch`, `version` — we persist verbatim, never author.
+
+**The planned compaction strategy** (not built): `DISABLE_AUTO_COMPACT=1` + watch `contextWindow` per
+turn + trigger manual `/compact <RP-tuned instructions>` before the window fills → steered, RP-grade
+compaction on the free sub. Env knobs are NOT yet in `buildClaudeSdkEnv()` — that's the build step.
+
+## Raw mode — OpenRouter (`@openrouter/sdk` + Responses API)
+
+The OTHER provider (Phase 5 escape valve, non-Claude / paid). Built on the **official `@openrouter/sdk`**
+(v0.12.35) + the **Responses API** — deliberately **not** the `openai` package (removed) and **not**
+card-curator (its chat is a local llama-server). Working reference: `/home/inktomi/discovery/scaffold/index.ts`.
+
+- **Client + call:** `new OpenRouter({ apiKey })` → `await client.beta.responses.send({ responsesRequest: {...} })`.
+  The class method THROWS typed errors. `providers/openrouter.ts` is the adapter (`runRawTurn`, `listOpenRouterModels`).
+- **The Responses API splits `instructions` (system) from `input` (conversation)** — maps onto our
+  `assemblePrompt` static/dynamic: static → `instructions` (cached via `promptCacheKey`), conversation → `input`
+  items (user/assistant; never start with assistant — pad a user stub). Params (`temperature`/`topP`/penalties/
+  `maxOutputTokens`/`reasoning.effort`) flow from the preset config.
+- **Typed errors → our `ClaudeTurnError` kinds** by `statusCode` (the base `OpenRouterError` carries it):
+  401/403→auth_failed, 402→billing, 404→model_unavailable, 429→rate_limit, 400/413/422→invalid, 5xx→server,
+  connection/timeout→server, abort→aborted. So raw + sdk turns share ONE provider-agnostic boundary + the
+  same `ChatTurnResult`.
+- **Result (non-streaming):** `output[]` → items `type:"message"` → `content type:"output_text"` → text;
+  `usage` = `{inputTokens, outputTokens, totalTokens, inputTokensDetails.cachedTokens, cost}`.
+- **Catalog:** `GET /models` is a **public** live catalog (no key) — `listOpenRouterModels` fetches + normalizes
+  + caches it; exposed via the `rawModels` tRPC query (`domain/models`).
+- **The key:** the valid `OPENROUTER_API_KEY` lives in a gitignored `.env`, loaded by `dotenv` with
+  `override:true` (a stale shell export was returning 401 "User not found"). `/models` works without it.
+- **Streaming events** (for the future SSE seam): `response.output_text.delta`, `response.reasoning_summary_text.delta`,
+  `response.completed` (usage), `response.failed`/`incomplete`. Not wired yet (non-streaming for now).
+- The SDK also exposes image-gen + routing metadata + more — for later.

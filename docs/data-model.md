@@ -64,11 +64,14 @@ export const characterVersions = sqliteTable('character_versions', {
   description: text('description').notNull(),
   personality: text('personality'),
   scenario: text('scenario'),
-  firstMessage: text('first_message'),
+  // migration 0009: first_message + alt_greetings folded into ONE ordered array, [0] = the
+  // primary first message (ST first_mes), rest = alternates — they're the same swipeable opening
+  // set in ST. Importer builds [first_mes, ...alternate_greetings] (empties dropped); seeding (later)
+  // makes greetings[0] the opening message with the rest as message_variants. [] = no seeded opening.
+  greetings: text('greetings', { mode: 'json' }),
   exampleMessages: text('example_messages'),
   systemPrompt: text('system_prompt'),
   postHistoryInstructions: text('post_history_instructions'),
-  alternateGreetings: text('alt_greetings', { mode: 'json' }),
   tags: text('tags', { mode: 'json' }),
   creatorNotes: text('creator_notes'),
   avatarAssetId: text('avatar_asset_id'),
@@ -88,6 +91,8 @@ export const chats = sqliteTable('chats', {
   // YGWYG mode
   mode: text('mode', { enum: ['sdk', 'raw'] }).notNull().default('sdk'),
   provider: text('provider').notNull(), // 'anthropic-sdk' | 'anthropic-direct' | 'openrouter'
+  model: text('model'), // 0010 — the chat's model for its NEXT turn (mode-agnostic: an sdk Claude id
+  // OR a raw OpenRouter id). null → mode default in resolveTurnRouting. messages.model = provenance.
   sessionId: text('session_id'), // null after conversion to raw or for imports
   parentChatId: text('parent_chat_id'), // set when this chat is a fork
   convertedAt: integer('converted_at'),
@@ -121,6 +126,17 @@ export const messages = sqliteTable('messages', {
   tokensOut: integer('tokens_out'),
   cacheReadTokens: integer('cache_read_tokens'),
   cacheWriteTokens: integer('cache_write_tokens'),
+  // Turn-runtime metadata from the SDK result (migration 0008). cacheWrite split by TTL
+  // bucket (sub-mode defaults 1h); contextWindow + maxOutputTokens drive the context-fill
+  // meter; ttftMs is latency UX; terminalReason/apiErrorStatus = how a turn ended / what
+  // transient errors retries survived. All nullable — set by runChatTurn, null for imports.
+  cacheCreation5mTokens: integer('cache_creation_5m_tokens'), // 0008
+  cacheCreation1hTokens: integer('cache_creation_1h_tokens'), // 0008
+  contextWindow: integer('context_window'), // 0008
+  maxOutputTokens: integer('max_output_tokens'), // 0008
+  ttftMs: integer('ttft_ms'), // 0008
+  terminalReason: text('terminal_reason'), // 0008 — SDK TerminalReason
+  apiErrorStatus: integer('api_error_status'), // 0008 — transient HTTP status retries recovered from
   costUsd: real('cost_usd'), // result.modelUsage[].costUSD — for the analytics layer
   presetVersionId: text('preset_version_id'), // → preset_versions.id (RESTRICT, immutable provenance); 0007
   reasoningEffort: text('reasoning_effort'), // per-turn provenance (low|medium|high|…) — 0007; analytics axis
@@ -165,6 +181,14 @@ export const characterVersionWorldEntries = sqliteTable('cv_world_entries', {
 // Presets use the identity / content-version / pin triad (copy-on-write, like characters) —
 // migration 0007. config + schemaVersion live on preset_versions, so messages.presetVersionId
 // is an IMMUTABLE provenance record (a mutable preset would rewrite past generation history).
+// The `config` blob IS the prompt structure: a `PromptConfig` (shared/prompt-config.ts) — a
+// reordered list of sections (literal blocks + character/persona/world_info markers + a cache
+// `boundary`) + params, validated by zod, evolved via schemaVersion lift-fns (no DB migration).
+// `assemblePrompt` (shared/prompt-assemble.ts) renders it against a chat into the static (cached)
+// + dynamic system-prompt halves. Persona pin is native: chats.personaId resolves `{{user}}` in
+// card-derived sections (pinned) vs user-authored sections (active) — no card mutation. The
+// prompt structure lives in the blob (NOT normalized section rows) precisely because the version
+// must be an immutable snapshot — mutating a shared section row would corrupt past provenance.
 export const presets = sqliteTable('presets', {
   id: text('id').primaryKey(),
   ownerId: text('owner_id').notNull().references(() => users.id),
@@ -263,10 +287,20 @@ export const taggables = sqliteTable('taggables', {
     and repoints `currentVersionId`. Chats keep their pinned version, so editing a
     character never rewrites past canon — and in `sdk` mode the version is already
     baked into the session at start, so an edit can't disturb an in-flight chat.
-- **World Info is explicit attachment, not keyword scanning.** `chat_world_entries`
-  and `cv_world_entries` are the junctions that attach entries to a chat or a
-  character version. `world_entries.legacyKeys` preserves ST's keyword triggers for
-  **import compatibility only** — we never scan on them.
+- **World Info is explicit attachment with a per-entry `scope`** (refines the earlier
+  "never keyword-scanned" stance — *basic* keyword is now in). `chat_world_entries` /
+  `cv_world_entries` attach entries — the **candidate pool** (we never scan *unattached*
+  entries, unlike ST's bound-world scan). `scope` decides activation AND placement:
+  - **`always`** (default) → the **static** (cached) system prompt — byte-stable, paid once.
+  - **`keyword`** → matched against recent messages by the entry's keys (basic, case-insensitive,
+    whole-word; `world_entries.legacyKeys` is the imported seed → promote to an active key list),
+    injected into the **dynamic** system prompt on a hit (so the per-turn set never busts the
+    cached static prefix). So no separate `position` column is needed — `scope` *is* the placement.
+
+  Deliberately NOT ST (slop guard): no secondary-key AND/NOT logic, recursion, min-activations,
+  timed effects (sticky/cooldown/delay), probability, inclusion groups, or floating `atDepth`
+  placement. Schema delta when built: add `'keyword'` to the `scope` enum + an active `keys` list;
+  `priority`/`enabled` already exist.
 - **`messages` is the source of truth; `session_entries` is an sdk-mode resume cache.**
   `messages` is the clean canon for **all** modes (display, search, analytics); the
   raw SDK transcript in `session_entries` exists only in sdk-mode, only to feed
@@ -283,7 +317,17 @@ export const taggables = sqliteTable('taggables', {
   Because sdk-mode is **stateless** (a fresh `query({resume})` per message),
   `result.usage` is per-turn, so `tokensIn/Out` + `cacheRead/WriteTokens` + `costUsd`
   are a direct copy — no cumulative differencing (a warm session would need it). These
-  feed the analytics layer (the actual product).
+  feed the analytics layer (the actual product). `session_entries.subpath` stores **`""`**
+  (not NULL) for the main transcript: the uuid-dedup unique index `(session_id, subpath,
+  uuid) WHERE uuid IS NOT NULL` is defeated by a NULL `subpath` (SQLite treats every NULL
+  as distinct, so replayed uuids wouldn't dedup); `""` keeps the idempotency honest. The
+  store persists **every** frame the SDK emits and replays them in `seq` order, so resume
+  works across compaction. MEASURED (`pnpm sdk:compaction`): a compaction persists a
+  `system`/`compact_boundary` marker (resets the chain root, `parentUuid:null`) **+ a synthetic
+  `user` frame holding an LLM summary** — NOT a `preserved_messages` relink (absent in practice).
+  Old frames stay; resume uses the compacted state. Caveat: the SDK summary points the model at a
+  `/tmp` transcript it can't read with `tools:[]`, so detail recall degrades — long-RP fidelity
+  wants owned context (see `docs/sdk-notes.md`).
 - **Concurrency & live sync (multi-device, same chat — expected for one user on phone +
   desktop).** **IMPLEMENTATION STATUS (be honest — partially built):**
   - **✅ BUILT:** the optimistic `seq` guard + the in-process per-chat lock. A send carries the
@@ -294,6 +338,11 @@ export const taggables = sqliteTable('taggables', {
     in-process mutex (`_shared/lock.ts` `withChatLock`) — one in-flight generation per chat,
     so two concurrent `resume`s can't corrupt `session_entries`. (Tested:
     `tests/integration/chat.test.ts` stale-seq case proves the model isn't called.)
+  - **✅ BUILT: atomic send on failure.** A failed generation (typed `ClaudeTurnError` from
+    the provider — `kind` ∈ rate_limit/auth_failed/billing/…) **rolls the user message back
+    out** and returns `status:"error" + {code, retryable, resetsAt?}`, so the chat stays at
+    its prior coherent tip and the client can surface a typed reason + re-send. `code` is the
+    **provider-agnostic** vocabulary raw-mode reuses in Phase 5.
   - **⏭ DEFERRED (designed, NOT built):** **live push** — a tRPC v11 subscription (SSE) →
     TanStack Query invalidation so the other device auto-refreshes without a manual reload.
     Today it's *reconcile-on-send* (you learn you're stale when you send, then re-send), not
@@ -307,10 +356,16 @@ export const taggables = sqliteTable('taggables', {
     disables proxy buffering (caddy auto-flushes `text/event-stream`) + `: ping` keep-alives
     (~20s) so h2/h3 idle timeouts don't drop an idle stream.
 - **Chat mode / provider / session / fork.** `mode` = `sdk` | `raw`; `provider` =
-  `anthropic-sdk` | `anthropic-direct` | `openrouter`; `sessionId` = the Agent SDK
-  session (null after conversion to raw, or for imports); `parentChatId` +
-  `forkedAt` + `convertedAt` track the one-way escape valve. Aggregates exist for
-  fast analytics without scanning all messages.
+  `anthropic-sdk` | `anthropic-direct` | `openrouter`; `model` = the model for the chat's
+  NEXT turn (mode-agnostic; null → mode default); `sessionId` = the Agent SDK session (null
+  after conversion to raw, or for imports); `parentChatId` + `forkedAt` + `convertedAt` track
+  the one-way escape valve. Aggregates exist for fast analytics without scanning all messages.
+  **`mode`/`provider`/`model` are the chat's NEXT-turn routing config; `messages.*` records what
+  ACTUALLY ran (provenance).** `domain/chat/routing.ts` `resolveTurnRouting(chat, config)` is the
+  **single owner** of model+provider selection — `send()` calls it and branches the runner
+  (`runChatTurn` / `runRawTurn`); nothing hardcodes a model. Model *validity* is checked at
+  selection time (the picker), not on the send hot path. raw-mode provider-routing prefs ride in
+  `chats.metadata` (slop guard — promote to a column if earned) → the Responses `provider` field.
 - **Embeddings = libSQL native vectors** (spike-validated; see `build-plan.md`).
   `embeddings` rows are polymorphic (`entityType`/`entityId` — a character version,
   a message, …) and hold the vector directly in an `F32_BLOB(1024)` column with a
@@ -386,11 +441,10 @@ The card JSON is base64 in PNG `tEXt` chunks — keyword **`chara`** (V2) and/or
 | `description` | `description` |
 | `personality` | `personality` |
 | `scenario` | `scenario` |
-| `first_mes` | `firstMessage` (the greeting — see below) |
+| `first_mes` + `alternate_greetings` | `greetings[]` (folded — `[first_mes, ...alternates]`, empties dropped) |
 | `mes_example` | `exampleMessages` |
 | `system_prompt` | `systemPrompt` |
 | `post_history_instructions` | `postHistoryInstructions` |
-| `alternate_greetings` | `alternateGreetings` |
 | `tags` | `tags` |
 | `creator_notes` | `creatorNotes` |
 | `extensions.depth_prompt` | author's note seed |
@@ -418,16 +472,20 @@ note_depth, note_role, timedWorldInfo, variables }, user_name, character_name }`
 ### Conversation start — assistant-first vs user-first (validated)
 
 A chat whose first message is `is_user:false` **starts assistant-first** — that
-first message is the character's greeting (== card `first_mes`).
+first message is the character's greeting (`character_versions.greetings[0]` after the
+0009 fold; alternates are the rest of the array). Greeting *seeding* is still deferred
+(Phase 5): seed `greetings[0]` as `messages` row #1 (`role:'assistant'`) with the
+alternates as its `message_variants` (reuse the swipe machinery); empty `greetings` →
+no opening (user speaks first, or a "generate to open" no-user-message turn).
 
-- **New chat:** store the greeting as `messages` row #1 (`role:'assistant'`). The
-  SDK prompt is user-only, so for turn 1 the greeting rides in the composed
-  `systemPrompt` as the established opening line — **validated**: the model
-  continues in-character from it. Subsequent turns use the SDK session (`resume`).
-- **Imported chat (full history):** too much for the system prompt — seed the real
-  transcript via the session store (`importSessionToStore` + the `parentUuid`-chained
-  JSONL frame format; that's the Phase 4 task) and `resume`. Imported chats are
-  `mode:'raw'` from day zero (the SDK can't continue them anyway).
+- **New chat:** store the greeting as `messages` row #1 (`role:'assistant'`). For turn 1
+  the model continues in-character from it (validated); subsequent turns resume the session.
+- **Imported chat (full history):** seed the real transcript via the session store
+  (`importSessionToStore` + the `parentUuid`-chained frame format — measured in
+  `chat-session-store.test.ts` / `pnpm sdk:compaction`; resume needs a VALID-UUID session id).
+  **Imports are NOT forced to `mode:'raw'`** (superseded — we own the transcript via the
+  DB-backed store, so an imported chat can be continued in sdk-mode by seeding `session_entries`
+  from its `messages`; mode is a per-chat choice).
 
 ## SDK session persistence — in our DB, not on disk (validated)
 

@@ -234,6 +234,18 @@
       "linter": { "rules": { "style": { "useNamingConvention": "off" } } }
     },
     {
+      // Providers are the boundary that speaks external model-API wire formats, whose
+      // fields are snake_case by spec — the Agent SDK (stop_reason, total_cost_usd,
+      // session_id, cache_creation…) now, OpenRouter/OpenAI (max_tokens, finish_reason)
+      // in raw mode. Constructing/asserting those shapes (esp. in tests) must keep the
+      // wire names verbatim, so useNamingConvention can't apply here (cf. the importer +
+      // embeddings overrides). Same rationale as env.ts's CONSTANT_CASE override. The
+      // session-store test builds SDK SessionStoreEntry frames (compact_metadata,
+      // preserved_messages…), the same wire shape, so it shares this exemption.
+      "includes": ["src/server/providers/**", "tests/integration/chat-session-store.test.ts"],
+      "linter": { "rules": { "style": { "useNamingConvention": "off" } } }
+    },
+    {
       // The corpus importer parses SillyTavern's external, multi-spec wire JSON,
       // whose field names are snake_case by spec (first_mes, char_name, insertion_order…).
       // Keeping those names visible makes the port auditable against the ST spec +

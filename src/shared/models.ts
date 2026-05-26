@@ -14,5 +14,13 @@ export const CHAT_MODELS = [
 
 export type ChatModelId = (typeof CHAT_MODELS)[number]["id"];
 
-/** Default until the user toggles (answers the brief's open model question). */
+/** Default sdk-mode (Claude Agent SDK) model until the user toggles. */
 export const DEFAULT_CHAT_MODEL_ID: ChatModelId = "claude-opus-4-7";
+
+/**
+ * Default raw-mode (OpenRouter) model — only the FALLBACK when a raw chat has no model
+ * pinned yet (the picker normally sets `chats.model` from the live catalog). `openrouter/auto`
+ * is OpenRouter's dynamic auto-router (it picks a capable model per request) — the safe,
+ * "look it up dynamically" default that needs no hardcoded provider/model id. Overridable.
+ */
+export const DEFAULT_RAW_MODEL_ID = "openrouter/auto";

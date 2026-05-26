@@ -108,8 +108,85 @@ empty** — 100% rails, 0% product.
    (cascade policy) + presets → content-versioning (`preset_versions` triad) +
    `reasoningEffort` columns. Validated on the real corpus (foreign_key_check 0; importer
    idempotent under FKs); fixed a circular-FK bug in `domain/chat`. **Phase 4 is complete.**
-7. **Analytics** — `domain` queries + `features` charts (`recharts`), one chart at
+7. **Phase 5 — chat-first frontend + mode escape valve** (CURRENT). The mission pivoted:
+   chat is now co-equal with the corpus (a prettier SillyTavern). Foundations landed; the
+   integration + UX remain.
+   - **SDK-runtime hardening ✅** — `consumeTurnStream` classifies the full Agent SDK message
+     union (compaction/retry/rate-limit/auth/errors) into `events[]` + a provider-agnostic
+     `ClaudeTurnError`; atomic send (rollback → `SendResult{status:"error"}`); migration 0008
+     turn-metadata columns. Compaction measured empirically (`pnpm sdk:compaction`). See `sdk-notes.md`.
+   - **Prompt assembly ✅ (keystone)** — `shared/prompt-config.ts` (`PromptConfig` Zod: reorderable
+     sections + markers + cache `boundary`, lives in the preset `config` blob) + `shared/prompt-assemble.ts`
+     (`assemblePrompt` → static/dynamic system halves) wired into `runChatTurn`. World Info `always`→static
+     / `keyword`→dynamic; dual-persona pin ({{user}} pinned in card sections, active in user sections);
+     debug trace. `character_versions.greetings[]` fold (migration 0009; re-imported the corpus).
+   - **Raw mode 5A/5B ✅** — `@openrouter/sdk` + the **Responses API** (NOT the openai package).
+     **5A**: live `/models` catalog (`listOpenRouterModels` → `domain/models` → `rawModels` tRPC). **5B**:
+     `runRawTurn` (assembled system → `instructions`, canon history → `input`, typed errors → our kinds,
+     same `ChatTurnResult`). Both live-validated. `dotenv` loads the real `.env` key. See `sdk-notes.md`.
+   - **Mode routing 5C ✅** — **centralized model+provider selection.** `chats.model` (migration 0010,
+     nullable, mode-agnostic — the chat's model for its NEXT turn; `messages.model` stays provenance) +
+     `DEFAULT_RAW_MODEL_ID` (`openrouter/auto`) in `shared/models.ts`. **`resolveTurnRouting(chat, config)`**
+     (`domain/chat/routing.ts`) is the SINGLE owner of `{provider, model, params, providerRouting?}` —
+     `send()` names no model and hardcodes no provider, it calls the resolver and branches the runner:
+     `sdk`→`runChatTurn` (sessionStore+resume), `raw`→`runRawTurn` (history from canon, no session_entries).
+     Both injectable (fakes in tests); shared persist/rollback is provider-agnostic (`provider`=`routing.provider`,
+     `sessionId` updated sdk-only). Resolver fails loud on an incoherent/unimplemented mode+provider combo
+     (raw has two DESIGNED providers — openrouter + anthropic-direct; only openrouter built). `runRawTurn` gained
+     optional `providerRouting` → the Responses `provider` field (sourced from `chats.metadata`; the "+ providers"
+     half). Validation is at SELECTION time (the picker), not the send hot path. Verified: 92 tests green
+     (7 resolver cases + raw round-trip + raw error-rollback); migration 0010 applied to the real corpus DB
+     (801 chats intact, FK-clean).
+   - **Remaining (in order):**
+     - **5D — conversion + fork-and-convert**: `convertToRaw` (one-way: mode/provider/convertedAt) +
+       `forkChat(atSeq, targetMode)` (new chat, `parentChatId`/`forkedAt`, copy canon[1..K]; sdk-target
+       seeds `session_entries` with a VALID UUID, raw-target rebuilds from canon). tRPC + tests. The
+       model we logic'd out + probe-verified (canon is the only thing that crosses).
+     - **5E — swipes + edits**: swipe = regen last assistant turn → new `message_variant` + `activeVariantIdx`;
+       edit = mutate + (sdk) re-resume from the truncated branch / (raw) rebuild. Cache-cheap in raw.
+8. **Analytics (Phase 6)** — `domain` queries + `features` charts (`recharts`), one chart at
    a time, only when there's a real question.
+
+## Deferred backlog (consolidated — what's parked + where it belongs)
+
+**Phase 4 (corpus) — deferred by choice, not blocked:**
+- **find-similar / find-duplicates** — the optional standalone corpus feature (cosine ≥ 0.92
+  `vector_top_k` self-join). `docs/corpus-import.md`.
+- **CLIP image embeddings** (visual card similarity) — feasible, text-only for now. `docs/corpus-import.md`,
+  `docs/conventions.md`.
+
+**Phase 5 (chat) — beyond 5C/5D/5E above:**
+- **Greeting seeding** — `greetings[0]` → the opening assistant message, alternates → `message_variants`
+  (reuse the swipe machinery). Empty greetings → user speaks first / "generate to open" (a no-user-message turn).
+- **`{{memory}}` retrieval marker** — RAG over chat history into the dynamic system prompt (reuses the
+  embedding stack; embed chat-message chunks, knn scoped to this chat, inject above the boundary).
+- **Managed compaction** — `DISABLE_AUTO_COMPACT=1` + watch `contextWindow` + a manual `/compact` with an
+  RP-tuned prompt (SDK auto-compaction's "/tmp transcript" crutch is lossy for tool-less RP — measured).
+  Alternatively/with it, an **owned-context `load()`** (curated transcript for long sdk-mode RP).
+- **Streaming → UI** — forward token deltas (sdk `includePartialMessages` / Responses stream events) over
+  an SSE tRPC subscription. The `onEvent` seam + the streaming events both exist; the consumer doesn't.
+- **Live-push / multi-device sync** — SSE subscription + Query invalidation (today: reconcile-on-send). The
+  stateless design enables it (`docs/data-model.md` concurrency section).
+- **Preset CRUD + editor** — a copy-on-write preset domain service (mirror the importer's version forking)
+  + the prompt-manager UI (drag-reorder sections, per-section toggles).
+- **`chats.pinnedPersonaId`** — true persona-switch divergence (today the chat's single persona = both
+  pinned + active; an additive column when persona-switching lands).
+- **Granular raw-mode caching** — `cache_control` breakpoints (static cached, dynamic fresh) vs the current
+  coarse `promptCacheKey` over the whole `instructions`.
+- **Persisted `chat_events` table** — compaction/retry/rate-limit history (log ring + `events[]` suffice now).
+
+**Cleanups (do alongside the above):**
+- **`ClaudeTurnError` → `TurnError`** + extract the shared contract to `providers/turn.ts` — OpenRouter
+  currently throws a "Claude"-named error; the boundary is provider-agnostic. Mechanical rename.
+- **Error-variant UI** — the client only handles `status:"stale"`; the `status:"error"` send result (with
+  `code`/`retryable`/`resetsAt`) has no UI yet. ~20-min win, independent of everything.
+
+**Cross-cutting / infra deferred:**
+- Chat UX polish: markdown render (`react-markdown`), avatars, message styling, chat list, swipe UI,
+  context-fill meter (`contextWindow` is captured), virtualization (`@tanstack/react-virtual`).
+- Editors: prompts/cards/world-entries (`@uiw/react-codemirror`). `zustand` (when genuine global state appears).
+- **Docker/compose** (the deploy image into the authentik+caddy stack) · **Playwright E2E** (one happy-path
+  per critical flow). Both deferred since Phase 1.
 
 ## Why chat before the corpus (which is the product)
 

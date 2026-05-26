@@ -1,6 +1,9 @@
 # Not a multi-package workspace yet (the brief defers that). This file exists
 # only because pnpm 11 reads its build-script allowlist here, not in package.json.
 allowBuilds:
+  # Prebuilt ESM ships in the package; its postinstall isn't needed (verified: live
+  # beta.responses.send works without it), so skip the build + silence the prompt.
+  '@openrouter/sdk': false
   esbuild: true
   # native ONNX runtime for @huggingface/transformers (BGE-M3 local embeddings, Phase 3)
   onnxruntime-node: true

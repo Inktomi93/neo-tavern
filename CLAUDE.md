@@ -61,9 +61,17 @@ mode.
 ### Other locked product principles
 - **Append-only conversation log is the source of truth** — not a prompt template
   rebuilt from primitives every turn.
-- **World Info is explicit attachment** (chat↔entry junction table), never
-  keyword-scanned, never floating-depth. Author's note = a persistent editable
-  system message, not a depth injection.
+- **World Info is explicit attachment** (chat↔entry junction table) with a per-entry
+  `scope` that decides BOTH activation and placement: **`always`** → the **static**
+  (cached) system prompt (byte-stable → paid once); **`keyword`** → injected into the
+  **dynamic** system prompt (after `SYSTEM_PROMPT_DYNAMIC_BOUNDARY`, so the per-turn set
+  never busts the cached prefix) when one of its keys matches recent messages — *basic*
+  case-insensitive whole-word match only. Candidate pool stays the **attached** entries
+  (we never scan unattached lore, unlike ST's bound-world scan). Deliberately NOT ST: no
+  secondary-key AND/NOT logic, recursion, timed effects, probability, or floating-depth.
+  Author's note = a persistent editable system message, not a depth injection. (STANCE
+  REFINED, owner-approved: the original "never keyword-scanned" is superseded — *basic*
+  keyword is in; the rejected complexity is not.)
 - **PNG character cards are transport only** (import/export); the DB row is
   canonical. Chats live in SQLite rows, not JSONL. Asset binaries on a mounted
   volume, referenced by hash.
@@ -83,8 +91,9 @@ mode.
 - **Runtime:** Node 24 (brief said 22; we target 24), pnpm 11. TypeScript, strict.
 - **Backend:** Hono · Drizzle + libSQL (**native `F32_BLOB` vectors + `libsql_vector_idx`**
   — no sqlite-vec; the Step-0 spike proved native vectors work) · Zod · tRPC ·
-  `@anthropic-ai/claude-agent-sdk` (sdk chats + agent jobs) · `openai` → OpenRouter
-  (raw / non-Claude).
+  `@anthropic-ai/claude-agent-sdk` (sdk chats + agent jobs) · **`@openrouter/sdk`** (raw /
+  non-Claude — the OFFICIAL OpenRouter SDK + Responses API; the `openai` package was removed,
+  Phase 5).
 - **Frontend:** React 19 · Vite · TanStack Router + Query · Tailwind v4 · shadcn
   (copied in-repo) · Zustand · React Hook Form + Zod.
 - **Tooling:** Biome (one `biome.jsonc`) · dependency-cruiser (enforced layer cake) ·
@@ -163,8 +172,52 @@ soft-delete trash bin. No tautological getById tests. Catch yourself building th
   copy-on-write) + `messages`/`message_variants.reasoningEffort`. Validated on the real corpus
   (`foreign_key_check` 0; importer re-runs idempotent under enforced FKs); exposed + fixed a
   circular-FK bug in `domain/chat` createChat. Spec: `docs/handoff-relational-fixes.md`. ·
-  **Phase 5** mode escape valve · **Phase 6** analytics (one chart at a time, only
-  when there's a real question).
+  **Phase 5 prepwork ✅ (SDK runtime hardening):** the chat turn now consumes the FULL Agent
+  SDK message stream — `consumeTurnStream` (split from `runChatTurn` for unit-testing)
+  classifies compaction / api_retry / rate_limit / auth_status / error-results into a
+  structured `events[]` + a **provider-agnostic `ClaudeTurnError`** (`kind` = rate_limit |
+  auth_failed | billing | … — the vocabulary raw-mode reuses), with per-event logging (auth
+  failure → ERROR, the ban canary). `domain/chat` does an **atomic send** (rolls the user
+  message back on failure → `SendResult{status:"error"}`). Migration **0008** persists turn
+  metadata (contextWindow/ttft/cache 5m·1h split/terminalReason/apiErrorStatus). Fixed a real
+  `session_entries` uuid-dedup bug (NULL subpath defeated the unique index → `""` sentinel).
+  **Compaction + seeding measured empirically** (`pnpm sdk:compaction`): boundary persists as a
+  `system`/`compact_boundary` marker + a synthetic-`user` LLM summary (no `preserved_messages`
+  relink), and the summary's "/tmp transcript" pointer is dead under `tools:[]` → long-RP wants
+  owned context. Matrix + findings: `docs/sdk-notes.md`. ·
+  **Phase 5 keystone ✅ (prompt assembly):** the chat turn now sends a real character system
+  prompt (it sent NONE before). A prompt is a versioned, reorderable list of **sections** —
+  literal blocks (with `{{macros}}`) + markers (char_description/personality/scenario/dialogue/
+  char_system/post_history, persona, world_info) + a `boundary` section — living in the preset
+  `config` blob (`shared/prompt-config.ts`, the `PromptConfig` Zod; default = `DEFAULT_PROMPT_CONFIG`).
+  Pure `assemblePrompt(config, ctx)` (`shared/prompt-assemble.ts`) renders sections before the
+  boundary → **static (cached) system prompt**, after → **dynamic (per-turn, cache-safe)**, wired
+  into `runChatTurn`'s `systemPrompt`. **World Info** is native: `always` scope → static, `keyword`
+  scope (basic whole-word match over recent messages) → dynamic. **Persona pin done right** (not a
+  jank addon): `{{user}}` resolves to the PINNED persona in card-derived sections (no retroactive
+  rewrite) and the ACTIVE persona in user-authored sections — dual-resolution baked in. Assembly
+  emits a metadata **trace** (section ids, WI included, matched keys) logged at debug for
+  visibility. Built on the empty preset triad — NO migration (the blob already held it). ·
+  **Greetings fold ✅ (migration 0009):** `character_versions.greetings[]` ([0]=first_mes, rest=alternates;
+  importer folds + corpus re-imported, all retained). ·
+  **Phase 5 raw mode 5A/5B ✅:** built on **`@openrouter/sdk` + the Responses API** (NOT the openai
+  package — removed; NOT card-curator). **5A** live `/models` catalog (`domain/models` → `rawModels` tRPC);
+  **5B** `runRawTurn` (assembled system→`instructions`, canon→`input`, typed errors→our kinds, same
+  `ChatTurnResult`) — both live-validated; `dotenv` loads the real `.env` key. ·
+  **Phase 5 mode routing 5C ✅ (centralized model selection):** `chats.model` (migration 0010, mode-agnostic
+  next-turn model; `messages.model` stays provenance) + `DEFAULT_RAW_MODEL_ID` (`openrouter/auto`).
+  **`resolveTurnRouting(chat, config)`** (`domain/chat/routing.ts`) is the SINGLE owner of
+  `{provider, model, params, providerRouting?}` — `send()` names no model / hardcodes no provider, it calls
+  the resolver and branches the runner (`sdk`→`runChatTurn`, `raw`→`runRawTurn` over canon, no session_entries);
+  provider-agnostic persist (`provider`=routing, `sessionId` sdk-only); fails loud on an incoherent/unimplemented
+  mode+provider combo. `runRawTurn` gained `providerRouting`→ Responses `provider` (from `chats.metadata`).
+  Model validity is checked at SELECTION time (the picker), not the send path. Verified: 92 tests green; 0010
+  applied to the real corpus DB (801 chats, FK-clean). ·
+  **Phase 5 remaining — see `docs/build-plan.md` (detailed) + the deferred backlog:** **5D** conversion +
+  fork-and-convert *(immediate next; blocked-by removed)* · **5E** swipes/edits · then greeting seeding,
+  `{{memory}}` retrieval, managed compaction, streaming/SSE, preset CRUD+editor, the
+  `ClaudeTurnError`→`TurnError` rename. ·
+  **Phase 6** analytics (one chart at a time, only when there's a real question).
 
 ## Start here — fast orientation (new session, read this section)
 
@@ -187,7 +240,8 @@ read before touching imports) → `docs/data-model.md` (schema) → the doc for 
   to lift from **card-curator** & **st-bridge** (DON'T re-derive), the model stack, the divergence.
 - **`docs/handoff-relational-fixes.md`** — spec for the FK + preset-versioning migration (✅ landed as 0007).
 - **`docs/observability.md`** — pino logging + the `curl`-able `/api/_debug/*` API.
-- **`docs/sdk-notes.md`** — Agent SDK map + the `pnpm sdk:play` playground.
+- **`docs/sdk-notes.md`** — provider SDK map: Agent SDK (sdk-mode, `pnpm sdk:play`/`sdk:compaction`,
+  the event matrix, compaction, prompt assembly) + OpenRouter (raw mode — `@openrouter/sdk` + Responses API).
 - **`docs/dependencies.md`** — deps (installed + deferred parking lot).
 - **`references/README.md`** — reference repos (read, don't copy): external clones
   (astra-projecta/marinara-engine/sillytavern) **+ symlinks to our sibling repos
@@ -195,7 +249,9 @@ read before touching imports) → `docs/data-model.md` (schema) → the doc for 
 - **`README.md` / `ONBOARDING.md`** — how to run / human-teammate onboarding.
 
 **Dev tools (don't reinvent — drive these):** `pnpm sdk:play` (Agent SDK probes — env/models/
-latency), `pnpm embed:probe` (live BGE-M3), `pnpm import:st` / `pnpm embed:corpus[:gpu]` (corpus),
+latency; `DISCOVER=<term>` greps the real `claude` binary for env knobs), `pnpm sdk:compaction`
+(compaction + session-seeding probe — the measured frame/turn/knob shapes live in `docs/sdk-notes.md`),
+`pnpm embed:probe` (live BGE-M3), `pnpm import:st` / `pnpm embed:corpus[:gpu]` (corpus),
 `pnpm cuda:setup` (uv CUDA). Inspect a running server via `/api/_debug/*` (logs/requests, gated
 by `DEBUG_TOKEN`). `pnpm check` = green-to-ship (biome+tsc+arch+vitest), runs on pre-commit.
 
@@ -211,5 +267,13 @@ by `DEBUG_TOKEN`). `pnpm check` = green-to-ship (biome+tsc+arch+vitest), runs on
   port `file:line`, don't re-derive. (corpus-import)
 - **Commit directly to `main`**; **NEVER extract the Claude OAuth token** (ban risk). (CLAUDE locked-decisions)
 - Internal links are now **enforced FKs** (migration 0007 — cascade policy in `docs/data-model.md`); polymorphic refs (`embeddings`/`taggables` entity refs) stay plain `text` by necessity.
+- **Raw mode = `@openrouter/sdk` + the Responses API** (`beta.responses.send`) — NOT the `openai`
+  package (removed), NOT card-curator (local-llama). `instructions`=system, `input`=conversation;
+  typed errors → our kinds by `statusCode`. The shell `OPENROUTER_API_KEY` was a REVOKED key (401
+  "User not found"); the valid key lives in `.env` (gitignored), loaded via `dotenv override:true`.
+  Working reference: `/home/inktomi/discovery/scaffold/index.ts`. (docs/sdk-notes.md, build-plan.md)
+- **Prompt structure lives in the preset `config` blob** (`PromptConfig`, `shared/prompt-config.ts`) —
+  reorderable sections + a cache `boundary`, NOT normalized rows (a version must be an immutable
+  snapshot). `assemblePrompt` (`shared/prompt-assemble.ts`) → static/dynamic system halves. (data-model.md)
 
 When unclear, ask. Don't re-litigate locked decisions — raise a question if you disagree.

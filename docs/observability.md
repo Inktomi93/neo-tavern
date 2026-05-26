@@ -24,6 +24,19 @@ Two things: **structured logging** (pino) and an **in-process debug API** you
   *not* a license to log bodies and scrub them.)
 - Dev prints pretty (`dev:server` pipes through `pino-pretty`); prod emits JSON
   to stdout (captured by Docker).
+- **Chat-turn signals (sdk-mode).** `consumeTurnStream` (the SDK message loop) logs each
+  turn at metadata level: `"claude: turn complete"` (tokens, cost, **contextWindow**, ttft,
+  cache 5m/1h split, stop/terminal reason) at info; `"claude: context compacted"` at info
+  when a long chat auto-compacts; `"claude: rate-limited"` / `"claude: api retry"` at warn;
+  and **`"claude: AUTH FAILURE during api retry (ban-risk canary)"` at ERROR** — that one is
+  the locked-decision tripwire (never extract the token; watch auth), so it surfaces in
+  `/api/_debug/errors`. The provider's own `--debug` + subprocess `stderr` are piped to
+  `debug` only when `LOG_LEVEL=debug` (the injection audit — proves `0 hooks, 0 plugins`).
+- **Chat-turn signals (raw-mode).** `runRawTurn` (OpenRouter) logs `"openrouter: raw turn complete"`
+  (tokens/cost/cacheRead/duration) at info and `"openrouter: raw turn failed"` at error with the
+  mapped `kind`/`retryable`. **Prompt assembly** logs `"chat: prompt assembled"` at debug (preset
+  source, static/dynamic sizes, section ids, world-info matched keys) — metadata only, never the
+  prompt text — so "why did/didn't this fire" is curl-able.
 
 ## Debug API — `curl` it, don't tail
 

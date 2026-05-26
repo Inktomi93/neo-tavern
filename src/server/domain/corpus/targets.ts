@@ -40,8 +40,10 @@ export async function collectEmbedTargets(db: Db): Promise<EmbedItem[]> {
       description: v.description,
       personality: v.personality,
       scenario: v.scenario,
-      firstMessage: v.firstMessage,
-      alternateGreetings: strArray(v.alternateGreetings),
+      // greetings is the unified array ([0] = first message); split it back for the embed-text
+      // builder so the embedded text is identical to the pre-fold shape.
+      firstMessage: strArray(v.greetings)[0] ?? null,
+      alternateGreetings: strArray(v.greetings).slice(1),
       tags: strArray(v.tags),
     });
     targets.push({

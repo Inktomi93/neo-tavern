@@ -1,8 +1,15 @@
 import type { SessionKey, SessionStore, SessionStoreEntry } from "@anthropic-ai/claude-agent-sdk";
-import { and, asc, desc, eq, isNull } from "drizzle-orm";
+import { and, asc, desc, eq } from "drizzle-orm";
 import type { Db } from "../../../db/client";
 import { sessionEntries } from "../../../db/schema";
 import { newId } from "../_shared/ids";
+
+// The main transcript has no SessionKey.subpath. We store "" (NOT null) for it so the
+// (session_id, subpath, uuid) unique index actually dedups replayed uuids: SQLite treats
+// every NULL as DISTINCT, so a null subpath would defeat the uuid idempotency the SDK
+// relies on (it replays uuids on retry / importSessionToStore). "" is internal-only — it
+// is never handed back to the SDK as a SessionKey.subpath (where empty string is invalid).
+const MAIN_TRANSCRIPT_SUBPATH = "";
 
 // The DB-backed SessionStore: the SDK's resume substrate, persisted to our
 // `session_entries` table instead of disk (validated in CACHE=1 sdk:play). The raw
@@ -19,16 +26,14 @@ export class DbSessionStore implements SessionStore {
   }
 
   private subpathFilter(subpath: string | undefined) {
-    return subpath === undefined
-      ? isNull(sessionEntries.subpath)
-      : eq(sessionEntries.subpath, subpath);
+    return eq(sessionEntries.subpath, subpath ?? MAIN_TRANSCRIPT_SUBPATH);
   }
 
   async append(key: SessionKey, entries: SessionStoreEntry[]): Promise<void> {
     if (entries.length === 0) {
       return;
     }
-    const subpath = key.subpath ?? null;
+    const subpath = key.subpath ?? MAIN_TRANSCRIPT_SUBPATH;
     const last = await this.db
       .select({ seq: sessionEntries.seq })
       .from(sessionEntries)

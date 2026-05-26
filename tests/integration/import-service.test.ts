@@ -163,6 +163,29 @@ test("fresh import creates character + version 1 + chat + messages + variants", 
   expect(variants.find((v) => v.idx === 0)?.model).toBe("opus");
 });
 
+test("greetings fold: first_mes + alternate_greetings unified into one array, empties dropped", async () => {
+  const db = await freshDb();
+  const svc = createImportService(db, { ownerHandle: OWNER });
+  const res = await svc.importCharacter(
+    bundle({
+      card: {
+        handle: slugifyHandle("Cheese"),
+        parsed: card({
+          firstMessage: "Hello, traveler.",
+          alternateGreetings: ["", "A rainy reunion.", "  "],
+        }),
+        importedFrom: "Cheese.png",
+        importHash: "card-greet",
+      },
+    }),
+  );
+  const v = (
+    await db.select().from(characterVersions).where(eq(characterVersions.id, res.versionId))
+  )[0];
+  // first_mes at [0], alternates follow, blank/whitespace entries dropped — every real greeting kept.
+  expect(v?.greetings).toEqual(["Hello, traveler.", "A rainy reunion."]);
+});
+
 test("lorebook → world_book + entries + cv junction", async () => {
   const db = await freshDb();
   const svc = createImportService(db, { ownerHandle: OWNER });

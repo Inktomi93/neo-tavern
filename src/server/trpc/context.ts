@@ -1,5 +1,6 @@
 import type { ChatService } from "../domain/chat";
 import type { CorpusService } from "../domain/corpus";
+import type { ModelsService } from "../domain/models";
 import type { SearchService } from "../domain/search";
 import { getLog } from "../observability/logger";
 import { APP_VERSION } from "../version";
@@ -11,6 +12,7 @@ import { APP_VERSION } from "../version";
 export interface Services {
   chat: ChatService;
   corpus: CorpusService;
+  models: ModelsService;
   search: SearchService;
 }
 

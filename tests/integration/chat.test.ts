@@ -1,7 +1,40 @@
+import { eq } from "drizzle-orm";
 import { expect, test } from "vitest";
+import { chats, messages } from "../../src/db/schema";
 import { ChatNotFoundError, createChatService } from "../../src/server/domain/chat";
-import type { ChatTurnParams, ChatTurnResult } from "../../src/server/providers/claude-sdk";
+import {
+  type ChatTurnParams,
+  type ChatTurnResult,
+  ClaudeTurnError,
+} from "../../src/server/providers/claude-sdk";
+import type { RawTurnParams } from "../../src/server/providers/openrouter";
 import { freshDb } from "../support/db";
+
+function cannedTurn(reply: string): ChatTurnResult {
+  return {
+    reply,
+    sessionId: "sess-1",
+    stopReason: "end_turn",
+    terminalReason: "completed",
+    ttftMs: 200,
+    apiErrorStatus: null,
+    numTurns: 1,
+    usage: {
+      model: "fake",
+      tokensIn: 10,
+      tokensOut: 5,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      cacheCreation5mTokens: 0,
+      cacheCreation1hTokens: 0,
+      contextWindow: 200000,
+      maxOutputTokens: 8192,
+      costUsd: 0.001,
+    },
+    events: [],
+    rateLimit: null,
+  };
+}
 
 // A fake SDK runner — records calls, returns a canned turn. Keeps the turn LOGIC
 // testable without a real sub query (those live in scripts/sdk-contract).
@@ -9,24 +42,58 @@ function fakeRunner(reply: string) {
   const calls: ChatTurnParams[] = [];
   const run = (params: ChatTurnParams): Promise<ChatTurnResult> => {
     calls.push(params);
-    return Promise.resolve({
-      reply,
-      sessionId: "sess-1",
-      stopReason: "end_turn",
-      usage: {
-        model: "fake",
-        tokensIn: 10,
-        tokensOut: 5,
-        cacheReadTokens: 0,
-        cacheWriteTokens: 0,
-        costUsd: 0.001,
-      },
-    });
+    return Promise.resolve(cannedTurn(reply));
+  };
+  return { run, calls };
+}
+
+// A fake runner that fails the turn with a typed provider error.
+function failingRunner(error: ClaudeTurnError) {
+  const calls: ChatTurnParams[] = [];
+  const run = (params: ChatTurnParams): Promise<ChatTurnResult> => {
+    calls.push(params);
+    return Promise.reject(error);
+  };
+  return { run, calls };
+}
+
+// Raw-mode turn result: no SDK session (sessionId ""), usage.model echoes the routed model.
+function cannedRawTurn(reply: string, model: string): ChatTurnResult {
+  return { ...cannedTurn(reply), sessionId: "", usage: { ...cannedTurn(reply).usage, model } };
+}
+
+function fakeRawRunner(reply: string) {
+  const calls: RawTurnParams[] = [];
+  const run = (params: RawTurnParams): Promise<ChatTurnResult> => {
+    calls.push(params);
+    return Promise.resolve(cannedRawTurn(reply, params.model));
+  };
+  return { run, calls };
+}
+
+function failingRawRunner(error: ClaudeTurnError) {
+  const calls: RawTurnParams[] = [];
+  const run = (params: RawTurnParams): Promise<ChatTurnResult> => {
+    calls.push(params);
+    return Promise.reject(error);
   };
   return { run, calls };
 }
 
 const baseChar = { characterName: "Aria", characterDescription: "a test character" };
+
+// Flip a freshly-created (sdk) chat into raw/openrouter with a pinned model — the shape 5D's
+// conversion will produce. (create() only makes sdk chats; no raw-create path exists yet.)
+async function makeRaw(
+  db: Awaited<ReturnType<typeof freshDb>>,
+  chatId: string,
+  model: string,
+): Promise<void> {
+  await db
+    .update(chats)
+    .set({ mode: "raw", provider: "openrouter", model })
+    .where(eq(chats.id, chatId));
+}
 
 test("create → send round-trips two messages with correct seq + roles", async () => {
   const db = await freshDb();
@@ -88,4 +155,85 @@ test("a chat owned by another user is NOT_FOUND-scoped", async () => {
   await expect(chat.listMessages({ username: "intruder", chatId })).rejects.toBeInstanceOf(
     ChatNotFoundError,
   );
+});
+
+test("a failed turn rolls the user message back out and returns a typed error", async () => {
+  const db = await freshDb();
+  const resetsAt = Date.now() + 60_000;
+  const { run } = failingRunner(
+    new ClaudeTurnError({
+      kind: "rate_limit",
+      retryable: true,
+      message: "rate limited",
+      resetsAt,
+    }),
+  );
+  const chat = createChatService(db, { runTurn: run });
+
+  const { chatId } = await chat.create({ username: "owner", title: "T", ...baseChar });
+  const result = await chat.send({ username: "owner", chatId, expectedSeq: 0, content: "hello" });
+
+  expect(result.status).toBe("error");
+  if (result.status === "error") {
+    expect(result.code).toBe("rate_limit");
+    expect(result.retryable).toBe(true);
+    expect(result.resetsAt).toBe(resetsAt);
+  }
+  // Atomic send: the user message was rolled back, so the chat is at its prior empty tip —
+  // re-sending with the same expectedSeq must work (the rollback didn't advance seq).
+  expect(result.messages).toHaveLength(0);
+  const retry = await chat.send({ username: "owner", chatId, expectedSeq: 0, content: "hello" });
+  expect(retry.status).not.toBe("stale"); // the rollback restored the tip → expectedSeq 0 is still valid
+});
+
+test("a raw-mode chat generates through runRaw with provider=openrouter and no session id", async () => {
+  const db = await freshDb();
+  const sdk = fakeRunner("sdk reply");
+  const raw = fakeRawRunner("raw reply");
+  const chat = createChatService(db, { runTurn: sdk.run, runRaw: raw.run });
+
+  const { chatId } = await chat.create({ username: "owner", title: "T", ...baseChar });
+  await makeRaw(db, chatId, "deepseek/deepseek-chat");
+
+  const result = await chat.send({ username: "owner", chatId, expectedSeq: 0, content: "hello" });
+
+  // The raw runner ran (not the sdk one), with the routed model + the canon history.
+  expect(sdk.calls).toHaveLength(0);
+  expect(raw.calls).toHaveLength(1);
+  expect(raw.calls[0]?.model).toBe("deepseek/deepseek-chat");
+  expect(raw.calls[0]?.history).toEqual([{ role: "user", content: "hello" }]);
+
+  expect(result.status).toBe("ok");
+  expect(result.messages.at(-1)?.content).toBe("raw reply");
+
+  // Provenance is provider-agnostic: the assistant row records openrouter + the raw model.
+  const assistant = (await db.select().from(messages).where(eq(messages.chatId, chatId))).find(
+    (m) => m.role === "assistant",
+  );
+  expect(assistant?.provider).toBe("openrouter");
+  expect(assistant?.model).toBe("deepseek/deepseek-chat");
+
+  // sdk-only concept — a raw turn must not stamp a session id.
+  const row = (await db.select().from(chats).where(eq(chats.id, chatId)))[0];
+  expect(row?.sessionId).toBeNull();
+});
+
+test("a failed raw turn rolls back identically to sdk (shared error path)", async () => {
+  const db = await freshDb();
+  const raw = failingRawRunner(
+    new ClaudeTurnError({ kind: "billing", retryable: false, message: "out of credits" }),
+  );
+  const chat = createChatService(db, { runRaw: raw.run });
+
+  const { chatId } = await chat.create({ username: "owner", title: "T", ...baseChar });
+  await makeRaw(db, chatId, "deepseek/deepseek-chat");
+
+  const result = await chat.send({ username: "owner", chatId, expectedSeq: 0, content: "hello" });
+
+  expect(result.status).toBe("error");
+  if (result.status === "error") {
+    expect(result.code).toBe("billing");
+    expect(result.retryable).toBe(false);
+  }
+  expect(result.messages).toHaveLength(0); // user message rolled back
 });

@@ -145,11 +145,14 @@ export function createImportService(db: Db, deps: ImportServiceDeps): ImportServ
           description: card.description ?? "",
           personality: card.personality,
           scenario: card.scenario,
-          firstMessage: card.firstMessage,
+          // Fold first_mes + alternate_greetings into ONE ordered array ([0] = first message),
+          // dropping empties. Retains every greeting; the full original card stays in `raw`.
+          greetings: [card.firstMessage, ...card.alternateGreetings].filter(
+            (g): g is string => typeof g === "string" && g.trim().length > 0,
+          ),
           exampleMessages: card.exampleMessages,
           systemPrompt: card.systemPrompt,
           postHistoryInstructions: card.postHistoryInstructions,
-          alternateGreetings: card.alternateGreetings,
           tags: card.tags,
           creatorNotes: card.creatorNotes,
           raw: card.raw,
