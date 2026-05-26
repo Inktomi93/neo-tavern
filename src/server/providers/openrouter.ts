@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { OpenRouter } from "@openrouter/sdk";
 import { type GenerationParams, isThinkingOn } from "../../shared/generation";
+import { isoToMs } from "../../shared/time";
 import { env } from "../env";
 import { getLog } from "../observability/logger";
 import { type ChatTurnResult, type ChatTurnUsage, TurnError, type TurnErrorKind } from "./turn";
@@ -201,16 +202,54 @@ export async function getOpenRouterGenerationCost(
   }
 }
 
-/** Recent usage analytics, grouped by day/model (last ~30 UTC days). Returns the raw rows.
+/** A usage-analytics row, normalized: OpenRouter reports `date` as a "YYYY-MM-DD" UTC day string;
+ *  we add the canonical `dateMs` (epoch-ms at UTC midnight) so the client never re-parses a string,
+ *  consistent with every other timestamp in the app (shared/time.ts). The `date` label is kept for
+ *  a chart axis. */
+export interface OpenRouterActivityItem {
+  date: string;
+  dateMs: number | null;
+  model: string;
+  providerName: string;
+  promptTokens: number;
+  completionTokens: number;
+  reasoningTokens: number;
+  requests: number;
+  usageUsd: number;
+}
+
+// The @openrouter/sdk normalizes the wire to camelCase; we read leniently (every field optional).
+interface RawActivityRow {
+  date?: string;
+  model?: string;
+  providerName?: string;
+  promptTokens?: number;
+  completionTokens?: number;
+  reasoningTokens?: number;
+  requests?: number;
+  usage?: number;
+}
+
+/** Recent usage analytics, grouped by day/model (last ~30 UTC days), normalized (date → dateMs).
  *  NOTE: OpenRouter restricts this to MANAGEMENT (provisioning) keys — a normal inference key
  *  gets 401 "Only management keys can fetch activity". So this throws for most keys; that's an
  *  account-tier limitation, not a bug (logged at warn). credits/providers/catalog work on any key. */
-export async function getOpenRouterActivity(): Promise<unknown[]> {
+export async function getOpenRouterActivity(): Promise<OpenRouterActivityItem[]> {
   try {
     const res = (await getOpenRouterClient().analytics.getUserActivity()) as unknown as {
-      data?: unknown[];
+      data?: RawActivityRow[];
     };
-    const rows = res.data ?? [];
+    const rows = (res.data ?? []).map((r) => ({
+      date: r.date ?? "",
+      dateMs: r.date !== undefined ? isoToMs(r.date) : null, // "YYYY-MM-DD" → UTC-midnight epoch-ms
+      model: r.model ?? "",
+      providerName: r.providerName ?? "",
+      promptTokens: r.promptTokens ?? 0,
+      completionTokens: r.completionTokens ?? 0,
+      reasoningTokens: r.reasoningTokens ?? 0,
+      requests: r.requests ?? 0,
+      usageUsd: r.usage ?? 0,
+    }));
     getLog().debug({ rows: rows.length }, "openrouter: activity");
     return rows;
   } catch (error) {
