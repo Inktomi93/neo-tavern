@@ -28,7 +28,7 @@ import {
 } from "../../../shared/prompt-config";
 import { getLog } from "../../observability/logger";
 import { runChatTurn } from "../../providers/claude-sdk";
-import { type RawTurnParams, runRawTurn } from "../../providers/openrouter";
+import { type RawTurnParams, runChatCompletionTurn, runRawTurn } from "../../providers/openrouter";
 import { type ChatTurnResult, TurnError } from "../../providers/turn";
 import { newId } from "../_shared/ids";
 import { withChatLock } from "../_shared/lock";
@@ -57,6 +57,7 @@ import {
 export interface ChatServiceDeps {
   runTurn?: typeof runChatTurn;
   runRaw?: typeof runRawTurn;
+  runChatCompletion?: typeof runChatCompletionTurn;
 }
 
 // Recent message texts the keyword-WI marker scans. Small + tunable; includes the just-inserted
@@ -71,6 +72,12 @@ const OPEN_SCENE_PROMPT =
 export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatService {
   const runTurn = deps.runTurn ?? runChatTurn;
   const runRaw = deps.runRaw ?? runRawTurn;
+  const runChatCompletion = deps.runChatCompletion ?? runChatCompletionTurn;
+
+  // The openrouter runner picks the endpoint by api: chat.send (broad catalog) vs beta.responses.
+  function openRouterRunner(api: "chat-completions" | "responses"): typeof runRawTurn {
+    return api === "chat-completions" ? runChatCompletion : runRaw;
+  }
 
   function toView(row: typeof messages.$inferSelect, variantCount: number): MessageView {
     return {
@@ -516,7 +523,7 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
           });
         } else {
           // openrouter runner: rebuild the conversation from canon (incl. the user message just
-          // inserted) → OpenRouter Responses turn. No session store; provider routing rides through.
+          // inserted) → chat.send or beta.responses (by api). No session store; routing rides through.
           const rawParams: RawTurnParams["params"] = {
             ...(routing.params.temperature !== undefined
               ? { temperature: routing.params.temperature }
@@ -525,7 +532,7 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
               ? { maxOutputTokens: routing.params.maxOutputTokens }
               : {}),
           };
-          turn = await runRaw({
+          turn = await openRouterRunner(routing.api)({
             model: routing.model,
             systemPrompt,
             history: await loadCanonHistory(params.chatId),
@@ -546,6 +553,7 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
               chatId: params.chatId,
               kind: error.kind,
               retryable: error.retryable,
+              apiErrorStatus: error.apiErrorStatus,
               sdkError: error.sdkError,
               resultSubtype: error.resultSubtype,
             },
@@ -631,17 +639,14 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
     await withChatLock(params.chatId, async () => {
       const chat = await loadOwnedChat(ownerId, params.chatId);
       // Coherence guard (the same invariants resolveTurnRouting enforces, checked before we persist
-      // so a bad combo can never be stored). chat-completions is designed but not yet runnable.
-      if (params.api === "chat-completions") {
+      // so a bad combo can never be stored): the openrouter-runner apis require source=openrouter.
+      if (
+        (params.api === "chat-completions" || params.api === "responses") &&
+        params.source !== "openrouter"
+      ) {
         throw new ChatOperationError(
           "invalid_provider",
-          "api=chat-completions is not yet implemented",
-        );
-      }
-      if (params.api === "responses" && params.source !== "openrouter") {
-        throw new ChatOperationError(
-          "invalid_provider",
-          `api=responses requires source=openrouter (got ${params.source})`,
+          `api=${params.api} requires source=openrouter (got ${params.source})`,
         );
       }
 
@@ -945,7 +950,7 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
               ? { maxOutputTokens: promptConfig.params.maxOutputTokens }
               : {}),
           };
-          turn = await runRaw({
+          turn = await openRouterRunner(routing.api)({
             model: routing.model,
             systemPrompt,
             history: [...history, { role: "user", content: regenPrompt }],

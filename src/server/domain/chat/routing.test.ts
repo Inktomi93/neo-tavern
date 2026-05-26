@@ -89,16 +89,27 @@ test("responses pulls providerRouting out of chat metadata; absent → undefined
   expect(without).toMatchObject({ runner: "openrouter", providerRouting: undefined });
 });
 
-test("incoherent / unimplemented api+source combos fail loud", () => {
-  // responses requires source=openrouter.
+test("chat-completions routes the openrouter runner (the broad catalog endpoint)", () => {
+  const r = resolveTurnRouting(
+    chat({ api: "chat-completions", source: "openrouter", model: "deepseek/deepseek-chat" }),
+    DEFAULT_PROMPT_CONFIG,
+  );
+
+  expect(r).toMatchObject({
+    runner: "openrouter",
+    api: "chat-completions",
+    model: "deepseek/deepseek-chat",
+  });
+});
+
+test("incoherent api+source combos fail loud (openrouter apis require source=openrouter)", () => {
   expect(() =>
     resolveTurnRouting(chat({ api: "responses", source: "max-pro-sub" }), DEFAULT_PROMPT_CONFIG),
   ).toThrow(/incoherent/);
-  // chat-completions is designed but not yet built.
   expect(() =>
     resolveTurnRouting(
-      chat({ api: "chat-completions", source: "openrouter" }),
+      chat({ api: "chat-completions", source: "max-pro-sub" }),
       DEFAULT_PROMPT_CONFIG,
     ),
-  ).toThrow(/not yet implemented/);
+  ).toThrow(/incoherent/);
 });

@@ -37,6 +37,9 @@ export interface TurnErrorInit {
   resultSubtype?: SDKResultError["subtype"];
   /** For rate_limit: epoch ms when the window resets. */
   resetsAt?: number;
+  /** The upstream HTTP status that produced this error, when one applies (raw/OpenRouter path).
+   *  Captured so every failure's status is curl-able via /api/_debug, not just the mapped `kind`. */
+  apiErrorStatus?: number;
   cause?: unknown;
 }
 
@@ -49,6 +52,7 @@ export class TurnError extends Error {
   readonly sdkError: SDKAssistantMessageError | undefined;
   readonly resultSubtype: SDKResultError["subtype"] | undefined;
   readonly resetsAt: number | undefined;
+  readonly apiErrorStatus: number | undefined;
 
   constructor(init: TurnErrorInit) {
     super(init.message, init.cause === undefined ? undefined : { cause: init.cause });
@@ -58,6 +62,7 @@ export class TurnError extends Error {
     this.sdkError = init.sdkError;
     this.resultSubtype = init.resultSubtype;
     this.resetsAt = init.resetsAt;
+    this.apiErrorStatus = init.apiErrorStatus;
   }
 }
 

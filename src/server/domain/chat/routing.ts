@@ -40,12 +40,13 @@ export type TurnRouting =
     }
   | {
       runner: "openrouter";
-      api: "responses";
+      /** Which OpenRouter endpoint: chat.send (the broad catalog) vs beta.responses (OpenAI-style). */
+      api: "chat-completions" | "responses";
       source: "openrouter";
       model: string;
       params: PromptConfig["params"];
-      /** OpenRouter provider-routing prefs (order/fallbacks/sort/…) → the Responses request's
-       *  `provider` field. Sourced from chats.metadata; undefined = default routing. */
+      /** OpenRouter provider-routing prefs (order/fallbacks/sort/…) → the request's `provider`
+       *  field. Sourced from chats.metadata; undefined = default routing. */
       providerRouting: Record<string, unknown> | undefined;
     };
 
@@ -81,23 +82,23 @@ export function resolveTurnRouting(chat: RoutableChat, config: PromptConfig): Tu
         chat.model !== null && isChatModelId(chat.model) ? chat.model : DEFAULT_CHAT_MODEL_ID;
       return { runner: "agent-sdk", api: "agent-sdk", source: chat.source, model };
     }
+    case "chat-completions":
     case "responses": {
+      // Both are the @openrouter/sdk runner — chat.send (broad catalog) vs beta.responses (OpenAI
+      // style). Caching is provider-aware inside the runner (Anthropic-only cache_control).
       if (chat.source !== "openrouter") {
         throw new Error(
-          `incoherent routing: api=responses requires source=openrouter (got ${chat.source})`,
+          `incoherent routing: api=${chat.api} requires source=openrouter (got ${chat.source})`,
         );
       }
       return {
         runner: "openrouter",
-        api: "responses",
+        api: chat.api,
         source: "openrouter",
         model: chat.model ?? DEFAULT_RAW_MODEL_ID,
         params: config.params,
         providerRouting: extractProviderRouting(chat.metadata),
       };
     }
-    case "chat-completions":
-      // Designed (the @openrouter/sdk chat.send path + per-block cache_control), not yet built.
-      throw new Error("unsupported api: chat-completions is not yet implemented");
   }
 }

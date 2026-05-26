@@ -274,7 +274,35 @@ test("setProvider switches an agent-sdk chat onto the openrouter Responses runne
   expect(sdk.calls).toHaveLength(1); // only the pre-switch turn
 });
 
-test("setProvider into an unimplemented api (chat-completions) throws invalid_provider", async () => {
+test("setProvider to chat-completions routes the next turn through the chat-completions runner", async () => {
+  const db = await freshDb();
+  const sdk = fakeRunner("sdk reply");
+  const chatCompletion = fakeRawRunner("chat-completions reply");
+  const responses = fakeRawRunner("responses reply");
+  const chat = createChatService(db, {
+    runTurn: sdk.run,
+    runRaw: responses.run,
+    runChatCompletion: chatCompletion.run,
+  });
+  const { chatId } = await chat.create({ username: "owner", title: "T", ...baseChar });
+
+  await chat.setProvider({
+    username: "owner",
+    chatId,
+    api: "chat-completions",
+    source: "openrouter",
+  });
+  const row = (await db.select().from(chats).where(eq(chats.id, chatId)))[0];
+  expect(row?.api).toBe("chat-completions");
+
+  const result = await chat.send({ username: "owner", chatId, expectedSeq: 0, content: "hi" });
+  expect(result.status).toBe("ok");
+  expect(chatCompletion.calls).toHaveLength(1); // chat.send, not beta.responses
+  expect(responses.calls).toHaveLength(0);
+  expect(result.messages.at(-1)?.content).toBe("chat-completions reply");
+});
+
+test("setProvider to an incoherent combo (chat-completions + max-pro-sub) throws invalid_provider", async () => {
   const db = await freshDb();
   const chat = createChatService(db, {
     runTurn: fakeRunner("x").run,
@@ -283,7 +311,7 @@ test("setProvider into an unimplemented api (chat-completions) throws invalid_pr
   const { chatId } = await chat.create({ username: "owner", title: "T", ...baseChar });
 
   await expect(
-    chat.setProvider({ username: "owner", chatId, api: "chat-completions", source: "openrouter" }),
+    chat.setProvider({ username: "owner", chatId, api: "chat-completions", source: "max-pro-sub" }),
   ).rejects.toMatchObject({ name: "ChatOperationError", reason: "invalid_provider" });
 });
 

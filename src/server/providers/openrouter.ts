@@ -1,16 +1,16 @@
 import { createHash } from "node:crypto";
 import { OpenRouter } from "@openrouter/sdk";
-import { z } from "zod";
 import { env } from "../env";
 import { getLog } from "../observability/logger";
 import { type ChatTurnResult, type ChatTurnUsage, TurnError, type TurnErrorKind } from "./turn";
 
-// Raw-mode + non-Claude chats route through OpenRouter's OFFICIAL SDK (@openrouter/sdk) +
-// the Responses API (beta.responses.send) — validated live against /home/inktomi/discovery/
-// scaffold. The client is lazy so the server boots without a key; the key is only required
-// the moment a raw turn actually calls out. (We deliberately do NOT use the openai package —
-// the official SDK gives typed errors, routing metadata, image-gen, and the Responses API.)
-const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
+// The OpenRouter-runner side of the provider architecture (the @openrouter/sdk path, distinct from
+// the Agent-SDK runner used for Claude). Two endpoints:
+//   • Chat Completions (sdk.chat.send)        → runChatCompletionTurn — the broad catalog
+//   • Responses        (sdk.beta.responses)   → runRawTurn            — OpenAI-style models
+// Plus the live model catalog + account info (credits / per-generation cost), all via the SDK.
+// The client is lazy so the server boots without a key; the key is only required when a turn or a
+// catalog/info call actually goes out.
 
 let client: OpenRouter | null = null;
 
@@ -21,7 +21,7 @@ export function isOpenRouterConfigured(): boolean {
 export function getOpenRouterClient(): OpenRouter {
   const apiKey = env.OPENROUTER_API_KEY;
   if (!apiKey) {
-    throw new Error("OPENROUTER_API_KEY is not set; raw-mode / non-Claude chats are unavailable.");
+    throw new Error("OPENROUTER_API_KEY is not set; the OpenRouter runner is unavailable.");
   }
   if (!client) {
     client = new OpenRouter({ apiKey });
@@ -29,12 +29,25 @@ export function getOpenRouterClient(): OpenRouter {
   return client;
 }
 
-// ── Dynamic model catalog ────────────────────────────────────────────────────
-// OpenRouter exposes a LIVE public catalog (~hundreds of models, changes often) at
-// GET /models — no auth. We fetch + normalize + cache it rather than hardcoding a
-// list: the model picker shows whatever OpenRouter offers right now.
+// ── Provider-aware caching ───────────────────────────────────────────────────
+// OpenRouter's `cache_control` is ANTHROPIC-ONLY (the spec: "Currently supported for Anthropic
+// Claude models"). The top-level ephemeral directive auto-places one cache breakpoint at the last
+// cacheable block (our static system prompt). Non-Anthropic models cache AUTOMATICALLY with no
+// field — sending the directive to them is wrong (ignored at best). So: apply it iff the routed
+// model is Anthropic. (Finer-grained per-block / history breakpoints → a later refinement, #48.)
+const ANTHROPIC_CACHE_DIRECTIVE = { type: "ephemeral", ttl: "1h" } as const;
 
-/** Normalized view of one OpenRouter model (the fields a picker actually needs). */
+/** True when the model id routes to Anthropic (the only family that honors explicit cache_control). */
+export function isAnthropicModel(model: string): boolean {
+  return /^anthropic\//i.test(model) || /(^|\/)claude[-/]/i.test(model);
+}
+
+// ── Dynamic model catalog (via the SDK) ───────────────────────────────────────
+// GET /models through sdk.models.list() — the live OpenRouter catalog (~hundreds of models). We
+// normalize to the fields a picker + the caching/cost logic actually read, and cache it (1h) rather
+// than hardcode.
+
+/** Normalized view of one OpenRouter model (the fields a picker + caching/cost logic need). */
 export interface RawModel {
   id: string;
   name: string;
@@ -43,72 +56,115 @@ export interface RawModel {
   /** USD per token (OpenRouter reports as strings); null when not priced/free. */
   promptPrice: number | null;
   completionPrice: number | null;
+  /** Cache pricing — present (non-null) iff the model has explicit prompt caching with cache pricing. */
+  cacheReadPrice: number | null;
+  cacheWritePrice: number | null;
   /** e.g. ["text", "image"] — for multimodal filtering. */
   inputModalities: string[];
+  /** Generation params the model/provider accepts (e.g. "tools", "reasoning", "temperature"). */
+  supportedParameters: string[];
 }
-
-// Lenient — OpenRouter adds fields over time; z.object strips unknowns (we only pin what we read).
-const openRouterModelSchema = z.object({
-  id: z.string(),
-  name: z.string().optional(),
-  context_length: z.number().nullable().optional(),
-  pricing: z
-    .object({ prompt: z.string().optional(), completion: z.string().optional() })
-    .optional(),
-  architecture: z.object({ input_modalities: z.array(z.string()).optional() }).optional(),
-});
-const catalogSchema = z.object({ data: z.array(openRouterModelSchema) });
 
 const CATALOG_TTL_MS = 60 * 60 * 1000; // 1h — the catalog changes slowly
 let catalogCache: { at: number; models: RawModel[] } | null = null;
 
-function toNumberOrNull(value: string | undefined): number | null {
-  if (value === undefined) {
+function toNumberOrNull(value: string | null | undefined): number | null {
+  if (value === undefined || value === null) {
     return null;
   }
   const n = Number(value);
   return Number.isFinite(n) ? n : null;
 }
 
-/** Fetch + normalize + cache OpenRouter's live model catalog (public endpoint — no key). */
+/** Fetch + normalize + cache OpenRouter's live model catalog via the SDK. */
 export async function listOpenRouterModels(force = false): Promise<RawModel[]> {
   if (!force && catalogCache !== null && Date.now() - catalogCache.at < CATALOG_TTL_MS) {
     return catalogCache.models;
   }
-  let res: Response;
+  let data: ModelCatalogView["data"];
   try {
-    res = await fetch(`${OPENROUTER_BASE_URL}/models`);
+    const res = (await getOpenRouterClient().models.list()) as unknown as ModelCatalogView;
+    data = res.data ?? [];
   } catch (error) {
-    // Network failure (DNS/connection) — surface it in /api/_debug/errors, not just the throw.
     getLog().error(
       { err: error instanceof Error ? error.message : String(error) },
       "openrouter: model catalog fetch failed",
     );
     throw error;
   }
-  if (!res.ok) {
-    getLog().error({ status: res.status }, "openrouter: model catalog fetch failed");
-    throw new Error(`OpenRouter /models returned ${res.status}`);
-  }
-  const parsed = catalogSchema.parse(await res.json());
-  const models = parsed.data.map((m) => ({
+  const models: RawModel[] = data.map((m) => ({
     id: m.id,
     name: m.name ?? m.id,
-    contextLength: m.context_length ?? null,
+    contextLength: m.contextLength ?? null,
     promptPrice: toNumberOrNull(m.pricing?.prompt),
     completionPrice: toNumberOrNull(m.pricing?.completion),
-    inputModalities: m.architecture?.input_modalities ?? [],
+    cacheReadPrice: toNumberOrNull(m.pricing?.inputCacheRead),
+    cacheWritePrice: toNumberOrNull(m.pricing?.inputCacheWrite),
+    inputModalities: m.architecture?.inputModalities ?? [],
+    supportedParameters: (m.supportedParameters ?? []).map((p) => String(p)),
   }));
   catalogCache = { at: Date.now(), models };
-  // Infrequent (1h cache) so info-level is fine — a notable refresh, not per-op noise.
   getLog().info({ count: models.length }, "openrouter: model catalog refreshed");
   return models;
 }
 
-// ── Raw turn (Responses API) ─────────────────────────────────────────────────
-// The provider-agnostic mirror of the sdk-mode runChatTurn: takes the assembled system prompt +
-// the full canon history, calls beta.responses.send, returns the SAME ChatTurnResult and throws the
-// SAME TurnError kinds (the shared contract in ./turn — neither provider owns it).
+// The slice of the SDK's ModelsListResponse we read (its full type is a large generated shape).
+interface ModelCatalogView {
+  data?: Array<{
+    id: string;
+    name?: string;
+    contextLength?: number | null;
+    pricing?: {
+      prompt?: string;
+      completion?: string;
+      inputCacheRead?: string;
+      inputCacheWrite?: string;
+    };
+    architecture?: { inputModalities?: string[] };
+    supportedParameters?: unknown[];
+  }>;
+}
+
+// ── Account info (the "fully featured" extras) ─────────────────────────────────
+
+/** Current credit balance: total purchased + total used (USD). */
+export async function getOpenRouterCredits(): Promise<{ total: number; used: number }> {
+  const res = (await getOpenRouterClient().credits.getCredits()) as unknown as {
+    data?: { totalCredits?: number; totalUsage?: number };
+    totalCredits?: number;
+    totalUsage?: number;
+  };
+  const d = res.data ?? res;
+  return { total: d.totalCredits ?? 0, used: d.totalUsage ?? 0 };
+}
+
+/** Authoritative per-generation cost/usage (settles a few seconds after the turn returns). */
+export async function getOpenRouterGenerationCost(
+  id: string,
+): Promise<{ totalCost: number; tokensPrompt: number; tokensCompletion: number } | null> {
+  try {
+    const res = (await getOpenRouterClient().generations.getGeneration({ id })) as unknown as {
+      data?: { totalCost?: number; tokensPrompt?: number; tokensCompletion?: number };
+    };
+    const d = res.data;
+    if (!d) {
+      return null;
+    }
+    return {
+      totalCost: d.totalCost ?? 0,
+      tokensPrompt: d.tokensPrompt ?? 0,
+      tokensCompletion: d.tokensCompletion ?? 0,
+    };
+  } catch (error) {
+    getLog().warn(
+      { id, err: error instanceof Error ? error.message : String(error) },
+      "openrouter: generation cost lookup failed",
+    );
+    return null;
+  }
+}
+
+// ── Shared turn params + error mapping ─────────────────────────────────────────
 
 export interface RawTurnParams {
   /** OpenRouter "provider/model" id. */
@@ -126,41 +182,14 @@ export interface RawTurnParams {
     presencePenalty?: number;
     reasoningEffort?: "low" | "medium" | "high";
   };
-  /** OpenRouter provider-routing preferences (order/allowFallbacks/sort/only/ignore/…) → the
-   *  Responses request's `provider` field. Lenient pass-through (OpenRouter owns the schema);
-   *  undefined = default routing. Sourced per-chat (chats.metadata) by resolveTurnRouting. */
+  /** OpenRouter provider-routing preferences (order/allowFallbacks/sort/only/ignore/…). Lenient
+   *  pass-through (OpenRouter owns the schema); undefined = default routing. From chats.metadata. */
   providerRouting?: Record<string, unknown> | undefined;
 }
 
-// The slice of OpenResponsesResult we read (validated live; the SDK's full type is a big union).
-interface ResponsesView {
-  output?: Array<{
-    type: string;
-    content?: Array<{ type: string; text?: string }>;
-  }>;
-  usage?: {
-    inputTokens?: number;
-    outputTokens?: number;
-    totalTokens?: number;
-    inputTokensDetails?: { cachedTokens?: number };
-    cost?: number;
-  };
-}
-
-function buildInput(history: RawTurnParams["history"]): Array<{ role: string; content: string }> {
-  const items = history
-    .filter((m) => m.content.trim().length > 0)
-    .map((m) => ({ role: m.role, content: m.content }));
-  // Responses input can't start with an assistant turn (e.g. a seeded greeting) — pad with a user stub.
-  if (items[0]?.role === "assistant") {
-    items.unshift({ role: "user", content: "…" });
-  }
-  return items;
-}
-
-// Map @openrouter/sdk errors → our provider-agnostic kinds. All response errors extend
-// OpenRouterError (numeric `statusCode`); transport errors (connection/timeout/abort) carry a name.
-function mapOpenRouterError(error: unknown, model: string): TurnError {
+// Map @openrouter/sdk errors → our provider-agnostic kinds. Response errors carry a numeric
+// statusCode; transport errors (connection/timeout/abort) carry a name.
+function mapOpenRouterError(error: unknown, model: string, endpoint: string): TurnError {
   const status =
     error !== null &&
     typeof error === "object" &&
@@ -171,9 +200,13 @@ function mapOpenRouterError(error: unknown, model: string): TurnError {
   const name = error instanceof Error ? error.name : "";
   const message = error instanceof Error ? error.message : String(error);
 
+  // Exhaustive over the status codes the OpenRouter spec documents (400/401/402/403/404/408/413/
+  // 422/429/500/502/503) → our provider-agnostic TurnErrorKind; transport-level failures fall back
+  // to name/message heuristics; anything else is `unknown`.
   let kind: TurnErrorKind;
   let retryable: boolean;
   if (status === 401 || status === 403) {
+    // 401 = bad/missing key; 403 = insufficient perms OR a guardrail block. Non-retryable either way.
     kind = "auth_failed";
     retryable = false;
   } else if (status === 402) {
@@ -188,7 +221,8 @@ function mapOpenRouterError(error: unknown, model: string): TurnError {
   } else if (status === 400 || status === 413 || status === 422) {
     kind = "invalid";
     retryable = false;
-  } else if (status !== undefined && status >= 500) {
+  } else if (status === 408 || (status !== undefined && status >= 500)) {
+    // 408 Request Timeout + 5xx (500 internal / 502 bad gateway / 503 unavailable) — all transient.
     kind = "server";
     retryable = true;
   } else if (/timeout|connection|network|overload/i.test(`${name} ${message}`)) {
@@ -204,12 +238,185 @@ function mapOpenRouterError(error: unknown, model: string): TurnError {
   return new TurnError({
     kind,
     retryable,
-    message: `openrouter (${model}): ${message}`,
+    message: `openrouter ${endpoint} (${model}): ${message}`,
+    ...(status !== undefined ? { apiErrorStatus: status } : {}),
     cause: error,
   });
 }
 
-function extractReply(view: ResponsesView): string {
+/** Join the assembled static + dynamic halves into one system string (the simple, cross-provider
+ *  shape). Finer-grained static/history cache breakpoints are a later refinement (#48). */
+function joinSystemPrompt(sp: { static: string; dynamic: string }): string {
+  return [sp.static, sp.dynamic]
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0)
+    .join("\n\n");
+}
+
+// ── Chat Completions runner (sdk.chat.send) ────────────────────────────────────
+
+// The slice of ChatResult we read (its full type is a large generated union).
+interface ChatResultView {
+  id?: string;
+  choices?: Array<{
+    message?: { content?: unknown };
+    finishReason?: string | null;
+  }>;
+  usage?: {
+    promptTokens?: number;
+    completionTokens?: number;
+    cost?: number | null;
+    promptTokensDetails?: { cachedTokens?: number; cacheWriteTokens?: number } | null;
+  };
+}
+
+function extractChatReply(view: ChatResultView): string {
+  const content = view.choices?.[0]?.message?.content;
+  if (typeof content === "string") {
+    return content.trim();
+  }
+  if (Array.isArray(content)) {
+    return content
+      .filter(
+        (part): part is { type?: string; text?: string } =>
+          part !== null && typeof part === "object",
+      )
+      .map((part) => (typeof part.text === "string" ? part.text : ""))
+      .join("")
+      .trim();
+  }
+  return "";
+}
+
+/**
+ * One Chat Completions turn over OpenRouter (sdk.chat.send). Provider-agnostic out the top (returns
+ * a {@link ChatTurnResult}, throws a {@link TurnError}), so domain/chat can inject it as a seam.
+ * Caching is provider-aware: Anthropic models get the top-level cache_control directive; everything
+ * else relies on the provider's automatic caching (no field). Cost + cached-token reads come back
+ * inline in usage.
+ */
+export async function runChatCompletionTurn(params: RawTurnParams): Promise<ChatTurnResult> {
+  const startedAt = Date.now();
+  const system = joinSystemPrompt(params.systemPrompt);
+  const cfg = params.params ?? {};
+  const anthropic = isAnthropicModel(params.model);
+
+  const messages = [
+    ...(system.length > 0 ? [{ role: "system" as const, content: system }] : []),
+    ...params.history
+      .filter((m) => m.content.trim().length > 0)
+      .map((m) => ({ role: m.role, content: m.content })),
+  ];
+
+  const chatRequest = {
+    model: params.model,
+    messages,
+    // Anthropic-only: auto-places one cache breakpoint at the last cacheable block (the system
+    // prompt). Non-Anthropic models cache automatically, so we send nothing for them.
+    ...(anthropic ? { cacheControl: ANTHROPIC_CACHE_DIRECTIVE } : {}),
+    ...(cfg.temperature !== undefined ? { temperature: cfg.temperature } : {}),
+    ...(cfg.topP !== undefined ? { topP: cfg.topP } : {}),
+    ...(cfg.maxOutputTokens !== undefined ? { maxCompletionTokens: cfg.maxOutputTokens } : {}),
+    ...(cfg.frequencyPenalty !== undefined ? { frequencyPenalty: cfg.frequencyPenalty } : {}),
+    ...(cfg.presencePenalty !== undefined ? { presencePenalty: cfg.presencePenalty } : {}),
+    ...(cfg.reasoningEffort ? { reasoning: { effort: cfg.reasoningEffort } } : {}),
+    ...(params.providerRouting !== undefined ? { provider: params.providerRouting } : {}),
+  };
+
+  let view: ChatResultView;
+  try {
+    const result = await getOpenRouterClient().chat.send({
+      chatRequest,
+    } as Parameters<OpenRouter["chat"]["send"]>[0]);
+    view = result as unknown as ChatResultView;
+  } catch (error) {
+    const mapped = mapOpenRouterError(error, params.model, "chat");
+    getLog().error(
+      {
+        model: params.model,
+        status: mapped.apiErrorStatus,
+        kind: mapped.kind,
+        retryable: mapped.retryable,
+        err: mapped.message,
+      },
+      "openrouter: chat turn failed",
+    );
+    throw mapped;
+  }
+
+  const u = view.usage;
+  const usage: ChatTurnUsage = {
+    model: params.model,
+    tokensIn: u?.promptTokens ?? 0,
+    tokensOut: u?.completionTokens ?? 0,
+    cacheReadTokens: u?.promptTokensDetails?.cachedTokens ?? 0,
+    cacheWriteTokens: u?.promptTokensDetails?.cacheWriteTokens ?? 0,
+    cacheCreation5mTokens: 0,
+    cacheCreation1hTokens: 0,
+    contextWindow: 0,
+    maxOutputTokens: 0,
+    costUsd: u?.cost ?? 0,
+  };
+
+  getLog().info(
+    {
+      model: params.model,
+      anthropicCaching: anthropic,
+      tokensIn: usage.tokensIn,
+      tokensOut: usage.tokensOut,
+      cacheReadTokens: usage.cacheReadTokens,
+      cacheWriteTokens: usage.cacheWriteTokens,
+      costUsd: usage.costUsd,
+      durationMs: Date.now() - startedAt,
+    },
+    "openrouter: chat turn complete",
+  );
+
+  return {
+    reply: extractChatReply(view),
+    sessionId: "", // the openrouter runner has no SDK session — history is rebuilt from canon
+    stopReason: view.choices?.[0]?.finishReason ?? null,
+    terminalReason: null,
+    ttftMs: null,
+    apiErrorStatus: null,
+    numTurns: 1,
+    usage,
+    events: [],
+    rateLimit: null,
+  };
+}
+
+// ── Responses runner (sdk.beta.responses.send) ─────────────────────────────────
+
+// The slice of OpenResponsesResult we read.
+interface ResponsesView {
+  output?: Array<{ type: string; content?: Array<{ type: string; text?: string }> }>;
+  outputText?: string;
+  usage?: {
+    inputTokens?: number;
+    outputTokens?: number;
+    cost?: number | null;
+    inputTokensDetails?: { cachedTokens?: number };
+  };
+}
+
+function buildResponsesInput(
+  history: RawTurnParams["history"],
+): Array<{ role: string; content: string }> {
+  const items = history
+    .filter((m) => m.content.trim().length > 0)
+    .map((m) => ({ role: m.role, content: m.content }));
+  // Responses input can't start with an assistant turn (e.g. a seeded greeting) — pad with a user stub.
+  if (items[0]?.role === "assistant") {
+    items.unshift({ role: "user", content: "…" });
+  }
+  return items;
+}
+
+function extractResponsesReply(view: ResponsesView): string {
+  if (typeof view.outputText === "string" && view.outputText.length > 0) {
+    return view.outputText.trim();
+  }
   return (view.output ?? [])
     .filter((item) => item.type === "message")
     .flatMap((item) => item.content ?? [])
@@ -220,28 +427,30 @@ function extractReply(view: ResponsesView): string {
 }
 
 /**
- * One raw-mode turn over OpenRouter's Responses API. Provider-agnostic out the top: returns a
- * {@link ChatTurnResult}, throws a {@link TurnError} (mapped from the SDK's typed errors).
- * Injected into `domain/chat` as a seam so it's testable with a fake (no network in `pnpm check`).
+ * One Responses-API turn over OpenRouter (sdk.beta.responses.send) — the OpenAI-style endpoint.
+ * Provider-aware caching: Anthropic models get the top-level cache_control directive; for the rest
+ * (OpenAI et al.) we set a stable `promptCacheKey` derived from the system prompt so the provider's
+ * automatic cache routes consistently across turns (the correct field, replacing the old sha1 hack).
  */
 export async function runRawTurn(params: RawTurnParams): Promise<ChatTurnResult> {
   const startedAt = Date.now();
-  const instructions = [params.systemPrompt.static, params.systemPrompt.dynamic]
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0)
-    .join("\n\n");
+  const instructions = joinSystemPrompt(params.systemPrompt);
   const cfg = params.params ?? {};
+  const anthropic = isAnthropicModel(params.model);
 
-  // promptCacheKey lets OpenRouter cache the system prefix across turns (the raw-mode cache lever).
+  // A stable per-system-prompt key lets OpenAI-style providers reuse their automatic cache across
+  // turns. Anthropic uses the cache_control directive instead (promptCacheKey is a no-op there).
   const promptCacheKey =
-    instructions.length > 0
-      ? createHash("sha1").update(`${params.model} ${instructions}`).digest("hex").slice(0, 16)
+    !anthropic && instructions.length > 0
+      ? createHash("sha1").update(`${params.model} ${instructions}`).digest("hex").slice(0, 32)
       : undefined;
 
   const responsesRequest = {
     model: params.model,
-    input: buildInput(params.history),
+    input: buildResponsesInput(params.history),
     ...(instructions.length > 0 ? { instructions } : {}),
+    ...(anthropic && instructions.length > 0 ? { cacheControl: ANTHROPIC_CACHE_DIRECTIVE } : {}),
+    ...(promptCacheKey !== undefined ? { promptCacheKey } : {}),
     ...(cfg.temperature !== undefined ? { temperature: cfg.temperature } : {}),
     ...(cfg.topP !== undefined ? { topP: cfg.topP } : {}),
     ...(cfg.frequencyPenalty !== undefined ? { frequencyPenalty: cfg.frequencyPenalty } : {}),
@@ -249,22 +458,25 @@ export async function runRawTurn(params: RawTurnParams): Promise<ChatTurnResult>
     ...(cfg.maxOutputTokens !== undefined ? { maxOutputTokens: cfg.maxOutputTokens } : {}),
     ...(cfg.reasoningEffort ? { reasoning: { effort: cfg.reasoningEffort, summary: "auto" } } : {}),
     ...(params.providerRouting !== undefined ? { provider: params.providerRouting } : {}),
-    ...(promptCacheKey !== undefined ? { promptCacheKey } : {}),
   };
 
   let view: ResponsesView;
   try {
-    // The SDK's request type is a large generated union; we build the proven shape and narrow
-    // the boundary with one contained cast (the runtime is validated by the SDK's own zod parse).
     const result = await getOpenRouterClient().beta.responses.send({
       responsesRequest,
     } as Parameters<OpenRouter["beta"]["responses"]["send"]>[0]);
     view = result as unknown as ResponsesView;
   } catch (error) {
-    const mapped = mapOpenRouterError(error, params.model);
+    const mapped = mapOpenRouterError(error, params.model, "responses");
     getLog().error(
-      { model: params.model, kind: mapped.kind, retryable: mapped.retryable, err: mapped.message },
-      "openrouter: raw turn failed",
+      {
+        model: params.model,
+        status: mapped.apiErrorStatus,
+        kind: mapped.kind,
+        retryable: mapped.retryable,
+        err: mapped.message,
+      },
+      "openrouter: responses turn failed",
     );
     throw mapped;
   }
@@ -286,18 +498,19 @@ export async function runRawTurn(params: RawTurnParams): Promise<ChatTurnResult>
   getLog().info(
     {
       model: params.model,
+      anthropicCaching: anthropic,
       tokensIn: usage.tokensIn,
       tokensOut: usage.tokensOut,
       cacheReadTokens: usage.cacheReadTokens,
       costUsd: usage.costUsd,
       durationMs: Date.now() - startedAt,
     },
-    "openrouter: raw turn complete",
+    "openrouter: responses turn complete",
   );
 
   return {
-    reply: extractReply(view),
-    sessionId: "", // raw mode has no SDK session — history is rebuilt from canon each turn
+    reply: extractResponsesReply(view),
+    sessionId: "",
     stopReason: null,
     terminalReason: null,
     ttftMs: null,
