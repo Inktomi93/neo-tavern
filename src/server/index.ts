@@ -4,6 +4,7 @@ import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { Hono } from "hono";
 import { createDb, runMigrations } from "../db/client";
 import { resolveUsername } from "./auth/trust-header";
+import { createAssetsService } from "./domain/assets";
 import { createChatService } from "./domain/chat";
 import { createCorpusService } from "./domain/corpus";
 import { createDebugService } from "./domain/debug";
@@ -13,6 +14,7 @@ import { env } from "./env";
 import { registerDebugRoutes } from "./observability/debug";
 import { getLog, logger } from "./observability/logger";
 import { observability } from "./observability/middleware";
+import { createCas } from "./storage/cas";
 import { createContext, type Services } from "./trpc/context";
 import { appRouter } from "./trpc/router";
 import { APP_VERSION } from "./version";
@@ -37,8 +39,13 @@ const app = new Hono();
 app.use(observability);
 
 // Gated in-process introspection — see docs/observability.md. The debug service adds the
-// /api/_debug/db/* read-only DB inspector (counts, FK/integrity, chat provenance dump).
-registerDebugRoutes(app, createDebugService(db));
+// /api/_debug/db/* read-only DB inspector (counts, FK/integrity, chat provenance dump); the assets
+// service adds /api/_debug/db/assets (CAS blob-store health — dangling/corrupt/orphan).
+registerDebugRoutes(
+  app,
+  createDebugService(db),
+  createAssetsService(db, createCas(env.ASSETS_DIR)),
+);
 
 app.get("/api/healthz", (c) => c.json({ ok: true, version: APP_VERSION }));
 

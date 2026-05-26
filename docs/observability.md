@@ -59,6 +59,7 @@ callers must present it via `x-debug-token:` header or `?token=`.
 | `GET /api/_debug/db/stats` | row counts per table |
 | `GET /api/_debug/db/integrity` | FK / integrity check |
 | `GET /api/_debug/db/chat/:id` | chat inspector — messages, variants, provenance, and the persisted `chat_events` (compaction/retry/rate-limit/status/auth) for one chat |
+| `GET /api/_debug/db/assets` | CAS blob-store health (`domain/assets` fsck) — dangling (row, no blob) / corrupt (blob ≠ hash) / orphan (blob, no row); the curl-able twin of `pnpm assets:fsck` |
 
 Every response carries an **`X-Request-Id`** header — the correlation key:
 

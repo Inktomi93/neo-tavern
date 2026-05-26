@@ -103,6 +103,8 @@ describe("debug service", () => {
     const empty = new Map(Object.entries((await svc.stats()).tables));
     expect(empty.get("chats")).toBe(0);
     expect(empty.get("messages")).toBe(0);
+    expect(empty.get("assets")).toBe(0); // CAS index + the image-vector table are counted too
+    expect(empty.get("image_embeddings")).toBe(0);
 
     await seedChat();
     const seeded = new Map(Object.entries((await svc.stats()).tables));

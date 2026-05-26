@@ -99,6 +99,12 @@ export function createAssetsService(db: Db, cas: Cas): AssetsService {
     const assetId = await assetIdForHash(put.hash);
     if (assetId === undefined)
       throw new Error(`assets.store: row missing after upsert (${put.hash})`);
+    // debug, not info: store is per-op (called once per card during a 310-card import) — the batch
+    // jobs below log their info-level summary. Metadata only (hash/kind/size — never the bytes).
+    log.debug(
+      { hash: put.hash, kind, size: put.size, created: put.created },
+      "assets: stored blob",
+    );
     return { assetId, hash: put.hash, size: put.size, created: put.created };
   };
 
@@ -221,6 +227,18 @@ export function createAssetsService(db: Db, cas: Cas): AssetsService {
       const orphans: string[] = [];
       for await (const hash of cas.listHashes()) {
         if (!known.has(hash)) orphans.push(hash);
+      }
+      const counts = {
+        rows: rows.length,
+        ok,
+        dangling: dangling.length,
+        corrupt: corrupt.length,
+        orphans: orphans.length,
+      };
+      if (dangling.length + corrupt.length + orphans.length > 0) {
+        log.warn(counts, "assets: fsck found issues");
+      } else {
+        log.info(counts, "assets: fsck clean");
       }
       return { rows: rows.length, ok, dangling, corrupt, orphans };
     },

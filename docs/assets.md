@@ -66,7 +66,11 @@ automatic.
 ## fsck
 Per `assets` row: assert the blob **exists** and **re-hashes** to its name. Reports **dangling**
 (row, no blob), **corrupt** (blob ≠ hash), and **orphan** (blob on disk, no row). `--rebuild`
-re-derives rows for orphan blobs (DR — walk + hash the tree, sniff the mime).
+re-derives rows for orphan blobs (DR — walk + hash the tree, sniff the mime). The same check is
+curl-able on the live server at **`GET /api/_debug/db/assets`** (behind `DEBUG_TOKEN`); asset row
+counts (incl. `image_embeddings`) show in `GET /api/_debug/db/stats`. `domain/assets` logs every
+batch op via the central `getLog()` — `store` at debug (per-op), backfill/GC/fsck/rebuild at info
+(warn on fsck issues); `cas.ts` stays silent (a pure adapter — the domain logs outcomes).
 
 ## URL contract + caddy serving (PREPARED, not load-tested)
 The app emits **`/blob/<hash>`** URLs (`shared/assets.ts` `blobUrl` — unit-tested). caddy serves
