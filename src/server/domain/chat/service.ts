@@ -1076,6 +1076,9 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
       const now = Date.now();
       let nextIdx = 0;
       if (existing.length === 0) {
+        // Preserve the first generation's provenance in variant 0 (incl. its tokens) before the
+        // message row gets repointed to the new variant below — else variant 0's per-variant token
+        // counts would be lost (the message row's columns are about to change).
         await db.insert(messageVariants).values({
           id: newId(),
           messageId: tip.id,
@@ -1083,6 +1086,8 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
           content: tip.content,
           model: tip.model,
           provider: tip.provider,
+          tokensIn: tip.tokensIn,
+          tokensOut: tip.tokensOut,
           createdAt: tip.createdAt,
         });
         nextIdx = 1;
@@ -1102,24 +1107,54 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
         genFinished: now,
         createdAt: now,
       });
+      // The message row tracks the ACTIVE variant in BOTH content and provenance — so its token/
+      // cost/context columns describe what's rendered, not a buried first gen. (The full per-gen
+      // record lives in message_variants; the richer fields here = the latest generation.)
       await db
         .update(messages)
-        .set({ activeVariantIdx: nextIdx, content: turn.reply })
+        .set({
+          activeVariantIdx: nextIdx,
+          content: turn.reply,
+          model: turn.usage.model,
+          provider: `${routing.api}/${routing.source}`,
+          stopReason: turn.stopReason,
+          tokensIn: turn.usage.tokensIn,
+          tokensOut: turn.usage.tokensOut,
+          cacheReadTokens: turn.usage.cacheReadTokens,
+          cacheWriteTokens: turn.usage.cacheWriteTokens,
+          cacheCreation5mTokens: turn.usage.cacheCreation5mTokens,
+          cacheCreation1hTokens: turn.usage.cacheCreation1hTokens,
+          contextWindow: turn.usage.contextWindow,
+          maxOutputTokens: turn.usage.maxOutputTokens,
+          ttftMs: turn.ttftMs,
+          terminalReason: turn.terminalReason,
+          apiErrorStatus: turn.apiErrorStatus,
+          costUsd: turn.usage.costUsd,
+        })
         .where(eq(messages.id, tip.id));
 
       // agent-sdk: the regen session (seeded → completed, or the fresh greeting session) is now
       // canonical. Drop the pre-swipe session's frames and point the chat at the new one. The
       // openrouter runner has no session.
+      // A swipe is a real generation — its tokens count toward the chat totals (else regenerations
+      // silently undercount cost/allowance). messageCount is unchanged (the swipe mutates the tip).
+      const tokenTotals = {
+        totalTokensIn: (chat.totalTokensIn ?? 0) + turn.usage.tokensIn,
+        totalTokensOut: (chat.totalTokensOut ?? 0) + turn.usage.tokensOut,
+      };
       if (routing.runner === "agent-sdk") {
         if (chat.sessionId !== null && chat.sessionId !== turn.sessionId) {
           await db.delete(sessionEntries).where(eq(sessionEntries.sessionId, chat.sessionId));
         }
         await db
           .update(chats)
-          .set({ sessionId: turn.sessionId || chat.sessionId, updatedAt: now })
+          .set({ sessionId: turn.sessionId || chat.sessionId, ...tokenTotals, updatedAt: now })
           .where(eq(chats.id, params.chatId));
       } else {
-        await db.update(chats).set({ updatedAt: now }).where(eq(chats.id, params.chatId));
+        await db
+          .update(chats)
+          .set({ ...tokenTotals, updatedAt: now })
+          .where(eq(chats.id, params.chatId));
       }
 
       getLog().info(
@@ -1143,7 +1178,13 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
       const chat = await loadOwnedChat(ownerId, params.chatId);
       await loadOwnedMessage(params.chatId, params.messageId); // ownership + existence
       const vRows = await db
-        .select({ content: messageVariants.content })
+        .select({
+          content: messageVariants.content,
+          model: messageVariants.model,
+          provider: messageVariants.provider,
+          tokensIn: messageVariants.tokensIn,
+          tokensOut: messageVariants.tokensOut,
+        })
         .from(messageVariants)
         .where(
           and(
@@ -1159,9 +1200,20 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
           `variant ${params.variantIdx} not found on message ${params.messageId}`,
         );
       }
+      // Keep the message row's per-variant provenance (tokens/model/provider) consistent with the
+      // selected variant's content. (The richer columns — cost/context/cache/ttft — aren't stored
+      // per variant, so they continue to reflect the latest generation; full per-variant provenance
+      // is a future migration.)
       await db
         .update(messages)
-        .set({ activeVariantIdx: params.variantIdx, content: variant.content })
+        .set({
+          activeVariantIdx: params.variantIdx,
+          content: variant.content,
+          model: variant.model,
+          provider: variant.provider,
+          tokensIn: variant.tokensIn,
+          tokensOut: variant.tokensOut,
+        })
         .where(eq(messages.id, params.messageId));
       const newSessionId = await reseedSdkSession(chat);
       if (newSessionId !== null) {

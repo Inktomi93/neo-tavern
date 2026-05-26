@@ -3,8 +3,9 @@ import type { TurnErrorKind } from "../../providers/turn";
 // Shaped, client-safe view of a message row. Carries the per-turn provenance the chat UI needs
 // (the context-fill meter off contextWindow, a cost/latency readout, the edited marker) — the
 // columns the old lean projection hid. Metadata only; never any non-message column.
-// NOTE: after a swipe these token/cost columns describe the message's FIRST generation, not the
-// active variant — per-variant truth lives in message_variants (see the swipe-provenance backlog).
+// These columns track the ACTIVE variant (mirrored on swipe/select). The token/model/provider are
+// kept exact per variant; the richer cost/context/cache/ttft fields reflect the latest GENERATION
+// (not yet stored per variant — message_variants holds the per-gen record).
 export interface MessageView {
   id: string;
   seq: number;
