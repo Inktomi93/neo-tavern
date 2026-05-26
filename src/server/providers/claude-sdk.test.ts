@@ -36,6 +36,20 @@ describe("Claude provider discipline — locks the proxy plugin/MCP/CLAUDE.md le
   test("its subprocess env kills CLAUDE.md injection", () => {
     expect(disciplineOptions().env[KEY_MDS]).toBe("true");
   });
+
+  test("sets generation knobs explicitly — thinking off, Opus capped at 200k, ambient effort neutralized", () => {
+    const env = disciplineOptions().env;
+
+    // Owner-chosen RP defaults (verified via scripts/env-knob-probe.ts), set explicitly so they
+    // don't depend on the host's ambient env (which leaks CLAUDE_EFFORT=xhigh). Bracket access via
+    // const keys (like KEY_MDS) sidesteps the index-signature dot/bracket lint conflict.
+    const KEY_THINKING = "CLAUDE_CODE_DISABLE_THINKING";
+    const KEY_1M = "CLAUDE_CODE_DISABLE_1M_CONTEXT";
+    const KEY_EFFORT = "CLAUDE_EFFORT";
+    expect(env[KEY_THINKING]).toBe("1");
+    expect(env[KEY_1M]).toBe("1");
+    expect(env[KEY_EFFORT]).toBeUndefined();
+  });
 });
 
 // ── Fixtures: hand-built SDK message frames ──────────────────────────────────

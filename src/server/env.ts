@@ -76,11 +76,24 @@ export const env = envSchema.parse(process.env);
  * ANTHROPIC_API_KEY (it would override the subscription); and keep CLAUDE.md
  * out of every request — must be the string "true", not "1" (st-claude-proxy
  * gotcha: Claude Code's isEnvTruthy() ignores "1").
+ *
+ * Generation knobs are set EXPLICITLY (not inherited): `...process.env` would otherwise leak the
+ * host's ambient `CLAUDE_EFFORT` (currently "xhigh") into every chat, making behavior depend on the
+ * shell. All verified via `scripts/env-knob-probe.ts`. Owner-chosen RP defaults:
+ *   • thinking OFF (`CLAUDE_CODE_DISABLE_THINKING`) — the model writes in-character immediately, no
+ *     reasoning preamble, far fewer tokens.
+ *   • Opus capped at 200k (`CLAUDE_CODE_DISABLE_1M_CONTEXT`) — compacts/manages sooner, cheaper/turn
+ *     (Opus 4.7 defaults to a 1M window otherwise); also makes the context-fill meter denominator 200k.
+ *   • `CLAUDE_EFFORT` neutralized — moot with thinking off, but explicit kills the ambient leak.
+ * These are flat defaults today; a per-chat override (preset config → per-turn env) is a later step.
  */
 export function buildClaudeSdkEnv(): Record<string, string | undefined> {
   return {
     ...process.env,
     ANTHROPIC_API_KEY: undefined,
     CLAUDE_CODE_DISABLE_CLAUDE_MDS: "true",
+    CLAUDE_CODE_DISABLE_THINKING: "1",
+    CLAUDE_CODE_DISABLE_1M_CONTEXT: "1",
+    CLAUDE_EFFORT: undefined,
   };
 }
