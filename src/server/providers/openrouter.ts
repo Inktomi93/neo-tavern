@@ -31,15 +31,32 @@ export function getOpenRouterClient(): OpenRouter {
 
 // ── Provider-aware caching ───────────────────────────────────────────────────
 // OpenRouter's `cache_control` is ANTHROPIC-ONLY (the spec: "Currently supported for Anthropic
-// Claude models"). The top-level ephemeral directive auto-places one cache breakpoint at the last
-// cacheable block (our static system prompt). Non-Anthropic models cache AUTOMATICALLY with no
-// field — sending the directive to them is wrong (ignored at best). So: apply it iff the routed
-// model is Anthropic. (Finer-grained per-block / history breakpoints → a later refinement, #48.)
-const ANTHROPIC_CACHE_DIRECTIVE = { type: "ephemeral", ttl: "1h" } as const;
+// Claude models"); non-Anthropic models cache AUTOMATICALLY with no field, so we send it iff the
+// routed model is Anthropic. The directive is the DEFAULT 5m TTL (no `ttl` field) — deliberately,
+// per the SillyTavern recipe: 1h cache writes cost ~2× the 5m price, AND `ttl:"1h"` would require
+// the `anthropic-beta: extended-cache-ttl` header (which @openrouter/sdk does not send → no cache
+// at all). 5m covers back-to-back RP turns at a fraction of the cost. (History-depth breakpoints →
+// a later refinement, #48; ST also caches at a configurable message depth.)
+const ANTHROPIC_CACHE = { type: "ephemeral" } as const;
 
 /** True when the model id routes to Anthropic (the only family that honors explicit cache_control). */
 export function isAnthropicModel(model: string): boolean {
   return /^anthropic\//i.test(model) || /(^|\/)claude[-/]/i.test(model);
+}
+
+// Anthropic prompt caching only takes effect when OpenRouter routes to Anthropic-DIRECT — measured:
+// an unpinned Anthropic model can land on an endpoint that silently ignores cache_control (0 cache),
+// while the same request pinned to Anthropic caches (write→read). So for Anthropic models we prefer
+// the Anthropic provider so our cache_control is honored. Order-only (fallbacks stay ON), so this
+// doesn't sacrifice reliability. A caller-supplied providerRouting wins (they're in control).
+function effectiveProviderRouting(
+  model: string,
+  userRouting: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (userRouting !== undefined) {
+    return userRouting;
+  }
+  return isAnthropicModel(model) ? { order: ["Anthropic"] } : undefined;
 }
 
 // ── Dynamic model catalog (via the SDK) ───────────────────────────────────────
@@ -288,39 +305,82 @@ function extractChatReply(view: ChatResultView): string {
   return "";
 }
 
+// The system message for a chat-completions turn, with provider-aware caching. For Anthropic we
+// emit PER-BLOCK cache_control on the STATIC text block — this pins the cache breakpoint at the
+// stable system prompt so it's written once and reused every turn. (The top-level cacheControl
+// directive instead pins the breakpoint at the LAST block — the volatile newest user message — so
+// no reusable cache forms; measured live, cacheWrite stayed 0.) The dynamic half goes in a second
+// (uncached) block after it, mirroring sdk-mode's boundary. Non-Anthropic models cache automatically
+// → a plain joined string (sending Anthropic cache_control to them is wrong).
+type ChatSystemMessage =
+  | { role: "system"; content: string }
+  | {
+      role: "system";
+      content: Array<{
+        type: "text";
+        text: string;
+        cacheControl?: typeof ANTHROPIC_CACHE;
+      }>;
+    };
+
+function buildChatSystemMessage(
+  staticPart: string,
+  dynamicPart: string,
+  anthropic: boolean,
+): ChatSystemMessage | null {
+  if (staticPart.length === 0 && dynamicPart.length === 0) {
+    return null;
+  }
+  if (anthropic && staticPart.length > 0) {
+    return {
+      role: "system",
+      content: [
+        { type: "text", text: staticPart, cacheControl: ANTHROPIC_CACHE },
+        ...(dynamicPart.length > 0 ? [{ type: "text" as const, text: dynamicPart }] : []),
+      ],
+    };
+  }
+  return {
+    role: "system",
+    content: [staticPart, dynamicPart].filter((s) => s.length > 0).join("\n\n"),
+  };
+}
+
 /**
  * One Chat Completions turn over OpenRouter (sdk.chat.send). Provider-agnostic out the top (returns
  * a {@link ChatTurnResult}, throws a {@link TurnError}), so domain/chat can inject it as a seam.
- * Caching is provider-aware: Anthropic models get the top-level cache_control directive; everything
- * else relies on the provider's automatic caching (no field). Cost + cached-token reads come back
- * inline in usage.
+ * Caching is provider-aware: Anthropic models get a PER-BLOCK cache_control on the static system
+ * block (pins the breakpoint at the stable prompt → reused across turns); everything else relies on
+ * the provider's automatic caching. Cost + cached-token reads come back inline in usage.
  */
 export async function runChatCompletionTurn(params: RawTurnParams): Promise<ChatTurnResult> {
   const startedAt = Date.now();
-  const system = joinSystemPrompt(params.systemPrompt);
   const cfg = params.params ?? {};
   const anthropic = isAnthropicModel(params.model);
 
+  const systemMessage = buildChatSystemMessage(
+    params.systemPrompt.static.trim(),
+    params.systemPrompt.dynamic.trim(),
+    anthropic,
+  );
   const messages = [
-    ...(system.length > 0 ? [{ role: "system" as const, content: system }] : []),
+    ...(systemMessage ? [systemMessage] : []),
     ...params.history
       .filter((m) => m.content.trim().length > 0)
       .map((m) => ({ role: m.role, content: m.content })),
   ];
+  const chatProvider = effectiveProviderRouting(params.model, params.providerRouting);
 
   const chatRequest = {
     model: params.model,
     messages,
-    // Anthropic-only: auto-places one cache breakpoint at the last cacheable block (the system
-    // prompt). Non-Anthropic models cache automatically, so we send nothing for them.
-    ...(anthropic ? { cacheControl: ANTHROPIC_CACHE_DIRECTIVE } : {}),
     ...(cfg.temperature !== undefined ? { temperature: cfg.temperature } : {}),
     ...(cfg.topP !== undefined ? { topP: cfg.topP } : {}),
     ...(cfg.maxOutputTokens !== undefined ? { maxCompletionTokens: cfg.maxOutputTokens } : {}),
     ...(cfg.frequencyPenalty !== undefined ? { frequencyPenalty: cfg.frequencyPenalty } : {}),
     ...(cfg.presencePenalty !== undefined ? { presencePenalty: cfg.presencePenalty } : {}),
     ...(cfg.reasoningEffort ? { reasoning: { effort: cfg.reasoningEffort } } : {}),
-    ...(params.providerRouting !== undefined ? { provider: params.providerRouting } : {}),
+    ...(chatProvider !== undefined ? { provider: chatProvider } : {}),
   };
 
   let view: ChatResultView;
@@ -444,12 +504,13 @@ export async function runRawTurn(params: RawTurnParams): Promise<ChatTurnResult>
     !anthropic && instructions.length > 0
       ? createHash("sha1").update(`${params.model} ${instructions}`).digest("hex").slice(0, 32)
       : undefined;
+  const responsesProvider = effectiveProviderRouting(params.model, params.providerRouting);
 
   const responsesRequest = {
     model: params.model,
     input: buildResponsesInput(params.history),
     ...(instructions.length > 0 ? { instructions } : {}),
-    ...(anthropic && instructions.length > 0 ? { cacheControl: ANTHROPIC_CACHE_DIRECTIVE } : {}),
+    ...(anthropic && instructions.length > 0 ? { cacheControl: ANTHROPIC_CACHE } : {}),
     ...(promptCacheKey !== undefined ? { promptCacheKey } : {}),
     ...(cfg.temperature !== undefined ? { temperature: cfg.temperature } : {}),
     ...(cfg.topP !== undefined ? { topP: cfg.topP } : {}),
@@ -457,7 +518,7 @@ export async function runRawTurn(params: RawTurnParams): Promise<ChatTurnResult>
     ...(cfg.presencePenalty !== undefined ? { presencePenalty: cfg.presencePenalty } : {}),
     ...(cfg.maxOutputTokens !== undefined ? { maxOutputTokens: cfg.maxOutputTokens } : {}),
     ...(cfg.reasoningEffort ? { reasoning: { effort: cfg.reasoningEffort, summary: "auto" } } : {}),
-    ...(params.providerRouting !== undefined ? { provider: params.providerRouting } : {}),
+    ...(responsesProvider !== undefined ? { provider: responsesProvider } : {}),
   };
 
   let view: ResponsesView;
