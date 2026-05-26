@@ -1,4 +1,5 @@
 import {
+  type EffortLevel,
   type Options,
   query,
   type SDKAssistantMessageError,
@@ -7,7 +8,9 @@ import {
   type SessionStore,
   SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
   type TerminalReason,
+  type ThinkingConfig,
 } from "@anthropic-ai/claude-agent-sdk";
+import { type GenerationParams, isThinkingOn } from "../../shared/generation";
 import { type ChatModelId, DEFAULT_CHAT_MODEL_ID } from "../../shared/models";
 import {
   buildClaudeOpenRouterEnv,
@@ -203,9 +206,10 @@ export interface ChatTurnParams {
    *  goes after SYSTEM_PROMPT_DYNAMIC_BOUNDARY so it re-evaluates per turn without busting the
    *  cached prefix (see docs/sdk-notes.md). Built by domain/chat via shared/prompt-assemble. */
   systemPrompt?: { static: string; dynamic: string };
-  /** Reply ceiling from the preset (params.maxOutputTokens) → CLAUDE_CODE_MAX_OUTPUT_TOKENS. The
-   *  agent-sdk's analogue of the openrouter runner's maxOutputTokens param. undefined = SDK default. */
-  maxOutputTokens?: number | undefined;
+  /** The unified generation knobs (shared/generation.ts). The runner translates them to typed SDK
+   *  Options (thinking/effort/maxBudgetUsd) + env (maxOutputTokens, thinking-disable). temperature/
+   *  topP are no-ops here (the SDK owns sampling). undefined = the owner defaults. */
+  generation?: GenerationParams | undefined;
   /** Optional live event sink (compaction/retry/rate-limit/...). The streaming-UI seam:
    *  a future SSE subscription forwards these; default undefined = collect-and-return only.
    *  (Token-delta streaming via includePartialMessages is deliberately NOT wired yet — no
@@ -222,15 +226,46 @@ export interface ChatTurnParams {
  * typed, provider-agnostic reason. Injected into `domain/chat` as a seam so the
  * turn logic is testable with a fake (no sub queries in `pnpm check`).
  */
+// Translate the unified GenerationParams into the agent-sdk's native surface: typed Options
+// (thinking/effort/maxBudgetUsd) for the things the SDK types directly, plus env overrides for the
+// rest (output cap; thinking-disable, the owner default). effort/thinking only apply when thinking
+// is on (the SDK ignores effort otherwise). temperature/topP have no agent-sdk knob → dropped.
+export function toSdkGeneration(generation: GenerationParams | undefined): {
+  envOverrides: ClaudeGenerationOverrides;
+  options: { thinking?: ThinkingConfig; effort?: EffortLevel; maxBudgetUsd?: number };
+} {
+  const g = generation ?? {};
+  const thinkingOn = isThinkingOn(g);
+  const options: { thinking?: ThinkingConfig; effort?: EffortLevel; maxBudgetUsd?: number } = {};
+  if (thinkingOn) {
+    options.thinking =
+      g.thinkingBudgetTokens !== undefined
+        ? { type: "enabled", budgetTokens: g.thinkingBudgetTokens }
+        : { type: "adaptive" };
+    if (g.effort !== undefined) {
+      options.effort = g.effort; // model-gated; the SDK clamps unsupported levels
+    }
+  }
+  if (g.maxBudgetUsd !== undefined) {
+    options.maxBudgetUsd = g.maxBudgetUsd;
+  }
+  return {
+    envOverrides: { maxOutputTokens: g.maxOutputTokens, disableThinking: !thinkingOn },
+    options,
+  };
+}
+
 // async (not a bare Promise-returning fn) so a synchronous throw from query() (e.g. bad
 // options) surfaces as a rejected promise, not a sync throw at the call site.
 export async function runChatTurn(params: ChatTurnParams): Promise<ChatTurnResult> {
   const systemPrompt = buildSystemPrompt(params.systemPrompt);
+  const gen = toSdkGeneration(params.generation);
   const stream = query({
     prompt: params.prompt,
     options: {
-      ...disciplineOptions(params.source, { maxOutputTokens: params.maxOutputTokens }),
+      ...disciplineOptions(params.source, gen.envOverrides),
       ...observabilityOptions(),
+      ...gen.options,
       model: params.model,
       maxTurns: 1,
       sessionStore: params.sessionStore,

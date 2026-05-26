@@ -28,7 +28,7 @@ import {
 } from "../../../shared/prompt-config";
 import { getLog } from "../../observability/logger";
 import { runChatTurn } from "../../providers/claude-sdk";
-import { type RawTurnParams, runChatCompletionTurn, runRawTurn } from "../../providers/openrouter";
+import { runChatCompletionTurn, runRawTurn } from "../../providers/openrouter";
 import { type ChatTurnResult, TurnError } from "../../providers/turn";
 import { newId } from "../_shared/ids";
 import { withChatLock } from "../_shared/lock";
@@ -364,7 +364,7 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
         source: routing.source,
         sessionStore: new DbSessionStore(db, chatId),
         systemPrompt: assemblePrompt(promptConfig, assembleCtx),
-        maxOutputTokens: promptConfig.params.maxOutputTokens,
+        generation: promptConfig.params,
       });
       await db.insert(messages).values({
         id: newId(),
@@ -606,25 +606,17 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
             source: routing.source,
             sessionStore: new DbSessionStore(db, params.chatId),
             systemPrompt,
-            maxOutputTokens: promptConfig.params.maxOutputTokens,
+            generation: promptConfig.params,
             ...(chat.sessionId ? { resume: chat.sessionId } : {}),
           });
         } else {
           // openrouter runner: rebuild the conversation from canon (incl. the user message just
           // inserted) → chat.send or beta.responses (by api). No session store; routing rides through.
-          const rawParams: RawTurnParams["params"] = {
-            ...(routing.params.temperature !== undefined
-              ? { temperature: routing.params.temperature }
-              : {}),
-            ...(routing.params.maxOutputTokens !== undefined
-              ? { maxOutputTokens: routing.params.maxOutputTokens }
-              : {}),
-          };
           turn = await openRouterRunner(routing.api)({
             model: routing.model,
             systemPrompt,
             history: await loadCanonHistory(params.chatId),
-            params: rawParams,
+            generation: routing.params,
             providerRouting: routing.providerRouting,
           });
         }
@@ -1017,7 +1009,7 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
               source: routing.source,
               sessionStore: store,
               systemPrompt,
-              maxOutputTokens: promptConfig.params.maxOutputTokens,
+              generation: promptConfig.params,
               resume: seededSessionId,
             });
           } else {
@@ -1028,23 +1020,15 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
               source: routing.source,
               sessionStore: store,
               systemPrompt,
-              maxOutputTokens: promptConfig.params.maxOutputTokens,
+              generation: promptConfig.params,
             });
           }
         } else {
-          const rawParams: RawTurnParams["params"] = {
-            ...(promptConfig.params.temperature !== undefined
-              ? { temperature: promptConfig.params.temperature }
-              : {}),
-            ...(promptConfig.params.maxOutputTokens !== undefined
-              ? { maxOutputTokens: promptConfig.params.maxOutputTokens }
-              : {}),
-          };
           turn = await openRouterRunner(routing.api)({
             model: routing.model,
             systemPrompt,
             history: [...history, { role: "user", content: regenPrompt }],
-            params: rawParams,
+            generation: promptConfig.params,
             providerRouting: routing.providerRouting,
           });
         }

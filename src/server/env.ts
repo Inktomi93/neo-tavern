@@ -80,6 +80,10 @@ export interface ClaudeGenerationOverrides {
   /** Reply ceiling → CLAUDE_CODE_MAX_OUTPUT_TOKENS. From the preset's `params.maxOutputTokens`.
    *  Don't set absurdly low — 64 errored to empty (docs/sdk-notes.md). undefined = SDK default. */
   maxOutputTokens?: number | undefined;
+  /** Owner default is thinking OFF (CLAUDE_CODE_DISABLE_THINKING="1"). The runner sets this false
+   *  when the preset enables thinking — then it drives depth via the typed `thinking`/`effort`
+   *  Options instead (those don't bite while DISABLE_THINKING is set). undefined ⇒ off (default). */
+  disableThinking?: boolean | undefined;
 }
 
 /**
@@ -117,7 +121,9 @@ export function buildClaudeSdkEnv(
     ANTHROPIC_BASE_URL: undefined,
     ANTHROPIC_AUTH_TOKEN: undefined,
     CLAUDE_CODE_DISABLE_CLAUDE_MDS: "true",
-    CLAUDE_CODE_DISABLE_THINKING: "1",
+    // Owner default OFF; the runner sets disableThinking=false when the preset enables thinking
+    // (then the typed `thinking`/`effort` Options drive depth — they don't bite while this is "1").
+    CLAUDE_CODE_DISABLE_THINKING: overrides.disableThinking === false ? undefined : "1",
     CLAUDE_CODE_DISABLE_1M_CONTEXT: "1",
     CLAUDE_EFFORT: undefined,
     // Per-turn reply cap from the preset. Always set (override value or undefined) so an ambient
@@ -182,7 +188,9 @@ export function buildClaudeOpenRouterEnv(
     // Same leak-discipline + RP generation defaults as sub mode, so the ONLY difference between
     // mode 1 and mode 2 is the auth target (keeps both turns byte-comparable for caching).
     CLAUDE_CODE_DISABLE_CLAUDE_MDS: "true",
-    CLAUDE_CODE_DISABLE_THINKING: "1",
+    // Owner default OFF; the runner sets disableThinking=false when the preset enables thinking
+    // (then the typed `thinking`/`effort` Options drive depth — they don't bite while this is "1").
+    CLAUDE_CODE_DISABLE_THINKING: overrides.disableThinking === false ? undefined : "1",
     CLAUDE_CODE_DISABLE_1M_CONTEXT: "1",
     CLAUDE_EFFORT: undefined,
     // Per-turn reply cap from the preset (mirrors sub mode — same discipline, neutralizes ambient).

@@ -25,7 +25,7 @@ function turn(model: string, system: string, userText: string): RawTurnParams {
     model,
     systemPrompt: { static: system, dynamic: "" },
     history: [{ role: "user", content: userText }],
-    params: { temperature: 0.7, maxOutputTokens: 64 },
+    generation: { temperature: 0.7, maxOutputTokens: 64 },
   };
 }
 

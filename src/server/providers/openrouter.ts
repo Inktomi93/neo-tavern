@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { OpenRouter } from "@openrouter/sdk";
+import { type GenerationParams, isThinkingOn } from "../../shared/generation";
 import { env } from "../env";
 import { getLog } from "../observability/logger";
 import { type ChatTurnResult, type ChatTurnUsage, TurnError, type TurnErrorKind } from "./turn";
@@ -270,18 +271,28 @@ export interface RawTurnParams {
   systemPrompt: { static: string; dynamic: string };
   /** Full conversation from canon, oldest→newest (the last entry is the new user message). */
   history: { role: "user" | "assistant"; content: string }[];
-  /** Generation params, flowing from the preset config. */
-  params?: {
-    temperature?: number;
-    topP?: number;
-    maxOutputTokens?: number;
-    frequencyPenalty?: number;
-    presencePenalty?: number;
-    reasoningEffort?: "low" | "medium" | "high";
-  };
+  /** The unified generation knobs (shared/generation.ts). temperature/topP/maxOutputTokens map to
+   *  request fields; thinking/effort → the `reasoning` block; maxBudgetUsd is a no-op here (no
+   *  per-request budget). undefined = the model/provider defaults. */
+  generation?: GenerationParams | undefined;
   /** OpenRouter provider-routing preferences (order/allowFallbacks/sort/only/ignore/…). Lenient
    *  pass-through (OpenRouter owns the schema); undefined = default routing. From chats.metadata. */
   providerRouting?: Record<string, unknown> | undefined;
+}
+
+// Translate the unified reasoning knobs into OpenRouter's `reasoning.effort`. "off" → "none"
+// (disables reasoning on reasoning models); otherwise the effort level, with the agnostic "max"
+// (Claude-only) mapped to "xhigh" (OpenRouter's enum has no "max"). undefined = no preference.
+// A fixed thinking budget has no OpenRouter chat equivalent, so it's treated as "on" (effort only).
+export function toReasoningEffort(generation: GenerationParams | undefined): string | undefined {
+  const g = generation ?? {};
+  if (g.thinking === "off") {
+    return "none";
+  }
+  if (!isThinkingOn(g)) {
+    return undefined;
+  }
+  return g.effort === "max" ? "xhigh" : (g.effort ?? "high");
 }
 
 // Map @openrouter/sdk errors → our provider-agnostic kinds. Response errors carry a numeric
@@ -435,7 +446,7 @@ function buildChatSystemMessage(
  */
 export async function runChatCompletionTurn(params: RawTurnParams): Promise<ChatTurnResult> {
   const startedAt = Date.now();
-  const cfg = params.params ?? {};
+  const cfg = params.generation ?? {};
   const anthropic = isAnthropicModel(params.model);
 
   const systemMessage = buildChatSystemMessage(
@@ -450,6 +461,7 @@ export async function runChatCompletionTurn(params: RawTurnParams): Promise<Chat
       .map((m) => ({ role: m.role, content: m.content })),
   ];
   const chatProvider = effectiveProviderRouting(params.model, params.providerRouting);
+  const reasoningEffort = toReasoningEffort(cfg);
 
   const chatRequest = {
     model: params.model,
@@ -457,9 +469,7 @@ export async function runChatCompletionTurn(params: RawTurnParams): Promise<Chat
     ...(cfg.temperature !== undefined ? { temperature: cfg.temperature } : {}),
     ...(cfg.topP !== undefined ? { topP: cfg.topP } : {}),
     ...(cfg.maxOutputTokens !== undefined ? { maxCompletionTokens: cfg.maxOutputTokens } : {}),
-    ...(cfg.frequencyPenalty !== undefined ? { frequencyPenalty: cfg.frequencyPenalty } : {}),
-    ...(cfg.presencePenalty !== undefined ? { presencePenalty: cfg.presencePenalty } : {}),
-    ...(cfg.reasoningEffort ? { reasoning: { effort: cfg.reasoningEffort } } : {}),
+    ...(reasoningEffort !== undefined ? { reasoning: { effort: reasoningEffort } } : {}),
     ...(chatProvider !== undefined ? { provider: chatProvider } : {}),
   };
 
@@ -575,7 +585,7 @@ function extractResponsesReply(view: ResponsesView): string {
 export async function runRawTurn(params: RawTurnParams): Promise<ChatTurnResult> {
   const startedAt = Date.now();
   const instructions = joinSystemPrompt(params.systemPrompt);
-  const cfg = params.params ?? {};
+  const cfg = params.generation ?? {};
   const anthropic = isAnthropicModel(params.model);
 
   // A stable per-system-prompt key lets OpenAI-style providers reuse their automatic cache across
@@ -585,6 +595,7 @@ export async function runRawTurn(params: RawTurnParams): Promise<ChatTurnResult>
       ? createHash("sha1").update(`${params.model} ${instructions}`).digest("hex").slice(0, 32)
       : undefined;
   const responsesProvider = effectiveProviderRouting(params.model, params.providerRouting);
+  const reasoningEffort = toReasoningEffort(cfg);
 
   const responsesRequest = {
     model: params.model,
@@ -594,10 +605,10 @@ export async function runRawTurn(params: RawTurnParams): Promise<ChatTurnResult>
     ...(promptCacheKey !== undefined ? { promptCacheKey } : {}),
     ...(cfg.temperature !== undefined ? { temperature: cfg.temperature } : {}),
     ...(cfg.topP !== undefined ? { topP: cfg.topP } : {}),
-    ...(cfg.frequencyPenalty !== undefined ? { frequencyPenalty: cfg.frequencyPenalty } : {}),
-    ...(cfg.presencePenalty !== undefined ? { presencePenalty: cfg.presencePenalty } : {}),
     ...(cfg.maxOutputTokens !== undefined ? { maxOutputTokens: cfg.maxOutputTokens } : {}),
-    ...(cfg.reasoningEffort ? { reasoning: { effort: cfg.reasoningEffort, summary: "auto" } } : {}),
+    ...(reasoningEffort !== undefined
+      ? { reasoning: { effort: reasoningEffort, summary: "auto" } }
+      : {}),
     ...(responsesProvider !== undefined ? { provider: responsesProvider } : {}),
   };
 

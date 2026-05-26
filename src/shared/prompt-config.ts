@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { generationParamsSchema } from "./generation";
 
 // The prompt structure a chat is generated under — the versioned `config` blob stored on
 // `preset_versions.config` (migration 0007). It is ONE immutable snapshot per version
@@ -85,14 +86,9 @@ export const promptConfigSchema = z
   .object({
     schemaVersion: z.number().int().positive().default(PROMPT_CONFIG_SCHEMA_VERSION),
     sections: z.array(promptSectionSchema),
-    // Generation defaults (the "sampling/scaffold bundle"). Minimal now; sdk-mode ignores most
-    // (the SDK owns sampling), raw mode will read these. Extend deliberately.
-    params: z
-      .object({
-        temperature: z.number().min(0).max(2).optional(),
-        maxOutputTokens: z.number().int().positive().optional(),
-      })
-      .default({}),
+    // Generation knobs — the SINGLE provider-agnostic vocabulary (shared/generation.ts). Each runner
+    // translates it to its native surface; a knob a runner can't honor is a no-op there.
+    params: generationParamsSchema.default({}),
   })
   .refine((c) => c.sections.filter((s) => s.type === "boundary").length <= 1, {
     message: "a prompt config may have at most one boundary section",
