@@ -55,14 +55,30 @@ export interface SendParams {
   content: string;
 }
 
+/** The api/source a chat runs as (matches chats.api/source; see domain/chat/routing). */
+export type ChatApi = "agent-sdk" | "chat-completions" | "responses";
+export type ChatSource = "max-pro-sub" | "openrouter";
+
 export interface ForkChatParams {
   username: string;
   chatId: string;
   /** Branch point: copy canon messages with seq ≤ atSeq into the new chat. */
   atSeq: number;
-  /** The fork's mode. 'raw' rebuilds history from canon (supported); 'sdk' needs
-   *  session_entries seeding (deferred — throws until the seeding primitive lands). */
-  targetMode: "sdk" | "raw";
+  /** The fork's api + source. agent-sdk targets seed session_entries from the copied canon;
+   *  openrouter-runner targets (responses) rebuild from canon (no session). */
+  targetApi: ChatApi;
+  targetSource: ChatSource;
+}
+
+export interface SetProviderParams {
+  username: string;
+  chatId: string;
+  /** The api/source to switch this chat to (the generalized escape valve). Switching INTO agent-sdk
+   *  seeds a session from canon; switching OUT drops it; max↔openrouter keeps the session. */
+  api: ChatApi;
+  source: ChatSource;
+  /** New next-turn model, or null/undefined to fall back to the resolver default for the target. */
+  model?: string | null | undefined;
 }
 
 export interface SwipeParams {
@@ -91,8 +107,9 @@ export interface ChatService {
   create(params: CreateChatParams): Promise<{ chatId: string }>;
   listMessages(params: { username: string; chatId: string }): Promise<MessageView[]>;
   send(params: SendParams): Promise<SendResult>;
-  /** One-way sdk→raw conversion, in place (CLAUDE.md escape valve). Throws if not sdk. */
-  convertToRaw(params: { username: string; chatId: string }): Promise<void>;
+  /** Switch a chat's api/source/model in place (the generalized escape valve). Handles the session
+   *  implications (seed when entering agent-sdk, drop when leaving). Throws on an incoherent combo. */
+  setProvider(params: SetProviderParams): Promise<void>;
   /** Branch a chat at `atSeq` into a new chat (parentChatId/forkedAt). Returns the new id. */
   forkChat(params: ForkChatParams): Promise<{ chatId: string }>;
   /** Regenerate the last assistant turn as a NEW variant (swipe). Returns the same result shape as
@@ -118,7 +135,7 @@ export class ChatNotFoundError extends Error {
 // importing @trpc/server into the domain. fork_sdk_unsupported = the deferred raw→sdk
 // seeding primitive (shared with greeting seeding); see docs/build-plan.md.
 export type ChatOpReason =
-  | "not_sdk"
+  | "invalid_provider"
   | "invalid_fork_point"
   | "no_such_message"
   | "no_such_variant"

@@ -47,7 +47,6 @@ test("find enriches knn hits — character hits carry name+tags, segment hits ca
     ownerId: "uA",
     title: "A1",
     characterVersionId: "cvA",
-    provider: "anthropic-sdk",
     createdAt: now,
     updatedAt: now,
   });

@@ -47,6 +47,7 @@ import {
   type SelectVariantParams,
   type SendParams,
   type SendResult,
+  type SetProviderParams,
   type SwipeParams,
 } from "./types";
 
@@ -280,8 +281,7 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
       ownerId,
       title: params.title,
       characterVersionId: versionId,
-      mode: "sdk",
-      provider: "anthropic-sdk",
+      // api/source default to agent-sdk + max-pro-sub (free Claude on the sub) via the schema;
       // model left null → resolveTurnRouting falls back to DEFAULT_CHAT_MODEL_ID.
       createdAt: now,
       updatedAt: now,
@@ -334,13 +334,14 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
       resolveConfig(chat),
     ]);
     const routing = resolveTurnRouting(chat, promptConfig);
-    if (routing.mode !== "sdk") {
-      return; // create() only makes sdk chats; a raw opening would route through runRaw (not wired)
+    if (routing.runner !== "agent-sdk") {
+      return; // create() only makes agent-sdk chats; an openrouter opening would route through runRaw
     }
     try {
       const turn = await runTurn({
         prompt: OPEN_SCENE_PROMPT,
         model: routing.model,
+        source: routing.source,
         sessionStore: new DbSessionStore(db, chatId),
         systemPrompt: assemblePrompt(promptConfig, assembleCtx),
       });
@@ -351,7 +352,7 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
         role: "assistant",
         content: turn.reply,
         model: turn.usage.model,
-        provider: routing.provider,
+        provider: `${routing.api}/${routing.source}`,
         stopReason: turn.stopReason,
         tokensIn: turn.usage.tokensIn,
         tokensOut: turn.usage.tokensOut,
@@ -467,8 +468,8 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
         getLog().error(
           {
             chatId: params.chatId,
-            mode: chat.mode,
-            provider: chat.provider,
+            api: chat.api,
+            source: chat.source,
             model: chat.model,
             err: error instanceof Error ? error.message : String(error),
           },
@@ -484,8 +485,8 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
       getLog().debug(
         {
           chatId: params.chatId,
-          mode: routing.mode,
-          provider: routing.provider,
+          api: routing.api,
+          source: routing.source,
           model: routing.model,
           preset: chat.presetVersionId === null ? "default" : "pinned",
           staticChars: systemPrompt.static.length,
@@ -502,18 +503,20 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
 
       let turn: ChatTurnResult;
       try {
-        if (routing.mode === "sdk") {
-          // sdk-mode: stateless resume-per-message through our DB-backed SessionStore.
+        if (routing.runner === "agent-sdk") {
+          // agent-sdk runner (Max sub OR OpenRouter skin — `source` picks the env): stateless
+          // resume-per-message through our DB-backed SessionStore.
           turn = await runTurn({
             prompt: params.content,
             model: routing.model,
+            source: routing.source,
             sessionStore: new DbSessionStore(db, params.chatId),
             systemPrompt,
             ...(chat.sessionId ? { resume: chat.sessionId } : {}),
           });
         } else {
-          // raw-mode: rebuild the conversation from canon (incl. the user message just inserted)
-          // → OpenRouter Responses turn. No session store; provider routing rides through.
+          // openrouter runner: rebuild the conversation from canon (incl. the user message just
+          // inserted) → OpenRouter Responses turn. No session store; provider routing rides through.
           const rawParams: RawTurnParams["params"] = {
             ...(routing.params.temperature !== undefined
               ? { temperature: routing.params.temperature }
@@ -566,7 +569,7 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
         role: "assistant",
         content: turn.reply,
         model: turn.usage.model,
-        provider: routing.provider,
+        provider: `${routing.api}/${routing.source}`,
         stopReason: turn.stopReason,
         tokensIn: turn.usage.tokensIn,
         tokensOut: turn.usage.tokensOut,
@@ -586,9 +589,11 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
       await db
         .update(chats)
         .set({
-          // sessionId is an sdk-mode concept (the resume handle); raw-mode has none, so don't
-          // touch it there (avoid leaning on runRaw returning a falsy sessionId).
-          ...(routing.mode === "sdk" ? { sessionId: turn.sessionId || chat.sessionId } : {}),
+          // sessionId is an agent-sdk concept (the resume handle); the openrouter runner has none,
+          // so don't touch it there (avoid leaning on runRaw returning a falsy sessionId).
+          ...(routing.runner === "agent-sdk"
+            ? { sessionId: turn.sessionId || chat.sessionId }
+            : {}),
           messageCount: (chat.messageCount ?? 0) + 2,
           totalTokensIn: (chat.totalTokensIn ?? 0) + turn.usage.tokensIn,
           totalTokensOut: (chat.totalTokensOut ?? 0) + turn.usage.tokensOut,
@@ -613,33 +618,68 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
     });
   }
 
-  // One-way sdk→raw conversion in place (the CLAUDE.md escape valve). The canon stays; raw-mode
-  // rebuilds history from it each turn, so no session seeding is needed. Locked against in-flight
-  // sends (same per-chat lock) so we never flip mode mid-turn.
-  async function convertToRaw(params: { username: string; chatId: string }): Promise<void> {
+  // Switch a chat's api/source/model in place (the generalized escape valve — replaces the old
+  // one-way sdk→raw convert now that "mode" is gone). The canon always stays; what changes is how
+  // the NEXT turn runs + the session handling that implies:
+  //   • entering agent-sdk (from the openrouter runner) → seed a session from canon so resume works
+  //   • leaving agent-sdk → drop the session (the openrouter runner rebuilds from canon)
+  //   • staying on agent-sdk (max↔openrouter) → keep the session (same frame format; only the
+  //     credential/endpoint changes)
+  // Locked against in-flight sends (same per-chat lock) so we never flip provider mid-turn.
+  async function setProvider(params: SetProviderParams): Promise<void> {
     const ownerId = await ensureUser(db, params.username);
     await withChatLock(params.chatId, async () => {
       const chat = await loadOwnedChat(ownerId, params.chatId);
-      if (chat.mode !== "sdk") {
+      // Coherence guard (the same invariants resolveTurnRouting enforces, checked before we persist
+      // so a bad combo can never be stored). chat-completions is designed but not yet runnable.
+      if (params.api === "chat-completions") {
         throw new ChatOperationError(
-          "not_sdk",
-          `chat ${params.chatId} is mode=${chat.mode}; conversion is one-way sdk→raw`,
+          "invalid_provider",
+          "api=chat-completions is not yet implemented",
         );
       }
+      if (params.api === "responses" && params.source !== "openrouter") {
+        throw new ChatOperationError(
+          "invalid_provider",
+          `api=responses requires source=openrouter (got ${params.source})`,
+        );
+      }
+
+      const enteringAgentSdk = params.api === "agent-sdk" && chat.api !== "agent-sdk";
+      const leavingAgentSdk = params.api !== "agent-sdk" && chat.api === "agent-sdk";
+
+      let sessionId = chat.sessionId;
+      if (leavingAgentSdk) {
+        if (chat.sessionId !== null) {
+          await db.delete(sessionEntries).where(eq(sessionEntries.sessionId, chat.sessionId));
+        }
+        sessionId = null;
+      } else if (enteringAgentSdk) {
+        // Seed a session from current canon so the first agent-sdk resume sees the branched history
+        // (reuses the validated reseed path; reseedSdkSession gates on the CURRENT api, so seed here).
+        sessionId = await seedSessionFromCanon(params.chatId);
+      }
+
       await db
         .update(chats)
         .set({
-          mode: "raw",
-          provider: "openrouter",
-          // The sdk Claude id isn't an OpenRouter id → null so resolveTurnRouting falls back to
-          // DEFAULT_RAW_MODEL_ID (the user picks a real raw model via the picker later).
-          model: null,
-          sessionId: null, // the sdk session no longer applies; raw rebuilds from canon
+          api: params.api,
+          source: params.source,
+          // model defaults to null unless the caller picks one (the catalog differs per api/source).
+          model: params.model ?? null,
+          sessionId,
           convertedAt: Date.now(),
           updatedAt: Date.now(),
         })
         .where(eq(chats.id, params.chatId));
-      getLog().info({ chatId: params.chatId, from: "sdk", to: "raw" }, "chat: converted to raw");
+      getLog().info(
+        {
+          chatId: params.chatId,
+          from: `${chat.api}/${chat.source}`,
+          to: `${params.api}/${params.source}`,
+        },
+        "chat: provider switched",
+      );
     });
   }
 
@@ -671,11 +711,12 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
 
     const now = Date.now();
     const newChatId = newId();
-    // model carries only when the mode is unchanged (same catalog); a mode switch resets to the
-    // target default (null → resolver default).
-    const model = params.targetMode === source.mode ? source.model : null;
-    // sdk-target gets a fresh valid-UUID session (seeded below); raw-target has none.
-    const sessionId = params.targetMode === "sdk" ? randomUUID() : null;
+    // model carries only when api+source are unchanged (same catalog); switching provider resets to
+    // the target default (null → resolver default).
+    const sameProvider = params.targetApi === source.api && params.targetSource === source.source;
+    const model = sameProvider ? source.model : null;
+    // agent-sdk target gets a fresh valid-UUID session (seeded below); openrouter target has none.
+    const sessionId = params.targetApi === "agent-sdk" ? randomUUID() : null;
     await db.insert(chats).values({
       id: newChatId,
       ownerId,
@@ -683,8 +724,8 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
       characterVersionId: source.characterVersionId, // the PIN — shared immutable version, not a copy
       personaId: source.personaId,
       presetVersionId: source.presetVersionId,
-      mode: params.targetMode,
-      provider: params.targetMode === "sdk" ? "anthropic-sdk" : "openrouter",
+      api: params.targetApi,
+      source: params.targetSource,
       model,
       sessionId,
       parentChatId: params.chatId,
@@ -752,7 +793,8 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
         parentChatId: params.chatId,
         atSeq: params.atSeq,
         copied: canon.length,
-        targetMode: params.targetMode,
+        targetApi: params.targetApi,
+        targetSource: params.targetSource,
         seeded: sessionId !== null,
       },
       "chat: forked",
@@ -760,32 +802,40 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
     return { chatId: newChatId };
   }
 
-  // After any canon mutation (edit / select / swipe), re-seed the sdk session from CURRENT canon so
-  // the next resume reflects it — the "every turn resumes from a branch point" model (validated
-  // buildSeedFrames; simpler + safer than session-frame surgery, and swipe/edit are infrequent in
-  // sdk-mode so the re-cache cost is fine). Rotates sessionId and drops the OLD frames (no orphans).
-  // raw-mode has no session → no-op (returns null). Greeting-first canon gets the invisible-user
-  // prefix (matches create()). Returns the new sessionId to persist on the chat (or null).
-  async function reseedSdkSession(chat: typeof chats.$inferSelect): Promise<string | null> {
-    if (chat.mode !== "sdk") {
-      return null;
-    }
-    if (chat.sessionId !== null) {
-      await db.delete(sessionEntries).where(eq(sessionEntries.sessionId, chat.sessionId));
-    }
-    const canon = await loadCanonHistory(chat.id);
+  // Build a FRESH agent-sdk session from the chat's current canon and return its sessionId (the
+  // "every turn resumes from a branch point" model — validated buildSeedFrames). Greeting-first
+  // canon (assistant at seq 1, no user) gets the ST invisible-user prefix, matching create(). Does
+  // NOT delete any prior session — callers that rotate handle that. Used by reseedSdkSession (after
+  // a canon mutation) and setProvider (when a chat enters agent-sdk from the openrouter runner).
+  async function seedSessionFromCanon(chatId: string): Promise<string> {
+    const canon = await loadCanonHistory(chatId);
     const newSessionId = randomUUID();
     if (canon.length > 0) {
       const seed: SeedTurn[] =
         canon[0]?.role === "assistant"
           ? [{ role: "user", content: GREETING_USER_STUB }, ...canon]
           : canon;
-      await new DbSessionStore(db, chat.id).append(
-        { projectKey: chat.id, sessionId: newSessionId },
+      await new DbSessionStore(db, chatId).append(
+        { projectKey: chatId, sessionId: newSessionId },
         buildSeedFrames(seed, newSessionId),
       );
     }
     return newSessionId;
+  }
+
+  // After any canon mutation (edit / select / swipe) on an agent-sdk chat, re-seed the session from
+  // CURRENT canon so the next resume reflects it (simpler + safer than session-frame surgery, and
+  // swipe/edit are infrequent so the re-cache cost is fine). Rotates sessionId and drops the OLD
+  // frames (no orphans). The openrouter runner has no session → no-op (returns null). Returns the
+  // new sessionId to persist on the chat (or null).
+  async function reseedSdkSession(chat: typeof chats.$inferSelect): Promise<string | null> {
+    if (chat.api !== "agent-sdk") {
+      return null;
+    }
+    if (chat.sessionId !== null) {
+      await db.delete(sessionEntries).where(eq(sessionEntries.sessionId, chat.sessionId));
+    }
+    return seedSessionFromCanon(chat.id);
   }
 
   async function loadOwnedMessage(
@@ -856,11 +906,11 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
 
       const startedAt = Date.now();
       let turn: ChatTurnResult;
-      // sdk-mode pre-seeds a fresh session from the pre-user history; the regen turn completes it to
+      // agent-sdk pre-seeds a fresh session from the pre-user history; the regen turn completes it to
       // the new canonical state. Track it so a failed turn cleans up the seeded frames (no orphan).
       let seededSessionId: string | null = null;
       try {
-        if (routing.mode === "sdk") {
+        if (routing.runner === "agent-sdk") {
           const store = new DbSessionStore(db, params.chatId);
           if (history.length > 0) {
             seededSessionId = randomUUID();
@@ -871,6 +921,7 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
             turn = await runTurn({
               prompt: regenPrompt,
               model: routing.model,
+              source: routing.source,
               sessionStore: store,
               systemPrompt,
               resume: seededSessionId,
@@ -880,6 +931,7 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
             turn = await runTurn({
               prompt: regenPrompt,
               model: routing.model,
+              source: routing.source,
               sessionStore: store,
               systemPrompt,
             });
@@ -948,7 +1000,7 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
         idx: nextIdx,
         content: turn.reply,
         model: turn.usage.model,
-        provider: routing.provider,
+        provider: `${routing.api}/${routing.source}`,
         tokensIn: turn.usage.tokensIn,
         tokensOut: turn.usage.tokensOut,
         genStarted: startedAt,
@@ -960,9 +1012,10 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
         .set({ activeVariantIdx: nextIdx, content: turn.reply })
         .where(eq(messages.id, tip.id));
 
-      // sdk: the regen session (seeded → completed, or the fresh greeting session) is now canonical.
-      // Drop the pre-swipe session's frames and point the chat at the new one. raw: no session.
-      if (routing.mode === "sdk") {
+      // agent-sdk: the regen session (seeded → completed, or the fresh greeting session) is now
+      // canonical. Drop the pre-swipe session's frames and point the chat at the new one. The
+      // openrouter runner has no session.
+      if (routing.runner === "agent-sdk") {
         if (chat.sessionId !== null && chat.sessionId !== turn.sessionId) {
           await db.delete(sessionEntries).where(eq(sessionEntries.sessionId, chat.sessionId));
         }
@@ -975,7 +1028,13 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
       }
 
       getLog().info(
-        { chatId: params.chatId, messageId: tip.id, newVariantIdx: nextIdx, mode: routing.mode },
+        {
+          chatId: params.chatId,
+          messageId: tip.id,
+          newVariantIdx: nextIdx,
+          api: routing.api,
+          source: routing.source,
+        },
         "chat: swiped (new variant)",
       );
       return { status: "ok", messages: await listByChat(params.chatId) };
@@ -1062,7 +1121,7 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
     create,
     listMessages,
     send,
-    convertToRaw,
+    setProvider,
     forkChat,
     swipe,
     selectVariant,

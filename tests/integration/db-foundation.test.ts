@@ -63,7 +63,7 @@ async function seedCharacterAndChat(db: Db): Promise<void> {
     ownerId: "u",
     title: "T",
     characterVersionId: "cv",
-    provider: "import",
+    // api/source default (agent-sdk + max-pro-sub) via the schema.
     createdAt: NOW,
     updatedAt: NOW,
   });

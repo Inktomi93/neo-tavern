@@ -33,7 +33,6 @@ import type { ParsedChat } from "./chat";
 
 // Imported chats carry this as chats.provider — honest provenance; the real per-message
 // model/api live on messages/message_variants. (chats.provider is notNull free text.)
-const PROVIDER_IMPORT = "import";
 
 /** Stable character handle from a name/filename. Lowercase + non-alphanumeric → hyphens;
  *  this is what collapses ST's case-variant chat dirs ("Block of Cheese" / "Block Of
@@ -241,8 +240,10 @@ export function createImportService(db: Db, deps: ImportServiceDeps): ImportServ
           ownerId,
           title: ci.importedFrom.replace(/\.jsonl$/, ""),
           characterVersionId: versionId,
-          mode: "sdk",
-          provider: PROVIDER_IMPORT,
+          // Imported ST chats are continuable Claude chats: agent-sdk on the Max sub (seedable from
+          // canon on demand). sessionId stays null until the first send seeds/resumes a session.
+          api: "agent-sdk",
+          source: "max-pro-sub",
           sessionId: null,
           importedFrom: ci.importedFrom,
           importHash: ci.importHash,

@@ -92,8 +92,8 @@ function failingRawRunner(error: TurnError) {
 
 const baseChar = { characterName: "Aria", characterDescription: "a test character" };
 
-// Flip a freshly-created (sdk) chat into raw/openrouter with a pinned model — the shape 5D's
-// conversion will produce. (create() only makes sdk chats; no raw-create path exists yet.)
+// Flip a freshly-created (agent-sdk) chat onto the openrouter Responses runner with a pinned model
+// — the shape setProvider produces. (create() only makes agent-sdk chats.)
 async function makeRaw(
   db: Awaited<ReturnType<typeof freshDb>>,
   chatId: string,
@@ -101,7 +101,7 @@ async function makeRaw(
 ): Promise<void> {
   await db
     .update(chats)
-    .set({ mode: "raw", provider: "openrouter", model })
+    .set({ api: "responses", source: "openrouter", model })
     .where(eq(chats.id, chatId));
 }
 
@@ -216,11 +216,11 @@ test("a raw-mode chat generates through runRaw with provider=openrouter and no s
   expect(result.status).toBe("ok");
   expect(result.messages.at(-1)?.content).toBe("raw reply");
 
-  // Provenance is provider-agnostic: the assistant row records openrouter + the raw model.
+  // Provenance is the api/source that ran: the assistant row records responses/openrouter + the model.
   const assistant = (await db.select().from(messages).where(eq(messages.chatId, chatId))).find(
     (m) => m.role === "assistant",
   );
-  expect(assistant?.provider).toBe("openrouter");
+  expect(assistant?.provider).toBe("responses/openrouter");
   expect(assistant?.model).toBe("deepseek/deepseek-chat");
 
   // sdk-only concept — a raw turn must not stamp a session id.
@@ -250,43 +250,62 @@ test("a failed raw turn rolls back identically to sdk (shared error path)", asyn
 
 // ── 5D: conversion + fork-and-convert ────────────────────────────────────────
 
-test("convertToRaw flips an sdk chat to raw; the next turn routes through runRaw", async () => {
+test("setProvider switches an agent-sdk chat onto the openrouter Responses runner; next turn routes through runRaw", async () => {
   const db = await freshDb();
   const sdk = fakeRunner("sdk reply");
   const raw = fakeRawRunner("raw reply");
   const chat = createChatService(db, { runTurn: sdk.run, runRaw: raw.run });
 
   const { chatId } = await chat.create({ username: "owner", title: "T", ...baseChar });
-  await chat.send({ username: "owner", chatId, expectedSeq: 0, content: "hi" }); // sdk turn, sets sessionId
+  await chat.send({ username: "owner", chatId, expectedSeq: 0, content: "hi" }); // agent-sdk turn, sets sessionId
 
-  await chat.convertToRaw({ username: "owner", chatId });
+  await chat.setProvider({ username: "owner", chatId, api: "responses", source: "openrouter" });
 
   const row = (await db.select().from(chats).where(eq(chats.id, chatId)))[0];
-  expect(row?.mode).toBe("raw");
-  expect(row?.provider).toBe("openrouter");
-  expect(row?.model).toBeNull(); // the sdk Claude id is dropped → resolver default
-  expect(row?.sessionId).toBeNull(); // the sdk session no longer applies
+  expect(row?.api).toBe("responses");
+  expect(row?.source).toBe("openrouter");
+  expect(row?.model).toBeNull(); // no model picked → resolver default
+  expect(row?.sessionId).toBeNull(); // leaving agent-sdk drops the session
   expect(row?.convertedAt).not.toBeNull();
 
-  // The next turn now routes raw (canon rebuilt from the existing messages).
+  // The next turn now routes through the openrouter runner (canon rebuilt from the existing messages).
   await chat.send({ username: "owner", chatId, expectedSeq: 2, content: "again" });
   expect(raw.calls).toHaveLength(1);
-  expect(sdk.calls).toHaveLength(1); // only the pre-conversion turn
+  expect(sdk.calls).toHaveLength(1); // only the pre-switch turn
 });
 
-test("convertToRaw on a non-sdk chat throws not_sdk (one-way)", async () => {
+test("setProvider into an unimplemented api (chat-completions) throws invalid_provider", async () => {
   const db = await freshDb();
   const chat = createChatService(db, {
     runTurn: fakeRunner("x").run,
     runRaw: fakeRawRunner("y").run,
   });
   const { chatId } = await chat.create({ username: "owner", title: "T", ...baseChar });
-  await chat.convertToRaw({ username: "owner", chatId }); // sdk → raw
 
-  await expect(chat.convertToRaw({ username: "owner", chatId })).rejects.toMatchObject({
-    name: "ChatOperationError",
-    reason: "not_sdk",
-  });
+  await expect(
+    chat.setProvider({ username: "owner", chatId, api: "chat-completions", source: "openrouter" }),
+  ).rejects.toMatchObject({ name: "ChatOperationError", reason: "invalid_provider" });
+});
+
+test("setProvider entering agent-sdk from the openrouter runner seeds a session from canon", async () => {
+  const db = await freshDb();
+  const sdk = fakeRunner("sdk reply");
+  const raw = fakeRawRunner("raw reply");
+  const chat = createChatService(db, { runTurn: sdk.run, runRaw: raw.run });
+  const { chatId } = await chat.create({ username: "owner", title: "T", ...baseChar });
+  await chat.send({ username: "owner", chatId, expectedSeq: 0, content: "hi" }); // seq 1,2 of canon
+  // Leave agent-sdk (drops session), then come back — re-entry must re-seed from canon.
+  await chat.setProvider({ username: "owner", chatId, api: "responses", source: "openrouter" });
+  await chat.setProvider({ username: "owner", chatId, api: "agent-sdk", source: "max-pro-sub" });
+
+  const row = (await db.select().from(chats).where(eq(chats.id, chatId)))[0];
+  expect(row?.api).toBe("agent-sdk");
+  expect(row?.sessionId).toMatch(/^[0-9a-f-]{36}$/);
+  const seeded = await db
+    .select()
+    .from(sessionEntries)
+    .where(eq(sessionEntries.sessionId, row?.sessionId ?? ""));
+  expect(seeded.length).toBeGreaterThanOrEqual(2);
 });
 
 test("fork to raw branches canon at a seq into a new, independent chat", async () => {
@@ -301,7 +320,8 @@ test("fork to raw branches canon at a seq into a new, independent chat", async (
     username: "owner",
     chatId,
     atSeq: 2,
-    targetMode: "raw",
+    targetApi: "responses",
+    targetSource: "openrouter",
   });
 
   // The fork copied canon seq ≤ 2 (the first exchange) and nothing after.
@@ -312,7 +332,7 @@ test("fork to raw branches canon at a seq into a new, independent chat", async (
   const forkRow = (await db.select().from(chats).where(eq(chats.id, forkId)))[0];
   expect(forkRow?.parentChatId).toBe(chatId);
   expect(forkRow?.forkedAt).not.toBeNull();
-  expect(forkRow?.mode).toBe("raw");
+  expect(forkRow?.api).toBe("responses");
   expect(forkRow?.characterVersionId).toBe(
     (await db.select().from(chats).where(eq(chats.id, chatId)))[0]?.characterVersionId,
   ); // shares the pinned version (not a copy)
@@ -332,12 +352,13 @@ test("fork to sdk seeds session_entries from canon + sets a valid-UUID sessionId
     username: "owner",
     chatId,
     atSeq: 2,
-    targetMode: "sdk",
+    targetApi: "agent-sdk",
+    targetSource: "max-pro-sub",
   });
 
   const forkRow = (await db.select().from(chats).where(eq(chats.id, forkId)))[0];
-  expect(forkRow?.mode).toBe("sdk");
-  expect(forkRow?.provider).toBe("anthropic-sdk");
+  expect(forkRow?.api).toBe("agent-sdk");
+  expect(forkRow?.source).toBe("max-pro-sub");
   expect(forkRow?.sessionId).toMatch(/^[0-9a-f-]{36}$/); // a real uuidv4 (SDK rejects arbitrary ids)
 
   // The copied canon was seeded into the new chat's session as resumable frames.

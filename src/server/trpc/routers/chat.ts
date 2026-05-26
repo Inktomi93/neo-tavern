@@ -10,7 +10,7 @@ function domainErrorToTrpc(error: unknown): never {
     throw new TRPCError({ code: "NOT_FOUND", message: error.message });
   }
   if (error instanceof ChatOperationError) {
-    // All current reasons (not_sdk, invalid_fork_point) are bad requests for the chat's state.
+    // All current reasons (invalid_provider, invalid_fork_point, …) are bad requests for the state.
     throw new TRPCError({ code: "BAD_REQUEST", message: error.message });
   }
   throw error;
@@ -50,22 +50,29 @@ export const chatRouter = t.router({
       ctx.services.chat.send({ username: ctx.username, ...input }).catch(domainErrorToTrpc),
     ),
 
-  // One-way sdk→raw conversion (the escape valve). NOT_FOUND if unowned, BAD_REQUEST if not sdk.
-  convertToRaw: publicProcedure
-    .input(z.object({ chatId: z.string().min(1) }))
+  // Switch a chat's api/source/model in place (the generalized escape valve). NOT_FOUND if unowned,
+  // BAD_REQUEST on an incoherent/unimplemented combo.
+  setProvider: publicProcedure
+    .input(
+      z.object({
+        chatId: z.string().min(1),
+        api: z.enum(["agent-sdk", "chat-completions", "responses"]),
+        source: z.enum(["max-pro-sub", "openrouter"]),
+        model: z.string().min(1).nullish(),
+      }),
+    )
     .mutation(({ ctx, input }) =>
-      ctx.services.chat
-        .convertToRaw({ username: ctx.username, chatId: input.chatId })
-        .catch(domainErrorToTrpc),
+      ctx.services.chat.setProvider({ username: ctx.username, ...input }).catch(domainErrorToTrpc),
     ),
 
-  // Branch a chat at a seq into a new chat.
+  // Branch a chat at a seq into a new chat (optionally switching api/source at the branch point).
   fork: publicProcedure
     .input(
       z.object({
         chatId: z.string().min(1),
         atSeq: z.number().int().positive(),
-        targetMode: z.enum(["sdk", "raw"]),
+        targetApi: z.enum(["agent-sdk", "chat-completions", "responses"]),
+        targetSource: z.enum(["max-pro-sub", "openrouter"]),
       }),
     )
     .mutation(({ ctx, input }) =>

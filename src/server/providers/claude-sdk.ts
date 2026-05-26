@@ -9,7 +9,7 @@ import {
   type TerminalReason,
 } from "@anthropic-ai/claude-agent-sdk";
 import { type ChatModelId, DEFAULT_CHAT_MODEL_ID } from "../../shared/models";
-import { buildClaudeSdkEnv, env } from "../env";
+import { buildClaudeOpenRouterEnv, buildClaudeSdkEnv, env } from "../env";
 import { getLog } from "../observability/logger";
 import {
   type ChatTurnResult,
@@ -29,13 +29,22 @@ import {
 // request). CLAUDE.md injection is killed via buildClaudeSdkEnv().
 // Exported so the leak-prevention contract is locked by tests (see the proxy
 // painpoints in claude-sdk.test.ts).
-export function disciplineOptions() {
+// `source` picks the credential the spawned runtime authenticates with — the ONLY difference
+// between the two Agent-SDK paths (the pipeline, leak-discipline, and generation knobs are
+// identical): "max-pro-sub" → the host `claude login` (free); "openrouter" → OpenRouter's Anthropic
+// skin (paid, credentials firewalled to an isolated config dir — see buildClaudeOpenRouterEnv).
+export type ClaudeSource = "max-pro-sub" | "openrouter";
+
+export function disciplineOptions(source: ClaudeSource = "max-pro-sub") {
   return {
     tools: [],
     mcpServers: {},
     strictMcpConfig: true,
     settingSources: [],
-    env: buildClaudeSdkEnv(),
+    env:
+      source === "openrouter"
+        ? buildClaudeOpenRouterEnv(env.OPENROUTER_API_KEY ?? "")
+        : buildClaudeSdkEnv(),
   };
 }
 
@@ -175,6 +184,9 @@ function classifyResultSubtype(subtype: SDKResultError["subtype"]): {
 export interface ChatTurnParams {
   prompt: string;
   model: ChatModelId;
+  /** Which credential the runtime authenticates with (the only difference between the two
+   *  Agent-SDK paths). Defaults to the free Max sub. */
+  source?: ClaudeSource;
   /** Resume an existing session; omit for the first turn of a new chat. */
   resume?: string;
   /** Our DB-backed SessionStore — the SDK loads from it to resume and mirrors new frames into it. */
@@ -206,7 +218,7 @@ export async function runChatTurn(params: ChatTurnParams): Promise<ChatTurnResul
   const stream = query({
     prompt: params.prompt,
     options: {
-      ...disciplineOptions(),
+      ...disciplineOptions(params.source),
       ...observabilityOptions(),
       model: params.model,
       maxTurns: 1,

@@ -145,15 +145,26 @@ export const chats = sqliteTable(
       (): AnySQLiteColumn => presetVersions.id,
       { onDelete: "restrict" },
     ),
-    mode: text("mode", { enum: ["sdk", "raw"] })
+    // How this chat's NEXT turn runs (migration 0011 — supersedes the old mode/provider weld).
+    // `api` = the wire protocol / runner; `source` = which credential/provider backs it.
+    // resolveTurnRouting switches on (api, source) to pick the runner + env:
+    //   agent-sdk        + max-pro-sub → Claude on the Max sub (free); env = buildClaudeSdkEnv
+    //   agent-sdk        + openrouter  → Claude via OpenRouter's Anthropic skin (paid, same
+    //                                    pipeline); env = buildClaudeOpenRouterEnv (creds firewalled)
+    //   chat-completions + openrouter  → @openrouter/sdk chat.send
+    //   responses        + openrouter  → @openrouter/sdk beta.responses
+    // Combo validity (e.g. responses ⟹ openrouter) is enforced in the resolver/picker, not the
+    // column. YGWYG is an orthogonal docs-level discipline — deliberately NOT encoded here.
+    api: text("api", { enum: ["agent-sdk", "chat-completions", "responses"] })
       .notNull()
-      .default("sdk"),
-    provider: text("provider").notNull(), // 'anthropic-sdk' | 'anthropic-direct' | 'openrouter'
-    // The chat's model for its NEXT turn — mode-agnostic (an sdk-mode Claude id from
-    // shared/models.ts, or a raw-mode OpenRouter id from the live catalog). null = fall back
-    // to the mode's default in resolveTurnRouting. Sits beside mode/provider (next-turn routing
-    // config); messages.model records what ACTUALLY ran (provenance). Validation is at selection
-    // time (the picker), not on the send hot path. (migration 0010)
+      .default("agent-sdk"),
+    source: text("source", { enum: ["max-pro-sub", "openrouter"] })
+      .notNull()
+      .default("max-pro-sub"),
+    // The chat's model for its NEXT turn — interpreted against the (api, source) catalog (a Claude
+    // id from shared/models.ts for agent-sdk; an OpenRouter id from the live catalog otherwise).
+    // null = fall back to the resolver's default. messages.model records what ACTUALLY ran
+    // (provenance). Validation is at selection time (the picker), not on the send hot path.
     model: text("model"),
     sessionId: text("session_id"), // SDK session; null after conversion to raw / for imports
     // Self-ref fork link. SET NULL so a fork survives its parent's deletion.
