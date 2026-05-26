@@ -53,11 +53,28 @@ function toLimit(raw: string | undefined, fallback: number): number {
 }
 
 /**
+ * Read-only DB introspection port. Defined HERE (structurally) rather than imported from
+ * `domain/debug` because observability is a foundation layer that must not import upward into
+ * domain (`observability-is-foundation`). The composition root injects the domain service, which
+ * satisfies this shape. Methods return `object` (not the concrete types) precisely so no domain
+ * type crosses the boundary — the handlers only JSON-serialize the result.
+ */
+export interface DbInspector {
+  stats(): Promise<object>;
+  integrity(): Promise<object>;
+  inspectChat(chatId: string): Promise<object>;
+}
+
+/**
  * In-process introspection — curl it instead of tailing files. Single gate:
  * DEBUG_TOKEN must be set AND presented (header `x-debug-token` or `?token=`).
  * No localhost branch: behind Caddy the client IP is Caddy's, so IP checks lie.
+ *
+ * `db` (optional) adds the /api/_debug/db/* surface (counts, FK/integrity, a chat inspector that
+ * dumps messages WITH full provenance + variants) — the "did it land in the DB?" check the
+ * log/error/request rings can't answer.
  */
-export function registerDebugRoutes(app: Hono): void {
+export function registerDebugRoutes(app: Hono, db?: DbInspector): void {
   app.use("/api/_debug/*", async (c, next) => {
     if (env.DEBUG_TOKEN === undefined) {
       return c.json({ error: "debug API disabled — set DEBUG_TOKEN to enable" }, 404);
@@ -137,4 +154,14 @@ export function registerDebugRoutes(app: Hono): void {
   app.get("/api/_debug/requests", (c) =>
     c.json({ requests: recentRequests(toLimit(c.req.query("limit"), 100)) }),
   );
+
+  // DB introspection (only when a service is injected). Gated by the same /api/_debug/* middleware
+  // above — these routes register after it, so the token check covers them too.
+  if (db !== undefined) {
+    app.get("/api/_debug/db/stats", async (c) => c.json(await db.stats()));
+    app.get("/api/_debug/db/integrity", async (c) => c.json(await db.integrity()));
+    app.get("/api/_debug/db/chat/:id", async (c) =>
+      c.json(await db.inspectChat(c.req.param("id"))),
+    );
+  }
 }
