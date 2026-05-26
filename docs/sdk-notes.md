@@ -459,3 +459,36 @@ card-curator (its chat is a local llama-server). Working reference: `/home/inkto
 - **Streaming events** (for the future SSE seam): `response.output_text.delta`, `response.reasoning_summary_text.delta`,
   `response.completed` (usage), `response.failed`/`incomplete`. Not wired yet (non-streaming for now).
 - The SDK also exposes image-gen + routing metadata + more — for later.
+
+### Anthropic-via-Responses caching + best practices — MEASURED (`scripts/raw-probe.ts`, live Opus 4.7)
+
+**Caching is NOT working as shipped.** `runRawTurn` sets `promptCacheKey` (the OpenAI mechanism); a live
+2-call probe with an identical ~3000-token prefix showed `cacheRead=0` on both → no caching. The fix
+(OpenRouter docs, verified field names):
+- The **Responses API caches Anthropic only via a top-level `anthropic_cache_control` field** —
+  `{type:"ephemeral", ttl:"1h"}` (the chat-completions API uses `cache_control` / per-block breakpoints;
+  Responses is automatic-only via this one field). `promptCacheKey` is a no-op for Anthropic.
+- ⚠️ **`@openrouter/sdk@0.12.35` (latest) does NOT type `anthropic_cache_control`** — and Speakeasy SDKs
+  strip unknown fields, so it can't be sent through `beta.responses.send`. Enabling caching needs a
+  **raw `fetch` to `/api/v1/responses`** (lose the SDK's typed errors for that path, or hybrid) until the SDK
+  adds the field. This is the core of #48.
+- **Min cache thresholds (per model):** Opus 4.7/4.6/4.5 + Haiku 4.5 = **4096 tok**; Sonnet 4.6 = 2048;
+  Sonnet 4.5/Opus 4.1 = 1024. (The raw-probe's 3003-tok prefix was BELOW Opus 4.7's 4096 floor — a second
+  reason it didn't cache.) Cached tokens report as `prompt_tokens_details.cached_tokens` → already read as
+  `usage.inputTokensDetails.cachedTokens` (→ `ChatTurnUsage.cacheReadTokens`).
+- **Sticky routing:** after a cached request OpenRouter keeps the same provider warm → DON'T churn
+  `provider` routing between turns (and consider pinning `provider.order:["anthropic"]` for Claude).
+
+**Other Responses best practices for Anthropic (the SDK DOES type these — usable now):**
+- `reasoning` (ReasoningConfig: `effort` xhigh/high/medium/low/minimal/none, `enabled`, `maxTokens`, `summary`).
+  Mirror the sdk-mode owner default → raw Claude should default reasoning OFF/minimal (paid per token).
+- `provider` (ProviderPreferences) — already wired (`providerRouting`).
+- `previousResponseId` — server-side conversation state (alt to rebuilding `input` each turn); we prefer
+  canon-rebuild + caching (keeps us in control), so skip unless a reason appears.
+- `X-OpenRouter-Experimental-Metadata: enabled` header → `openrouter_metadata` (routing/cost) for observability.
+- Specify `max_output_tokens`/`temperature` explicitly (no model defaults) — done via preset params.
+
+**sdk-mode swipe caching — MEASURED (`scripts/sdk-cache-probe.sh`, live):** a swipe re-seeds a FRESH session,
+but the static character prefix is content-addressed (1h TTL) so it SURVIVES: send `cacheCreate=2901`/`cacheRead=0`
+→ swipe `cacheRead=2901` (hits!) → next send `cacheRead=2901`. The re-seed model is **cache-cheap** — only the
+small new tail re-caches. (Validated the 5E re-seed design.)
