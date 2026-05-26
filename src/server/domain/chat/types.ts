@@ -46,10 +46,24 @@ export interface SendParams {
   content: string;
 }
 
+export interface ForkChatParams {
+  username: string;
+  chatId: string;
+  /** Branch point: copy canon messages with seq ≤ atSeq into the new chat. */
+  atSeq: number;
+  /** The fork's mode. 'raw' rebuilds history from canon (supported); 'sdk' needs
+   *  session_entries seeding (deferred — throws until the seeding primitive lands). */
+  targetMode: "sdk" | "raw";
+}
+
 export interface ChatService {
   create(params: CreateChatParams): Promise<{ chatId: string }>;
   listMessages(params: { username: string; chatId: string }): Promise<MessageView[]>;
   send(params: SendParams): Promise<SendResult>;
+  /** One-way sdk→raw conversion, in place (CLAUDE.md escape valve). Throws if not sdk. */
+  convertToRaw(params: { username: string; chatId: string }): Promise<void>;
+  /** Branch a chat at `atSeq` into a new chat (parentChatId/forkedAt). Returns the new id. */
+  forkChat(params: ForkChatParams): Promise<{ chatId: string }>;
 }
 
 // Thrown when a chat doesn't exist or isn't owned by the caller. The trpc layer maps
@@ -58,5 +72,19 @@ export class ChatNotFoundError extends Error {
   constructor(chatId: string) {
     super(`chat not found: ${chatId}`);
     this.name = "ChatNotFoundError";
+  }
+}
+
+// A chat operation that's invalid for the chat's current state, or not yet implemented.
+// `reason` lets the transport pick the right code (BAD_REQUEST vs NOT_IMPLEMENTED) without
+// importing @trpc/server into the domain. fork_sdk_unsupported = the deferred raw→sdk
+// seeding primitive (shared with greeting seeding); see docs/build-plan.md.
+export type ChatOpReason = "not_sdk" | "fork_sdk_unsupported" | "invalid_fork_point";
+export class ChatOperationError extends Error {
+  readonly reason: ChatOpReason;
+  constructor(reason: ChatOpReason, message: string) {
+    super(message);
+    this.name = "ChatOperationError";
+    this.reason = reason;
   }
 }

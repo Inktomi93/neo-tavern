@@ -213,8 +213,14 @@ soft-delete trash bin. No tautological getById tests. Catch yourself building th
   mode+provider combo. `runRawTurn` gained `providerRouting`→ Responses `provider` (from `chats.metadata`).
   Model validity is checked at SELECTION time (the picker), not the send path. Verified: 92 tests green; 0010
   applied to the real corpus DB (801 chats, FK-clean). ·
-  **Phase 5 remaining — see `docs/build-plan.md` (detailed) + the deferred backlog:** **5D** conversion +
-  fork-and-convert *(immediate next; blocked-by removed)* · **5E** swipes/edits · then greeting seeding,
+  **Phase 5 conversion+fork 5D ✅:** `convertToRaw` (one-way sdk→raw in place: mode/provider, model→null,
+  sessionId→null, convertedAt; chat-locked) + `forkChat(atSeq, targetMode)` (new chat, parentChatId/forkedAt,
+  copies canon seq≤atSeq + the characterVersion PIN/persona/preset/model + chat WI; raw-target rebuilds from
+  canon, source intact). tRPC `chat.convertToRaw`/`chat.fork`; `ChatOperationError`→NOT_IMPLEMENTED|BAD_REQUEST.
+  raw→sdk fork throws a loud `fork_sdk_unsupported` — DEFERRED to the shared canon→session_entries seeding
+  primitive (folded into greeting seeding). 96 tests green. ·
+  **Phase 5 remaining — see `docs/build-plan.md` (detailed) + the deferred backlog:** **5E** swipes/edits
+  *(immediate next)* · then greeting seeding (+ the seeding primitive → also unblocks raw→sdk fork),
   `{{memory}}` retrieval, managed compaction, streaming/SSE, preset CRUD+editor, the
   `ClaudeTurnError`→`TurnError` rename. ·
   **Phase 6** analytics (one chart at a time, only when there's a real question).

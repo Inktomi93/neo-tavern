@@ -137,11 +137,18 @@ empty** — 100% rails, 0% product.
      half). Validation is at SELECTION time (the picker), not the send hot path. Verified: 92 tests green
      (7 resolver cases + raw round-trip + raw error-rollback); migration 0010 applied to the real corpus DB
      (801 chats intact, FK-clean).
+   - **Conversion + fork 5D ✅ (the sdk→raw escape valve — the primary path)** — `convertToRaw(chatId)`:
+     one-way sdk→raw in place (mode/provider, `model`=null so the Claude id doesn't 404 on OpenRouter →
+     resolver default, `sessionId`=null, `convertedAt`; chat-locked; throws `not_sdk` otherwise). `forkChat(chatId,
+     atSeq, targetMode)`: new chat (`parentChatId`/`forkedAt`) copying canon `messages` seq≤atSeq (new ids, seq
+     preserved, token/cost metadata left null — not re-generated) + the shared `characterVersionId` PIN +
+     `personaId`/`presetVersionId`/`model` (model resets on a mode switch) + chat-level WI attachments; raw-target
+     rebuilds from canon, source untouched. tRPC `chat.convertToRaw`/`chat.fork`; `ChatOperationError` →
+     NOT_IMPLEMENTED|BAD_REQUEST. "Canon is the only thing that crosses." 96 tests green. **DEFERRED:** raw→sdk
+     fork (`forkChat(targetMode:'sdk')`) throws a loud `fork_sdk_unsupported` — it needs the canon→`session_entries`
+     seeding primitive (valid-UUID frame chains), folded into Phase 5 greeting seeding (the two share it; one
+     empirical probe session covers both).
    - **Remaining (in order):**
-     - **5D — conversion + fork-and-convert**: `convertToRaw` (one-way: mode/provider/convertedAt) +
-       `forkChat(atSeq, targetMode)` (new chat, `parentChatId`/`forkedAt`, copy canon[1..K]; sdk-target
-       seeds `session_entries` with a VALID UUID, raw-target rebuilds from canon). tRPC + tests. The
-       model we logic'd out + probe-verified (canon is the only thing that crosses).
      - **5E — swipes + edits**: swipe = regen last assistant turn → new `message_variant` + `activeVariantIdx`;
        edit = mutate + (sdk) re-resume from the truncated branch / (raw) rebuild. Cache-cheap in raw.
 8. **Analytics (Phase 6)** — `domain` queries + `features` charts (`recharts`), one chart at
@@ -156,8 +163,13 @@ empty** — 100% rails, 0% product.
   `docs/conventions.md`.
 
 **Phase 5 (chat) — beyond 5C/5D/5E above:**
-- **Greeting seeding** — `greetings[0]` → the opening assistant message, alternates → `message_variants`
-  (reuse the swipe machinery). Empty greetings → user speaks first / "generate to open" (a no-user-message turn).
+- **Greeting seeding + the shared `seedSessionFromCanon` primitive** — build canon→`session_entries` frame
+  seeding (valid uuidv4 sessionId + proper `parentUuid` chains + the full queue-operation/ai-title/last-prompt
+  framing, NOT just user/assistant — `docs/sdk-notes.md`), validated empirically (a real probe that a seeded
+  session resumes coherently). TWO consumers share it (one empirical session covers both): (a) greeting seeding —
+  `greetings[0]` → opening assistant message, alternates → `message_variants` (reuse swipe machinery); empty →
+  user speaks first / "generate to open"; (b) **raw→sdk fork** — wire `forkChat(targetMode:'sdk')` (today throws
+  `fork_sdk_unsupported`) to seed from the copied canon.
 - **`{{memory}}` retrieval marker** — RAG over chat history into the dynamic system prompt (reuses the
   embedding stack; embed chat-message chunks, knn scoped to this chat, inject above the boundary).
 - **Managed compaction** — `DISABLE_AUTO_COMPACT=1` + watch `contextWindow` + a manual `/compact` with an

@@ -1,4 +1,4 @@
-import { and, asc, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, lte } from "drizzle-orm";
 import type { Db } from "../../../db/client";
 import {
   characters,
@@ -33,8 +33,10 @@ import { resolveTurnRouting } from "./routing";
 import { DbSessionStore } from "./store";
 import {
   ChatNotFoundError,
+  ChatOperationError,
   type ChatService,
   type CreateChatParams,
+  type ForkChatParams,
   type MessageView,
   type SendParams,
   type SendResult,
@@ -476,5 +478,137 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
     });
   }
 
-  return { create, listMessages, send };
+  // One-way sdk→raw conversion in place (the CLAUDE.md escape valve). The canon stays; raw-mode
+  // rebuilds history from it each turn, so no session seeding is needed. Locked against in-flight
+  // sends (same per-chat lock) so we never flip mode mid-turn.
+  async function convertToRaw(params: { username: string; chatId: string }): Promise<void> {
+    const ownerId = await ensureUser(db, params.username);
+    await withChatLock(params.chatId, async () => {
+      const chat = await loadOwnedChat(ownerId, params.chatId);
+      if (chat.mode !== "sdk") {
+        throw new ChatOperationError(
+          "not_sdk",
+          `chat ${params.chatId} is mode=${chat.mode}; conversion is one-way sdk→raw`,
+        );
+      }
+      await db
+        .update(chats)
+        .set({
+          mode: "raw",
+          provider: "openrouter",
+          // The sdk Claude id isn't an OpenRouter id → null so resolveTurnRouting falls back to
+          // DEFAULT_RAW_MODEL_ID (the user picks a real raw model via the picker later).
+          model: null,
+          sessionId: null, // the sdk session no longer applies; raw rebuilds from canon
+          convertedAt: Date.now(),
+          updatedAt: Date.now(),
+        })
+        .where(eq(chats.id, params.chatId));
+      getLog().info({ chatId: params.chatId, from: "sdk", to: "raw" }, "chat: converted to raw");
+    });
+  }
+
+  // Branch a chat at `atSeq` into a NEW chat. "Canon is the only thing that crosses" (the measured
+  // fork model): copy messages seq ≤ atSeq + the config pins; the original stays intact. raw-target
+  // rebuilds history from the copied canon. sdk-target needs session_entries seeding (valid-UUID
+  // frame chains) — deferred to the shared seeding primitive (see #39 / docs/build-plan.md).
+  async function forkChat(params: ForkChatParams): Promise<{ chatId: string }> {
+    const ownerId = await ensureUser(db, params.username);
+    const source = await loadOwnedChat(ownerId, params.chatId);
+
+    if (params.targetMode === "sdk") {
+      throw new ChatOperationError(
+        "fork_sdk_unsupported",
+        "forking to sdk-mode needs canon→session_entries seeding (not yet implemented); fork to raw",
+      );
+    }
+    if (params.atSeq < 1) {
+      throw new ChatOperationError("invalid_fork_point", `atSeq must be ≥ 1 (got ${params.atSeq})`);
+    }
+
+    // Append-only + seq-anchored, so this read is point-consistent without locking the source
+    // (a concurrent turn only appends seq > atSeq, which this filter excludes).
+    const canon = await db
+      .select()
+      .from(messages)
+      .where(and(eq(messages.chatId, params.chatId), lte(messages.seq, params.atSeq)))
+      .orderBy(asc(messages.seq));
+    if (canon.length === 0) {
+      throw new ChatOperationError(
+        "invalid_fork_point",
+        `no messages at or before seq ${params.atSeq} in chat ${params.chatId}`,
+      );
+    }
+
+    const now = Date.now();
+    const newChatId = newId();
+    // model carries only when the mode is unchanged (same catalog); a mode switch resets to the
+    // target default (null → resolver default). Today targetMode is always raw (sdk threw above).
+    const model = params.targetMode === source.mode ? source.model : null;
+    await db.insert(chats).values({
+      id: newChatId,
+      ownerId,
+      title: `${source.title} (fork)`,
+      characterVersionId: source.characterVersionId, // the PIN — shared immutable version, not a copy
+      personaId: source.personaId,
+      presetVersionId: source.presetVersionId,
+      mode: params.targetMode,
+      provider: "openrouter",
+      model,
+      parentChatId: params.chatId,
+      forkedAt: now,
+      messageCount: canon.length,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    // Copy canon: new ids, new chatId, seq preserved (source seq starts at 1). Keep said-content +
+    // model/provider provenance; leave per-generation token/cost metadata null (the fork didn't
+    // generate these — avoids double-counting them in cross-chat analytics).
+    await db.insert(messages).values(
+      canon.map((m) => ({
+        id: newId(),
+        chatId: newChatId,
+        seq: m.seq,
+        role: m.role,
+        content: m.content,
+        model: m.model,
+        provider: m.provider,
+        stopReason: m.stopReason,
+        createdAt: m.createdAt,
+      })),
+    );
+
+    // Copy chat-level world-info attachments (chat config, like the persona/preset pins);
+    // character-version WI rides along via the shared characterVersionId. (None exist yet — no
+    // attach endpoint — so this is forward-correctness.)
+    const wiAttach = await db
+      .select()
+      .from(chatWorldEntries)
+      .where(eq(chatWorldEntries.chatId, params.chatId));
+    if (wiAttach.length > 0) {
+      await db.insert(chatWorldEntries).values(
+        wiAttach.map((w) => ({
+          chatId: newChatId,
+          entryId: w.entryId,
+          scope: w.scope,
+          pinned: w.pinned,
+        })),
+      );
+    }
+
+    getLog().info(
+      {
+        chatId: newChatId,
+        parentChatId: params.chatId,
+        atSeq: params.atSeq,
+        copied: canon.length,
+        targetMode: params.targetMode,
+      },
+      "chat: forked",
+    );
+    return { chatId: newChatId };
+  }
+
+  return { create, listMessages, send, convertToRaw, forkChat };
 }

@@ -1,7 +1,11 @@
 import { eq } from "drizzle-orm";
 import { expect, test } from "vitest";
 import { chats, messages } from "../../src/db/schema";
-import { ChatNotFoundError, createChatService } from "../../src/server/domain/chat";
+import {
+  ChatNotFoundError,
+  ChatOperationError,
+  createChatService,
+} from "../../src/server/domain/chat";
 import {
   type ChatTurnParams,
   type ChatTurnResult,
@@ -236,4 +240,89 @@ test("a failed raw turn rolls back identically to sdk (shared error path)", asyn
     expect(result.retryable).toBe(false);
   }
   expect(result.messages).toHaveLength(0); // user message rolled back
+});
+
+// ── 5D: conversion + fork-and-convert ────────────────────────────────────────
+
+test("convertToRaw flips an sdk chat to raw; the next turn routes through runRaw", async () => {
+  const db = await freshDb();
+  const sdk = fakeRunner("sdk reply");
+  const raw = fakeRawRunner("raw reply");
+  const chat = createChatService(db, { runTurn: sdk.run, runRaw: raw.run });
+
+  const { chatId } = await chat.create({ username: "owner", title: "T", ...baseChar });
+  await chat.send({ username: "owner", chatId, expectedSeq: 0, content: "hi" }); // sdk turn, sets sessionId
+
+  await chat.convertToRaw({ username: "owner", chatId });
+
+  const row = (await db.select().from(chats).where(eq(chats.id, chatId)))[0];
+  expect(row?.mode).toBe("raw");
+  expect(row?.provider).toBe("openrouter");
+  expect(row?.model).toBeNull(); // the sdk Claude id is dropped → resolver default
+  expect(row?.sessionId).toBeNull(); // the sdk session no longer applies
+  expect(row?.convertedAt).not.toBeNull();
+
+  // The next turn now routes raw (canon rebuilt from the existing messages).
+  await chat.send({ username: "owner", chatId, expectedSeq: 2, content: "again" });
+  expect(raw.calls).toHaveLength(1);
+  expect(sdk.calls).toHaveLength(1); // only the pre-conversion turn
+});
+
+test("convertToRaw on a non-sdk chat throws not_sdk (one-way)", async () => {
+  const db = await freshDb();
+  const chat = createChatService(db, {
+    runTurn: fakeRunner("x").run,
+    runRaw: fakeRawRunner("y").run,
+  });
+  const { chatId } = await chat.create({ username: "owner", title: "T", ...baseChar });
+  await chat.convertToRaw({ username: "owner", chatId }); // sdk → raw
+
+  await expect(chat.convertToRaw({ username: "owner", chatId })).rejects.toMatchObject({
+    name: "ChatOperationError",
+    reason: "not_sdk",
+  });
+});
+
+test("fork to raw branches canon at a seq into a new, independent chat", async () => {
+  const db = await freshDb();
+  const chat = createChatService(db, { runTurn: fakeRunner("reply").run });
+
+  const { chatId } = await chat.create({ username: "owner", title: "Origin", ...baseChar });
+  await chat.send({ username: "owner", chatId, expectedSeq: 0, content: "one" }); // seq 1,2
+  await chat.send({ username: "owner", chatId, expectedSeq: 2, content: "two" }); // seq 3,4
+
+  const { chatId: forkId } = await chat.forkChat({
+    username: "owner",
+    chatId,
+    atSeq: 2,
+    targetMode: "raw",
+  });
+
+  // The fork copied canon seq ≤ 2 (the first exchange) and nothing after.
+  const forkMsgs = await chat.listMessages({ username: "owner", chatId: forkId });
+  expect(forkMsgs.map((m) => m.seq)).toEqual([1, 2]);
+  expect(forkMsgs[0]?.content).toBe("one");
+
+  const forkRow = (await db.select().from(chats).where(eq(chats.id, forkId)))[0];
+  expect(forkRow?.parentChatId).toBe(chatId);
+  expect(forkRow?.forkedAt).not.toBeNull();
+  expect(forkRow?.mode).toBe("raw");
+  expect(forkRow?.characterVersionId).toBe(
+    (await db.select().from(chats).where(eq(chats.id, chatId)))[0]?.characterVersionId,
+  ); // shares the pinned version (not a copy)
+
+  // The source is untouched (still 4 messages, still sdk).
+  const srcMsgs = await chat.listMessages({ username: "owner", chatId });
+  expect(srcMsgs).toHaveLength(4);
+});
+
+test("fork to sdk throws fork_sdk_unsupported (seeding deferred to #39)", async () => {
+  const db = await freshDb();
+  const chat = createChatService(db, { runTurn: fakeRunner("x").run });
+  const { chatId } = await chat.create({ username: "owner", title: "T", ...baseChar });
+  await chat.send({ username: "owner", chatId, expectedSeq: 0, content: "one" });
+
+  await expect(
+    chat.forkChat({ username: "owner", chatId, atSeq: 2, targetMode: "sdk" }),
+  ).rejects.toBeInstanceOf(ChatOperationError);
 });
