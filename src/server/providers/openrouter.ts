@@ -4,7 +4,13 @@ import { type GenerationParams, isThinkingOn } from "../../shared/generation";
 import { isoToMs } from "../../shared/time";
 import { env } from "../env";
 import { getLog } from "../observability/logger";
-import { type ChatTurnResult, type ChatTurnUsage, TurnError, type TurnErrorKind } from "./turn";
+import {
+  type ChatTurnResult,
+  type ChatTurnUsage,
+  normalizeFinishReason,
+  TurnError,
+  type TurnErrorKind,
+} from "./turn";
 
 // The OpenRouter-runner side of the provider architecture (the @openrouter/sdk path, distinct from
 // the Agent-SDK runner used for Claude). Two endpoints:
@@ -574,11 +580,13 @@ export async function runChatCompletionTurn(params: RawTurnParams): Promise<Chat
     "openrouter: chat turn complete",
   );
 
+  const chatFinish = view.choices?.[0]?.finishReason ?? null;
   return {
     reply: extractChatReply(view),
     sessionId: "", // the openrouter runner has no SDK session — history is rebuilt from canon
-    stopReason: view.choices?.[0]?.finishReason ?? null,
+    stopReason: chatFinish,
     terminalReason: null,
+    finishReason: normalizeFinishReason(chatFinish),
     ttftMs: null,
     apiErrorStatus: null,
     numTurns: 1,
@@ -594,6 +602,10 @@ export async function runChatCompletionTurn(params: RawTurnParams): Promise<Chat
 interface ResponsesView {
   output?: Array<{ type: string; content?: Array<{ type: string; text?: string }> }>;
   outputText?: string;
+  // The finish signal: status ("completed"|"incomplete"|…) + the reason when incomplete
+  // ("max_output_tokens"|"content_filter"). incomplete reason wins (it's more specific).
+  status?: string;
+  incompleteDetails?: { reason?: string } | null;
   usage?: {
     inputTokens?: number;
     outputTokens?: number;
@@ -713,11 +725,14 @@ export async function runRawTurn(params: RawTurnParams): Promise<ChatTurnResult>
     "openrouter: responses turn complete",
   );
 
+  // The incomplete reason (e.g. max_output_tokens) is the specific signal; else the status.
+  const responsesFinish = view.incompleteDetails?.reason ?? view.status ?? null;
   return {
     reply: extractResponsesReply(view),
     sessionId: "",
-    stopReason: null,
+    stopReason: responsesFinish,
     terminalReason: null,
+    finishReason: normalizeFinishReason(responsesFinish),
     ttftMs: null,
     apiErrorStatus: null,
     numTurns: 1,

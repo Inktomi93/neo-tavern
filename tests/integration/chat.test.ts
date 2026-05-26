@@ -13,6 +13,7 @@ function cannedTurn(reply: string): ChatTurnResult {
     sessionId: "sess-1",
     stopReason: "end_turn",
     terminalReason: "completed",
+    finishReason: "stop",
     ttftMs: 200,
     apiErrorStatus: null,
     numTurns: 1,

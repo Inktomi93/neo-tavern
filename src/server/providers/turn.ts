@@ -27,6 +27,46 @@ export type TurnErrorKind =
   | "aborted" // turn-limit / abort
   | "unknown";
 
+// ── Normalized finish reason (the cross-mode "why did generation stop?" vocabulary) ──────────────
+// Each provider speaks its own dialect — Anthropic stop_reason (end_turn/max_tokens/…), OpenAI
+// finish_reason (stop/length/…), the Responses status/incomplete_details — so a raw value isn't
+// queryable across modes. `finishReason` on the result is the ONE normalized signal; the raw value
+// rides along on `stopReason`/`terminalReason` as provenance. `normalizeFinishReason` is the single
+// owner of the mapping (every runner calls it).
+export type NormalizedFinishReason =
+  | "stop" // natural completion
+  | "length" // hit the output-token / context ceiling (the "truncated" case)
+  | "filter" // content filter / refusal
+  | "tool" // stopped to call a tool
+  | "other"; // a provider value we don't (yet) recognize
+
+const FINISH_REASON_MAP: Record<string, NormalizedFinishReason> = {
+  end_turn: "stop",
+  stop: "stop",
+  stop_sequence: "stop",
+  completed: "stop",
+  max_tokens: "length",
+  length: "length",
+  max_output_tokens: "length",
+  model_context_window_exceeded: "length",
+  content_filter: "filter",
+  refusal: "filter",
+  tool_use: "tool",
+  tool_calls: "tool",
+  function_call: "tool",
+};
+
+/** Map any provider's raw stop/finish/status string → the normalized vocabulary. null in → null
+ *  out; an unrecognized non-null value → "other" (so it's never silently a stop). */
+export function normalizeFinishReason(
+  raw: string | null | undefined,
+): NormalizedFinishReason | null {
+  if (raw == null || raw === "") {
+    return null;
+  }
+  return FINISH_REASON_MAP[raw.toLowerCase()] ?? "other";
+}
+
 export interface TurnErrorInit {
   kind: TurnErrorKind;
   retryable: boolean;
@@ -139,8 +179,11 @@ export interface ChatTurnResult {
   reply: string;
   /** result.session_id — persist on the chat row so the next turn resumes it (sdk-mode; "" for raw). */
   sessionId: string;
+  /** Raw provider stop string (Anthropic stop_reason / OpenAI finish_reason) — provenance. */
   stopReason: string | null;
   terminalReason: TerminalReason | null;
+  /** The NORMALIZED cross-mode finish reason (see normalizeFinishReason) — query this, not the raw. */
+  finishReason: NormalizedFinishReason | null;
   /** Time-to-first-token (ms), when reported. */
   ttftMs: number | null;
   /** Non-null when transient API errors occurred but retries recovered the turn. */

@@ -28,6 +28,7 @@ function fakeTurn(): ChatTurnResult {
     sessionId: "",
     stopReason: "end_turn",
     terminalReason: "completed",
+    finishReason: "stop",
     ttftMs: 100,
     apiErrorStatus: null,
     numTurns: 1,

@@ -23,6 +23,7 @@ import { getLog } from "../observability/logger";
 import {
   type ChatTurnResult,
   type ChatTurnUsage,
+  normalizeFinishReason,
   type RateLimitSnapshot,
   TurnError,
   type TurnErrorKind,
@@ -610,6 +611,8 @@ export async function consumeTurnStream(
     sessionId,
     stopReason,
     terminalReason,
+    // stop_reason is the per-message signal; fall back to the loop-level terminalReason.
+    finishReason: normalizeFinishReason(stopReason ?? terminalReason),
     ttftMs,
     apiErrorStatus,
     numTurns,

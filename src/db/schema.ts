@@ -209,7 +209,10 @@ export const messages = sqliteTable(
     toolCalls: text("tool_calls", { mode: "json" }),
     model: text("model"),
     provider: text("provider"),
-    stopReason: text("stop_reason"),
+    stopReason: text("stop_reason"), // RAW provider stop string (Anthropic stop_reason / OpenAI finish_reason)
+    // Normalized cross-mode finish reason (stop|length|filter|tool|other) — the queryable one
+    // (providers/turn.ts normalizeFinishReason); stopReason keeps the raw value as provenance.
+    finishReason: text("finish_reason"),
     tokensIn: integer("tokens_in"),
     tokensOut: integer("tokens_out"),
     cacheReadTokens: integer("cache_read_tokens"),

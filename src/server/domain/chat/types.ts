@@ -14,6 +14,8 @@ export interface MessageView {
   model: string | null;
   provider: string | null;
   stopReason: string | null;
+  /** Normalized cross-mode finish reason ("length" = truncated, etc.) — drives a UI indicator. */
+  finishReason: string | null;
   tokensIn: number | null;
   tokensOut: number | null;
   cacheReadTokens: number | null;
