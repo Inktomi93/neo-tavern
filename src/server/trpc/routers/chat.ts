@@ -30,6 +30,18 @@ export const chatRouter = t.router({
     )
     .mutation(({ ctx, input }) => ctx.services.chat.create({ username: ctx.username, ...input })),
 
+  // The caller's chats, newest-updated first (owner-scoped) — the chat-list rail.
+  list: publicProcedure.query(({ ctx }) => ctx.services.chat.listChats({ username: ctx.username })),
+
+  // One owned chat's metadata (summary + pins/links). NOT_FOUND if unowned.
+  get: publicProcedure
+    .input(z.object({ chatId: z.string().min(1) }))
+    .query(({ ctx, input }) =>
+      ctx.services.chat
+        .getChat({ username: ctx.username, chatId: input.chatId })
+        .catch(domainErrorToTrpc),
+    ),
+
   messages: publicProcedure
     .input(z.object({ chatId: z.string().min(1) }))
     .query(({ ctx, input }) =>

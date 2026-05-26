@@ -37,9 +37,11 @@ import { resolveTurnRouting } from "./routing";
 import { buildSeedFrames, GREETING_USER_STUB, type SeedTurn } from "./seed";
 import { DbSessionStore } from "./store";
 import {
+  type ChatDetail,
   ChatNotFoundError,
   ChatOperationError,
   type ChatService,
+  type ChatSummary,
   type CreateChatParams,
   type EditMessageParams,
   type ForkChatParams,
@@ -86,7 +88,18 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
       role: row.role,
       content: row.content,
       model: row.model,
+      provider: row.provider,
+      stopReason: row.stopReason,
+      tokensIn: row.tokensIn,
+      tokensOut: row.tokensOut,
+      cacheReadTokens: row.cacheReadTokens,
+      cacheWriteTokens: row.cacheWriteTokens,
+      contextWindow: row.contextWindow,
+      costUsd: row.costUsd,
+      ttftMs: row.ttftMs,
+      terminalReason: row.terminalReason,
       createdAt: row.createdAt,
+      editedAt: row.editedAt,
       activeVariantIdx: row.activeVariantIdx,
       variantCount,
     };
@@ -426,6 +439,79 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
     const ownerId = await ensureUser(db, params.username);
     await loadOwnedChat(ownerId, params.chatId); // ownership check
     return listByChat(params.chatId);
+  }
+
+  async function listChats(params: { username: string }): Promise<ChatSummary[]> {
+    const ownerId = await ensureUser(db, params.username);
+    const rows = await db
+      .select({
+        id: chats.id,
+        title: chats.title,
+        characterName: characterVersions.name,
+        api: chats.api,
+        source: chats.source,
+        model: chats.model,
+        messageCount: chats.messageCount,
+        totalTokensIn: chats.totalTokensIn,
+        totalTokensOut: chats.totalTokensOut,
+        starred: chats.starred,
+        archived: chats.archived,
+        createdAt: chats.createdAt,
+        updatedAt: chats.updatedAt,
+      })
+      .from(chats)
+      .leftJoin(characterVersions, eq(chats.characterVersionId, characterVersions.id))
+      .where(eq(chats.ownerId, ownerId))
+      .orderBy(desc(chats.updatedAt));
+    return rows.map((r) => ({
+      id: r.id,
+      title: r.title,
+      characterName: r.characterName,
+      api: r.api,
+      source: r.source,
+      model: r.model,
+      messageCount: r.messageCount ?? 0,
+      totalTokensIn: r.totalTokensIn ?? 0,
+      totalTokensOut: r.totalTokensOut ?? 0,
+      starred: r.starred ?? false,
+      archived: r.archived ?? false,
+      createdAt: r.createdAt,
+      updatedAt: r.updatedAt,
+    }));
+  }
+
+  async function getChat(params: { username: string; chatId: string }): Promise<ChatDetail> {
+    const ownerId = await ensureUser(db, params.username);
+    const chat = await loadOwnedChat(ownerId, params.chatId); // throws ChatNotFoundError if unowned
+    const cv = (
+      await db
+        .select({ name: characterVersions.name, characterId: characterVersions.characterId })
+        .from(characterVersions)
+        .where(eq(characterVersions.id, chat.characterVersionId))
+        .limit(1)
+    )[0];
+    return {
+      id: chat.id,
+      title: chat.title,
+      characterName: cv?.name ?? null,
+      api: chat.api,
+      source: chat.source,
+      model: chat.model,
+      messageCount: chat.messageCount ?? 0,
+      totalTokensIn: chat.totalTokensIn ?? 0,
+      totalTokensOut: chat.totalTokensOut ?? 0,
+      starred: chat.starred ?? false,
+      archived: chat.archived ?? false,
+      createdAt: chat.createdAt,
+      updatedAt: chat.updatedAt,
+      characterId: cv?.characterId ?? null,
+      characterVersionId: chat.characterVersionId,
+      personaId: chat.personaId,
+      presetVersionId: chat.presetVersionId,
+      parentChatId: chat.parentChatId,
+      forkedAt: chat.forkedAt,
+      hasSession: chat.sessionId !== null,
+    };
   }
 
   async function send(params: SendParams): Promise<SendResult> {
@@ -1124,6 +1210,8 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
 
   return {
     create,
+    listChats,
+    getChat,
     listMessages,
     send,
     setProvider,

@@ -1,17 +1,61 @@
 import type { TurnErrorKind } from "../../providers/turn";
 
-// Shaped, client-safe view of a message row (we don't leak every column).
+// Shaped, client-safe view of a message row. Carries the per-turn provenance the chat UI needs
+// (the context-fill meter off contextWindow, a cost/latency readout, the edited marker) — the
+// columns the old lean projection hid. Metadata only; never any non-message column.
+// NOTE: after a swipe these token/cost columns describe the message's FIRST generation, not the
+// active variant — per-variant truth lives in message_variants (see the swipe-provenance backlog).
 export interface MessageView {
   id: string;
   seq: number;
   role: "user" | "assistant" | "system";
   content: string; // the ACTIVE variant's text (= variants[activeVariantIdx].content) when variants exist
   model: string | null;
+  provider: string | null;
+  stopReason: string | null;
+  tokensIn: number | null;
+  tokensOut: number | null;
+  cacheReadTokens: number | null;
+  cacheWriteTokens: number | null;
+  contextWindow: number | null;
+  costUsd: number | null;
+  ttftMs: number | null;
+  terminalReason: string | null;
   createdAt: number;
+  editedAt: number | null;
   /** Which swipe is shown; null = single generation (no variants). */
   activeVariantIdx: number | null;
   /** Total swipes for this message (0 = single generation). Drives the "3 / 5" counter. */
   variantCount: number;
+}
+
+// Chat list-row view (chat.list) — what the chat-list rail renders. Owner-scoped, newest first.
+export interface ChatSummary {
+  id: string;
+  title: string;
+  characterName: string | null;
+  api: ChatApi;
+  source: ChatSource;
+  model: string | null;
+  messageCount: number;
+  totalTokensIn: number;
+  totalTokensOut: number;
+  starred: boolean;
+  archived: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+
+// Single-chat view (chat.get) — the summary + the pins/links the chat header + provider picker need.
+export interface ChatDetail extends ChatSummary {
+  characterId: string | null;
+  characterVersionId: string;
+  personaId: string | null;
+  presetVersionId: string | null;
+  parentChatId: string | null;
+  forkedAt: number | null;
+  /** Whether an agent-sdk resume session exists (the raw uuid isn't useful to the client). */
+  hasSession: boolean;
 }
 
 // send() result. A discriminated union the client renders directly.
@@ -105,6 +149,10 @@ export interface EditMessageParams {
 
 export interface ChatService {
   create(params: CreateChatParams): Promise<{ chatId: string }>;
+  /** The caller's chats, newest-updated first (owner-scoped). Drives the chat-list rail. */
+  listChats(params: { username: string }): Promise<ChatSummary[]>;
+  /** One owned chat's metadata (summary + pins/links). Throws ChatNotFoundError if unowned. */
+  getChat(params: { username: string; chatId: string }): Promise<ChatDetail>;
   listMessages(params: { username: string; chatId: string }): Promise<MessageView[]>;
   send(params: SendParams): Promise<SendResult>;
   /** Switch a chat's api/source/model in place (the generalized escape valve). Handles the session
