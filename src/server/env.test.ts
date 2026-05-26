@@ -13,6 +13,7 @@ const KEY_CLAUDE_CONFIG_DIR = "CLAUDE_CONFIG_DIR";
 const KEY_ANTHROPIC_CONFIG_DIR = "ANTHROPIC_CONFIG_DIR";
 const KEY_OAUTH = "CLAUDE_CODE_OAUTH_TOKEN";
 const KEY_OPUS = "ANTHROPIC_DEFAULT_OPUS_MODEL";
+const KEY_MAX_OUT = "CLAUDE_CODE_MAX_OUTPUT_TOKENS";
 
 // Variable-key writes for the same reason.
 const setEnvVar = (key: string, value: string): void => {
@@ -61,6 +62,15 @@ describe("buildClaudeSdkEnv — locks the st-claude-proxy painpoints", () => {
     // Sub mode must NOT inherit them — else it'd send the sub OAuth token to a third party.
     expect(env[KEY_BASE_URL]).toBeUndefined();
     expect(env[KEY_AUTH_TOKEN]).toBeUndefined();
+  });
+
+  test("maxOutputTokens override sets CLAUDE_CODE_MAX_OUTPUT_TOKENS; omitting it neutralizes an ambient export", () => {
+    setEnvVar(KEY_MAX_OUT, "999999"); // a stale ambient export must not steer chats
+
+    // No override → present-as-undefined (the CLAUDE_EFFORT discipline: explicit, not inherited).
+    expect(buildClaudeSdkEnv()[KEY_MAX_OUT]).toBeUndefined();
+    // Override → the preset's cap, stringified.
+    expect(buildClaudeSdkEnv({ maxOutputTokens: 2048 })[KEY_MAX_OUT]).toBe("2048");
   });
 });
 

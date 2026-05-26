@@ -70,6 +70,19 @@ const envSchema = z.object({
 export const env = envSchema.parse(process.env);
 
 /**
+ * Per-turn generation knobs the agent-sdk runner can steer via subprocess env (all verified —
+ * docs/sdk-notes.md "Settable"). Today only `maxOutputTokens` has a config source (the preset's
+ * `params`); the rest of the verified levers (thinking on/off, the compaction strategy) stay the
+ * flat owner defaults below until per-chat config lands (#41). Passed through both env builders so
+ * mode 1 and mode 2 honor it identically (the only difference between them is the auth target).
+ */
+export interface ClaudeGenerationOverrides {
+  /** Reply ceiling → CLAUDE_CODE_MAX_OUTPUT_TOKENS. From the preset's `params.maxOutputTokens`.
+   *  Don't set absurdly low — 64 errored to empty (docs/sdk-notes.md). undefined = SDK default. */
+  maxOutputTokens?: number | undefined;
+}
+
+/**
  * Environment for the Claude Agent SDK subprocess. sdk-mode authenticates with
  * the host's `claude login` (Max subscription) through the official runtime —
  * verified: the probe ran with `apiKeySource=none` and still succeeded. We
@@ -90,7 +103,9 @@ export const env = envSchema.parse(process.env);
  *   • `CLAUDE_EFFORT` neutralized — moot with thinking off, but explicit kills the ambient leak.
  * These are flat defaults today; a per-chat override (preset config → per-turn env) is a later step.
  */
-export function buildClaudeSdkEnv(): Record<string, string | undefined> {
+export function buildClaudeSdkEnv(
+  overrides: ClaudeGenerationOverrides = {},
+): Record<string, string | undefined> {
   return {
     ...process.env,
     ANTHROPIC_API_KEY: undefined,
@@ -105,6 +120,10 @@ export function buildClaudeSdkEnv(): Record<string, string | undefined> {
     CLAUDE_CODE_DISABLE_THINKING: "1",
     CLAUDE_CODE_DISABLE_1M_CONTEXT: "1",
     CLAUDE_EFFORT: undefined,
+    // Per-turn reply cap from the preset. Always set (override value or undefined) so an ambient
+    // CLAUDE_CODE_MAX_OUTPUT_TOKENS export can't silently steer chats — same discipline as CLAUDE_EFFORT.
+    CLAUDE_CODE_MAX_OUTPUT_TOKENS:
+      overrides.maxOutputTokens !== undefined ? String(overrides.maxOutputTokens) : undefined,
   };
 }
 
@@ -150,6 +169,7 @@ function ephemeralClaudeConfigDir(): string {
  */
 export function buildClaudeOpenRouterEnv(
   openRouterApiKey: string,
+  overrides: ClaudeGenerationOverrides = {},
 ): Record<string, string | undefined> {
   if (!openRouterApiKey) {
     throw new Error(
@@ -165,6 +185,9 @@ export function buildClaudeOpenRouterEnv(
     CLAUDE_CODE_DISABLE_THINKING: "1",
     CLAUDE_CODE_DISABLE_1M_CONTEXT: "1",
     CLAUDE_EFFORT: undefined,
+    // Per-turn reply cap from the preset (mirrors sub mode — same discipline, neutralizes ambient).
+    CLAUDE_CODE_MAX_OUTPUT_TOKENS:
+      overrides.maxOutputTokens !== undefined ? String(overrides.maxOutputTokens) : undefined,
     // The OpenRouter Anthropic-skin trio.
     ANTHROPIC_API_KEY: "",
     ANTHROPIC_BASE_URL: "https://openrouter.ai/api",

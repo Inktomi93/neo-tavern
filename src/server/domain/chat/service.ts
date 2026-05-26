@@ -364,6 +364,7 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
         source: routing.source,
         sessionStore: new DbSessionStore(db, chatId),
         systemPrompt: assemblePrompt(promptConfig, assembleCtx),
+        maxOutputTokens: promptConfig.params.maxOutputTokens,
       });
       await db.insert(messages).values({
         id: newId(),
@@ -605,6 +606,7 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
             source: routing.source,
             sessionStore: new DbSessionStore(db, params.chatId),
             systemPrompt,
+            maxOutputTokens: promptConfig.params.maxOutputTokens,
             ...(chat.sessionId ? { resume: chat.sessionId } : {}),
           });
         } else {
@@ -1015,6 +1017,7 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
               source: routing.source,
               sessionStore: store,
               systemPrompt,
+              maxOutputTokens: promptConfig.params.maxOutputTokens,
               resume: seededSessionId,
             });
           } else {
@@ -1025,6 +1028,7 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
               source: routing.source,
               sessionStore: store,
               systemPrompt,
+              maxOutputTokens: promptConfig.params.maxOutputTokens,
             });
           }
         } else {

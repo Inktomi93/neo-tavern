@@ -9,7 +9,12 @@ import {
   type TerminalReason,
 } from "@anthropic-ai/claude-agent-sdk";
 import { type ChatModelId, DEFAULT_CHAT_MODEL_ID } from "../../shared/models";
-import { buildClaudeOpenRouterEnv, buildClaudeSdkEnv, env } from "../env";
+import {
+  buildClaudeOpenRouterEnv,
+  buildClaudeSdkEnv,
+  type ClaudeGenerationOverrides,
+  env,
+} from "../env";
 import { getLog } from "../observability/logger";
 import {
   type ChatTurnResult,
@@ -35,7 +40,10 @@ import {
 // skin (paid, credentials firewalled to an isolated config dir — see buildClaudeOpenRouterEnv).
 export type ClaudeSource = "max-pro-sub" | "openrouter";
 
-export function disciplineOptions(source: ClaudeSource = "max-pro-sub") {
+export function disciplineOptions(
+  source: ClaudeSource = "max-pro-sub",
+  overrides: ClaudeGenerationOverrides = {},
+) {
   return {
     tools: [],
     mcpServers: {},
@@ -43,8 +51,8 @@ export function disciplineOptions(source: ClaudeSource = "max-pro-sub") {
     settingSources: [],
     env:
       source === "openrouter"
-        ? buildClaudeOpenRouterEnv(env.OPENROUTER_API_KEY ?? "")
-        : buildClaudeSdkEnv(),
+        ? buildClaudeOpenRouterEnv(env.OPENROUTER_API_KEY ?? "", overrides)
+        : buildClaudeSdkEnv(overrides),
   };
 }
 
@@ -195,6 +203,9 @@ export interface ChatTurnParams {
    *  goes after SYSTEM_PROMPT_DYNAMIC_BOUNDARY so it re-evaluates per turn without busting the
    *  cached prefix (see docs/sdk-notes.md). Built by domain/chat via shared/prompt-assemble. */
   systemPrompt?: { static: string; dynamic: string };
+  /** Reply ceiling from the preset (params.maxOutputTokens) → CLAUDE_CODE_MAX_OUTPUT_TOKENS. The
+   *  agent-sdk's analogue of the openrouter runner's maxOutputTokens param. undefined = SDK default. */
+  maxOutputTokens?: number | undefined;
   /** Optional live event sink (compaction/retry/rate-limit/...). The streaming-UI seam:
    *  a future SSE subscription forwards these; default undefined = collect-and-return only.
    *  (Token-delta streaming via includePartialMessages is deliberately NOT wired yet — no
@@ -218,7 +229,7 @@ export async function runChatTurn(params: ChatTurnParams): Promise<ChatTurnResul
   const stream = query({
     prompt: params.prompt,
     options: {
-      ...disciplineOptions(params.source),
+      ...disciplineOptions(params.source, { maxOutputTokens: params.maxOutputTokens }),
       ...observabilityOptions(),
       model: params.model,
       maxTurns: 1,
