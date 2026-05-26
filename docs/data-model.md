@@ -74,6 +74,17 @@ in place; `forkChat` branches into a new chat (`parentChatId`/`forkedAt`); both 
 canon survives. raw-mode provider-routing prefs ride in `chats.metadata` → the request `provider`
 field (slop guard — promote to a column if earned).
 
+## Compaction — durable events + a cross-mode summary artifact
+Two additive pieces. **`chat_events`** (migration 0014) is a durable per-chat event log: the
+`TurnEvent[]` a turn returns (compaction / api_retry / rate_limit / status / auth), persisted so the
+record survives a restart (the in-memory log ring doesn't); metadata only, never RP content; surfaced in
+`/api/_debug/db/chat`. **`chats.compactSummary` + `compactedAtSeq`** (migration 0015) make a compaction
+*portable*: a `/compact` captures the SDK's summary text + the canon `seq` it covers, and the
+`{{compact_summary}}` prompt marker renders it so the STATELESS openrouter runner can "pick up from the
+compaction point" (history rebuilt from `seq > anchor`); the artifact crosses `forkChat`. **Canon
+(`messages`) is never touched** — pre-compaction history stays fully viewable; only what's sent to the
+model changes. (agent-sdk carries compaction natively in its session, so the marker stays null there.)
+
 ## Concurrency & live sync (multi-device, one user on phone + desktop)
 - **✅ BUILT — optimistic `seq` guard + per-chat lock.** A send/swipe carries the client's
   last-seen tip (`expectedSeq`); if `MAX(seq) ≠ expectedSeq` the domain returns

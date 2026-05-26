@@ -101,7 +101,7 @@ src/
 │   ├── embeddings/      # INFRA — BGE-M3 / vectors (Phase 3)
 │   ├── domain/          # BUSINESS LOGIC — one dir per feature
 │   │   ├── _shared/     #   cross-feature domain helpers (the only shared escape)
-│   │   └── <feature>/   #   chat/, corpus/, import/, models/, search/ — entered via index.ts
+│   │   └── <feature>/   #   chat/, corpus/, debug/, import/, models/, search/ — entered via index.ts
 │   ├── jobs/            # DRIVER — IN-SERVER background workers (reach db only via domain)
 │   └── trpc/            # DRIVER — transport
 │       ├── context.ts
