@@ -145,13 +145,21 @@ empty** — 100% rails, 0% product.
      preserved, token/cost metadata left null — not re-generated) + the shared `characterVersionId` PIN +
      `personaId`/`presetVersionId`/`model` (model resets on a mode switch) + chat-level WI attachments; raw-target
      rebuilds from canon, source untouched. tRPC `chat.convertToRaw`/`chat.fork`; `ChatOperationError` →
-     NOT_IMPLEMENTED|BAD_REQUEST. "Canon is the only thing that crosses." 96 tests green. **DEFERRED:** raw→sdk
-     fork (`forkChat(targetMode:'sdk')`) throws a loud `fork_sdk_unsupported` — it needs the canon→`session_entries`
-     seeding primitive (valid-UUID frame chains), folded into Phase 5 greeting seeding (the two share it; one
-     empirical probe session covers both).
-   - **Remaining (in order):**
-     - **5E — swipes + edits**: swipe = regen last assistant turn → new `message_variant` + `activeVariantIdx`;
-       edit = mutate + (sdk) re-resume from the truncated branch / (raw) rebuild. Cache-cheap in raw.
+     NOT_IMPLEMENTED|BAD_REQUEST. "Canon is the only thing that crosses." raw→sdk fork now seeds via the
+     #39 primitive (no longer throws). Validated.
+   - **Seeding + greeting (#39) ✅** — see the deferred-backlog entry below; built the validated `buildSeedFrames`
+     primitive + greeting seeding + the `generateOpeningIfEmpty` toggle, and wired raw→sdk fork onto it.
+   - **Swipes + edits 5E ✅ (backend, curl-verified)** — `swipe(chatId, expectedSeq)` regenerates the last assistant
+     turn as a new `message_variant` + `activeVariantIdx` (mutates the tip, does NOT advance seq; first swipe migrates
+     the original to variant 0; greeting swipe uses the OPEN_SCENE path → alt greeting); `selectVariant` repoints
+     (no model call); `editMessage` mutates content+editedAt (no model call). sdk session stays in sync via
+     `reseedSdkSession` (re-seed from canon, rotate sessionId, drop old frames — the validated re-seed model, not
+     frame surgery); raw rebuilds from canon. `MessageView` gained `activeVariantIdx`+`variantCount` (the n/m counter).
+     109 tests green; **verified live over the curl/debug harness** (`scripts/swipe-edit-probe.sh`: create→send→swipe→
+     select→edit, real sub turns, swipe produced a distinct variant, 0 errors). **DEFERRED:** alternate greetings →
+     `message_variants` on import (the importer write side, separable); the swipe/edit UI (chat-surface work).
+   - **Remaining:** chat UX (the surface that renders all the above), `{{memory}}` retrieval, managed compaction,
+     streaming/SSE, preset CRUD+editor. See the deferred backlog.
 8. **Analytics (Phase 6)** — `domain` queries + `features` charts (`recharts`), one chart at
    a time, only when there's a real question.
 

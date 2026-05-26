@@ -224,9 +224,16 @@ soft-delete trash bin. No tautological getById tests. Catch yourself building th
   per-frame metadata load-bearing, sessionId must be uuidv4). Wired into raw→sdk fork (seeds + sessionId) +
   greeting seeding (greetings[0] → message row #1 + sdk session via the ST invisible-user prefix) + a
   `generateOpeningIfEmpty` toggle (model writes the opening; off by default). See `docs/sdk-notes.md`. ·
-  **Phase 5 remaining — see `docs/build-plan.md`:** **5E** swipes/edits *(immediate next; also lands alternate
-  greetings → `message_variants`)* · then `{{memory}}` retrieval, managed compaction, streaming/SSE, preset
-  CRUD+editor (cleanups: `TurnError` extraction ✅; error-variant UI pending). ·
+  **Phase 5 swipes + edits 5E ✅ (backend, curl-verified):** `swipe` (regen last assistant → new `message_variant` +
+  `activeVariantIdx`; first swipe migrates original→idx0; greeting swipe via OPEN_SCENE; mutates the tip, doesn't
+  advance seq), `selectVariant` (repoint, no model call), `editMessage` (in place, no model call). sdk session sync
+  via `reseedSdkSession` (re-seed from canon, rotate sessionId, drop old frames — the validated re-seed model);
+  raw rebuilds from canon. `MessageView` += `activeVariantIdx`/`variantCount`. Verified live over the curl harness
+  (`scripts/swipe-edit-probe.sh`). · **sdk-mode generation defaults wired** in `buildClaudeSdkEnv` (thinking OFF,
+  Opus capped 200k, ambient `CLAUDE_EFFORT` neutralized — verified via `scripts/env-knob-probe.ts`). ·
+  **Phase 5 remaining — see `docs/build-plan.md`:** chat UX (the surface rendering swipes/edits/branch — *the next
+  visible step*) · `{{memory}}` retrieval · managed compaction · streaming/SSE · preset CRUD+editor · error-variant
+  UI. (Deferred: alternate greetings → `message_variants` on import.) ·
   **Phase 6** analytics (one chart at a time, only when there's a real question).
 
 ## Start here — fast orientation (new session, read this section)

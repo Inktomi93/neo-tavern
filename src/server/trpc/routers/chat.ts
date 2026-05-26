@@ -59,7 +59,7 @@ export const chatRouter = t.router({
         .catch(domainErrorToTrpc),
     ),
 
-  // Branch a chat at a seq into a new chat. targetMode 'sdk' → NOT_IMPLEMENTED (seeding deferred).
+  // Branch a chat at a seq into a new chat.
   fork: publicProcedure
     .input(
       z.object({
@@ -70,5 +70,40 @@ export const chatRouter = t.router({
     )
     .mutation(({ ctx, input }) =>
       ctx.services.chat.forkChat({ username: ctx.username, ...input }).catch(domainErrorToTrpc),
+    ),
+
+  // Swipe: regenerate the last assistant turn as a new variant (same result shape as send).
+  swipe: publicProcedure
+    .input(z.object({ chatId: z.string().min(1), expectedSeq: z.number().int().nonnegative() }))
+    .mutation(({ ctx, input }) =>
+      ctx.services.chat.swipe({ username: ctx.username, ...input }).catch(domainErrorToTrpc),
+    ),
+
+  // Make an existing variant active (swipe ← →).
+  selectVariant: publicProcedure
+    .input(
+      z.object({
+        chatId: z.string().min(1),
+        messageId: z.string().min(1),
+        variantIdx: z.number().int().nonnegative(),
+      }),
+    )
+    .mutation(({ ctx, input }) =>
+      ctx.services.chat
+        .selectVariant({ username: ctx.username, ...input })
+        .catch(domainErrorToTrpc),
+    ),
+
+  // Edit a message in place.
+  editMessage: publicProcedure
+    .input(
+      z.object({
+        chatId: z.string().min(1),
+        messageId: z.string().min(1),
+        content: z.string().min(1),
+      }),
+    )
+    .mutation(({ ctx, input }) =>
+      ctx.services.chat.editMessage({ username: ctx.username, ...input }).catch(domainErrorToTrpc),
     ),
 });

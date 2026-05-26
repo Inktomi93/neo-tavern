@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, asc, desc, eq, lte } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, lt, lte, sql } from "drizzle-orm";
 import type { Db } from "../../../db/client";
 import {
   characters,
@@ -8,8 +8,10 @@ import {
   chats,
   chatWorldEntries,
   messages,
+  messageVariants,
   personas,
   presetVersions,
+  sessionEntries,
   worldEntries,
 } from "../../../db/schema";
 import {
@@ -39,10 +41,13 @@ import {
   ChatOperationError,
   type ChatService,
   type CreateChatParams,
+  type EditMessageParams,
   type ForkChatParams,
   type MessageView,
+  type SelectVariantParams,
   type SendParams,
   type SendResult,
+  type SwipeParams,
 } from "./types";
 
 // Both runners are injectable so the turn logic is testable with fakes (no sub queries / no
@@ -66,7 +71,7 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
   const runTurn = deps.runTurn ?? runChatTurn;
   const runRaw = deps.runRaw ?? runRawTurn;
 
-  function toView(row: typeof messages.$inferSelect): MessageView {
+  function toView(row: typeof messages.$inferSelect, variantCount: number): MessageView {
     return {
       id: row.id,
       seq: row.seq,
@@ -74,6 +79,8 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
       content: row.content,
       model: row.model,
       createdAt: row.createdAt,
+      activeVariantIdx: row.activeVariantIdx,
+      variantCount,
     };
   }
 
@@ -99,7 +106,25 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
       .from(messages)
       .where(eq(messages.chatId, chatId))
       .orderBy(asc(messages.seq));
-    return rows.map(toView);
+    if (rows.length === 0) {
+      return [];
+    }
+    // Variant (swipe) counts per message, one grouped query — drives the "n / m" counter.
+    const counts = new Map<string, number>();
+    const vc = await db
+      .select({ messageId: messageVariants.messageId, n: sql<number>`count(*)` })
+      .from(messageVariants)
+      .where(
+        inArray(
+          messageVariants.messageId,
+          rows.map((r) => r.id),
+        ),
+      )
+      .groupBy(messageVariants.messageId);
+    for (const v of vc) {
+      counts.set(v.messageId, Number(v.n));
+    }
+    return rows.map((r) => toView(r, counts.get(r.id) ?? 0));
   }
 
   async function maxSeq(chatId: string): Promise<number> {
@@ -366,14 +391,20 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
   }
 
   // Raw-mode rebuilds the conversation from canon every turn (no SDK session). user/assistant
-  // turns only — system content is carried by the assembled `instructions`, not `input`.
+  // turns only — system content is carried by the assembled `instructions`, not `input`. `beforeSeq`
+  // bounds it to seq < beforeSeq (a swipe regenerates the turn from the history BEFORE the user msg).
   async function loadCanonHistory(
     chatId: string,
+    beforeSeq?: number,
   ): Promise<{ role: "user" | "assistant"; content: string }[]> {
     const rows = await db
       .select({ role: messages.role, content: messages.content })
       .from(messages)
-      .where(eq(messages.chatId, chatId))
+      .where(
+        beforeSeq === undefined
+          ? eq(messages.chatId, chatId)
+          : and(eq(messages.chatId, chatId), lt(messages.seq, beforeSeq)),
+      )
       .orderBy(asc(messages.seq));
     return rows
       .filter((r): r is { role: "user" | "assistant"; content: string } => r.role !== "system")
@@ -729,5 +760,312 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
     return { chatId: newChatId };
   }
 
-  return { create, listMessages, send, convertToRaw, forkChat };
+  // After any canon mutation (edit / select / swipe), re-seed the sdk session from CURRENT canon so
+  // the next resume reflects it — the "every turn resumes from a branch point" model (validated
+  // buildSeedFrames; simpler + safer than session-frame surgery, and swipe/edit are infrequent in
+  // sdk-mode so the re-cache cost is fine). Rotates sessionId and drops the OLD frames (no orphans).
+  // raw-mode has no session → no-op (returns null). Greeting-first canon gets the invisible-user
+  // prefix (matches create()). Returns the new sessionId to persist on the chat (or null).
+  async function reseedSdkSession(chat: typeof chats.$inferSelect): Promise<string | null> {
+    if (chat.mode !== "sdk") {
+      return null;
+    }
+    if (chat.sessionId !== null) {
+      await db.delete(sessionEntries).where(eq(sessionEntries.sessionId, chat.sessionId));
+    }
+    const canon = await loadCanonHistory(chat.id);
+    const newSessionId = randomUUID();
+    if (canon.length > 0) {
+      const seed: SeedTurn[] =
+        canon[0]?.role === "assistant"
+          ? [{ role: "user", content: GREETING_USER_STUB }, ...canon]
+          : canon;
+      await new DbSessionStore(db, chat.id).append(
+        { projectKey: chat.id, sessionId: newSessionId },
+        buildSeedFrames(seed, newSessionId),
+      );
+    }
+    return newSessionId;
+  }
+
+  async function loadOwnedMessage(
+    chatId: string,
+    messageId: string,
+  ): Promise<typeof messages.$inferSelect> {
+    const rows = await db
+      .select()
+      .from(messages)
+      .where(and(eq(messages.id, messageId), eq(messages.chatId, chatId)))
+      .limit(1);
+    const msg = rows[0];
+    if (!msg) {
+      throw new ChatOperationError("no_such_message", `message ${messageId} not in chat ${chatId}`);
+    }
+    return msg;
+  }
+
+  // Swipe: regenerate the LAST assistant turn as a new variant (it does NOT advance seq — it mutates
+  // the tip). First swipe migrates the existing single generation to variant 0 (its first-gen metadata
+  // stays on the messages row); the new generation is variant N and becomes active.
+  async function swipe(params: SwipeParams): Promise<SendResult> {
+    const ownerId = await ensureUser(db, params.username);
+    return withChatLock(params.chatId, async (): Promise<SendResult> => {
+      const chat = await loadOwnedChat(ownerId, params.chatId);
+      const currentMax = await maxSeq(params.chatId);
+      if (currentMax !== params.expectedSeq) {
+        return {
+          status: "stale",
+          messages: await listByChat(params.chatId),
+          latestSeq: currentMax,
+        };
+      }
+      const tipRows = await db
+        .select()
+        .from(messages)
+        .where(eq(messages.chatId, params.chatId))
+        .orderBy(desc(messages.seq))
+        .limit(1);
+      const tip = tipRows[0];
+      if (!tip || tip.role !== "assistant") {
+        throw new ChatOperationError("not_swipeable", "the last message is not an assistant turn");
+      }
+      // The user turn we regenerate from. null → the tip is a seeded greeting (seq 1, no user) → the
+      // regen uses the OPEN_SCENE prompt (same path as generateOpeningIfEmpty), producing an alt greeting.
+      const userRows = await db
+        .select({ seq: messages.seq, content: messages.content })
+        .from(messages)
+        .where(
+          and(
+            eq(messages.chatId, params.chatId),
+            eq(messages.role, "user"),
+            lt(messages.seq, tip.seq),
+          ),
+        )
+        .orderBy(desc(messages.seq))
+        .limit(1);
+      const lastUser = userRows[0] ?? null;
+      const regenPrompt = lastUser?.content ?? OPEN_SCENE_PROMPT;
+      const history = await loadCanonHistory(params.chatId, lastUser?.seq ?? tip.seq);
+
+      const [assembleCtx, promptConfig] = await Promise.all([
+        buildAssembleContext(chat),
+        resolveConfig(chat),
+      ]);
+      const systemPrompt = assemblePrompt(promptConfig, assembleCtx);
+      const routing = resolveTurnRouting(chat, promptConfig);
+
+      const startedAt = Date.now();
+      let turn: ChatTurnResult;
+      // sdk-mode pre-seeds a fresh session from the pre-user history; the regen turn completes it to
+      // the new canonical state. Track it so a failed turn cleans up the seeded frames (no orphan).
+      let seededSessionId: string | null = null;
+      try {
+        if (routing.mode === "sdk") {
+          const store = new DbSessionStore(db, params.chatId);
+          if (history.length > 0) {
+            seededSessionId = randomUUID();
+            await store.append(
+              { projectKey: params.chatId, sessionId: seededSessionId },
+              buildSeedFrames(history, seededSessionId),
+            );
+            turn = await runTurn({
+              prompt: regenPrompt,
+              model: routing.model,
+              sessionStore: store,
+              systemPrompt,
+              resume: seededSessionId,
+            });
+          } else {
+            // greeting swipe: fresh session, OPEN_SCENE prompt generates an alternate opening.
+            turn = await runTurn({
+              prompt: regenPrompt,
+              model: routing.model,
+              sessionStore: store,
+              systemPrompt,
+            });
+          }
+        } else {
+          const rawParams: RawTurnParams["params"] = {
+            ...(promptConfig.params.temperature !== undefined
+              ? { temperature: promptConfig.params.temperature }
+              : {}),
+            ...(promptConfig.params.maxOutputTokens !== undefined
+              ? { maxOutputTokens: promptConfig.params.maxOutputTokens }
+              : {}),
+          };
+          turn = await runRaw({
+            model: routing.model,
+            systemPrompt,
+            history: [...history, { role: "user", content: regenPrompt }],
+            params: rawParams,
+            providerRouting: routing.providerRouting,
+          });
+        }
+      } catch (error) {
+        if (seededSessionId !== null) {
+          await db.delete(sessionEntries).where(eq(sessionEntries.sessionId, seededSessionId));
+        }
+        if (error instanceof TurnError) {
+          getLog().warn(
+            { chatId: params.chatId, kind: error.kind },
+            "chat: swipe generation failed (no change)",
+          );
+          return {
+            status: "error",
+            code: error.kind,
+            retryable: error.retryable,
+            ...(error.resetsAt !== undefined ? { resetsAt: error.resetsAt } : {}),
+            messages: await listByChat(params.chatId),
+          };
+        }
+        throw error;
+      }
+
+      // Persist the new variant. First swipe backfills variant 0 from the current single generation.
+      const existing = await db
+        .select({ idx: messageVariants.idx })
+        .from(messageVariants)
+        .where(eq(messageVariants.messageId, tip.id));
+      const now = Date.now();
+      let nextIdx = 0;
+      if (existing.length === 0) {
+        await db.insert(messageVariants).values({
+          id: newId(),
+          messageId: tip.id,
+          idx: 0,
+          content: tip.content,
+          model: tip.model,
+          provider: tip.provider,
+          createdAt: tip.createdAt,
+        });
+        nextIdx = 1;
+      } else {
+        nextIdx = Math.max(...existing.map((v) => v.idx)) + 1;
+      }
+      await db.insert(messageVariants).values({
+        id: newId(),
+        messageId: tip.id,
+        idx: nextIdx,
+        content: turn.reply,
+        model: turn.usage.model,
+        provider: routing.provider,
+        tokensIn: turn.usage.tokensIn,
+        tokensOut: turn.usage.tokensOut,
+        genStarted: startedAt,
+        genFinished: now,
+        createdAt: now,
+      });
+      await db
+        .update(messages)
+        .set({ activeVariantIdx: nextIdx, content: turn.reply })
+        .where(eq(messages.id, tip.id));
+
+      // sdk: the regen session (seeded → completed, or the fresh greeting session) is now canonical.
+      // Drop the pre-swipe session's frames and point the chat at the new one. raw: no session.
+      if (routing.mode === "sdk") {
+        if (chat.sessionId !== null && chat.sessionId !== turn.sessionId) {
+          await db.delete(sessionEntries).where(eq(sessionEntries.sessionId, chat.sessionId));
+        }
+        await db
+          .update(chats)
+          .set({ sessionId: turn.sessionId || chat.sessionId, updatedAt: now })
+          .where(eq(chats.id, params.chatId));
+      } else {
+        await db.update(chats).set({ updatedAt: now }).where(eq(chats.id, params.chatId));
+      }
+
+      getLog().info(
+        { chatId: params.chatId, messageId: tip.id, newVariantIdx: nextIdx, mode: routing.mode },
+        "chat: swiped (new variant)",
+      );
+      return { status: "ok", messages: await listByChat(params.chatId) };
+    });
+  }
+
+  // Make an existing variant active (swipe ← →). No model call; just repoints + re-seeds the session.
+  async function selectVariant(params: SelectVariantParams): Promise<MessageView[]> {
+    const ownerId = await ensureUser(db, params.username);
+    return withChatLock(params.chatId, async () => {
+      const chat = await loadOwnedChat(ownerId, params.chatId);
+      await loadOwnedMessage(params.chatId, params.messageId); // ownership + existence
+      const vRows = await db
+        .select({ content: messageVariants.content })
+        .from(messageVariants)
+        .where(
+          and(
+            eq(messageVariants.messageId, params.messageId),
+            eq(messageVariants.idx, params.variantIdx),
+          ),
+        )
+        .limit(1);
+      const variant = vRows[0];
+      if (!variant) {
+        throw new ChatOperationError(
+          "no_such_variant",
+          `variant ${params.variantIdx} not found on message ${params.messageId}`,
+        );
+      }
+      await db
+        .update(messages)
+        .set({ activeVariantIdx: params.variantIdx, content: variant.content })
+        .where(eq(messages.id, params.messageId));
+      const newSessionId = await reseedSdkSession(chat);
+      if (newSessionId !== null) {
+        await db
+          .update(chats)
+          .set({ sessionId: newSessionId, updatedAt: Date.now() })
+          .where(eq(chats.id, params.chatId));
+      }
+      return listByChat(params.chatId);
+    });
+  }
+
+  // Edit a message in place (any message, including buried). Updates content (+ the active variant's
+  // text) and re-seeds the sdk session so the model sees the edit on the next turn. No model call.
+  async function editMessage(params: EditMessageParams): Promise<MessageView[]> {
+    const ownerId = await ensureUser(db, params.username);
+    return withChatLock(params.chatId, async () => {
+      const chat = await loadOwnedChat(ownerId, params.chatId);
+      const msg = await loadOwnedMessage(params.chatId, params.messageId);
+      const now = Date.now();
+      await db
+        .update(messages)
+        .set({ content: params.content, editedAt: now })
+        .where(eq(messages.id, params.messageId));
+      if (msg.activeVariantIdx !== null) {
+        await db
+          .update(messageVariants)
+          .set({ content: params.content })
+          .where(
+            and(
+              eq(messageVariants.messageId, params.messageId),
+              eq(messageVariants.idx, msg.activeVariantIdx),
+            ),
+          );
+      }
+      const newSessionId = await reseedSdkSession(chat);
+      if (newSessionId !== null) {
+        await db
+          .update(chats)
+          .set({ sessionId: newSessionId, updatedAt: now })
+          .where(eq(chats.id, params.chatId));
+      }
+      getLog().info(
+        { chatId: params.chatId, messageId: params.messageId, seq: msg.seq },
+        "chat: message edited",
+      );
+      return listByChat(params.chatId);
+    });
+  }
+
+  return {
+    create,
+    listMessages,
+    send,
+    convertToRaw,
+    forkChat,
+    swipe,
+    selectVariant,
+    editMessage,
+  };
 }

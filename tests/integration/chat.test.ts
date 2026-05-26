@@ -54,6 +54,19 @@ function failingRunner(error: TurnError) {
   return { run, calls };
 }
 
+// A fake runner that returns a different reply each call — so swipe variants are distinguishable.
+function seqRunner(replies: string[]) {
+  const calls: ChatTurnParams[] = [];
+  let i = 0;
+  const run = (params: ChatTurnParams): Promise<ChatTurnResult> => {
+    calls.push(params);
+    const reply = replies[Math.min(i, replies.length - 1)] ?? "x";
+    i += 1;
+    return Promise.resolve(cannedTurn(reply));
+  };
+  return { run, calls };
+}
+
 // Raw-mode turn result: no SDK session (sessionId ""), usage.model echoes the routed model.
 function cannedRawTurn(reply: string, model: string): ChatTurnResult {
   return { ...cannedTurn(reply), sessionId: "", usage: { ...cannedTurn(reply).usage, model } };
@@ -394,4 +407,105 @@ test("no greeting + toggle off → blank chat, user speaks first (default)", asy
 
   expect(calls).toHaveLength(0); // nothing generated
   expect(await chat.listMessages({ username: "owner", chatId })).toHaveLength(0);
+});
+
+// ── 5E: swipes + edits ───────────────────────────────────────────────────────
+
+test("swipe regenerates the last assistant turn as a new variant (migrating the original to idx 0)", async () => {
+  const db = await freshDb();
+  const { run } = seqRunner(["first reply", "second reply"]);
+  const chat = createChatService(db, { runTurn: run });
+
+  const { chatId } = await chat.create({ username: "owner", title: "T", ...baseChar });
+  await chat.send({ username: "owner", chatId, expectedSeq: 0, content: "hello" }); // assistant "first reply" @ seq 2
+
+  // swipe mutates the tip — expectedSeq stays the chat's MAX (2), it does NOT advance seq.
+  const result = await chat.swipe({ username: "owner", chatId, expectedSeq: 2 });
+
+  expect(result.status).toBe("ok");
+  const tip = result.status === "ok" ? result.messages.at(-1) : undefined;
+  expect(tip?.seq).toBe(2); // still seq 2 — swipe doesn't extend the chat
+  expect(tip?.content).toBe("second reply"); // the new generation is active
+  expect(tip?.activeVariantIdx).toBe(1);
+  expect(tip?.variantCount).toBe(2); // original (idx 0) + new (idx 1)
+});
+
+test("selectVariant flips back to an earlier swipe without regenerating", async () => {
+  const db = await freshDb();
+  const { run, calls } = seqRunner(["first reply", "second reply"]);
+  const chat = createChatService(db, { runTurn: run });
+
+  const { chatId } = await chat.create({ username: "owner", title: "T", ...baseChar });
+  await chat.send({ username: "owner", chatId, expectedSeq: 0, content: "hello" });
+  await chat.swipe({ username: "owner", chatId, expectedSeq: 2 }); // now 2 variants, idx 1 active
+  const callsAfterSwipe = calls.length;
+
+  const tipId = (await chat.listMessages({ username: "owner", chatId })).at(-1)?.id ?? "";
+  const msgs = await chat.selectVariant({
+    username: "owner",
+    chatId,
+    messageId: tipId,
+    variantIdx: 0,
+  });
+
+  expect(calls).toHaveLength(callsAfterSwipe); // NO model call — just a repoint
+  const tip = msgs.at(-1);
+  expect(tip?.activeVariantIdx).toBe(0);
+  expect(tip?.content).toBe("first reply"); // back to the original generation
+});
+
+test("a greeting (seq-1 assistant, no user) can be swiped via the open-scene path", async () => {
+  const db = await freshDb();
+  const { run, calls } = seqRunner(["an alternate greeting"]);
+  const chat = createChatService(db, { runTurn: run });
+
+  const { chatId } = await chat.create({
+    username: "owner",
+    title: "T",
+    ...baseChar,
+    firstMessage: "Welcome, traveler.",
+  }); // greeting is messages row #1 (seeded, NOT generated → runner not called yet)
+  expect(calls).toHaveLength(0);
+
+  const result = await chat.swipe({ username: "owner", chatId, expectedSeq: 1 });
+
+  expect(result.status).toBe("ok");
+  expect(calls).toHaveLength(1); // the regen ran (open-scene path, no preceding user)
+  const tip = result.status === "ok" ? result.messages[0] : undefined;
+  expect(tip?.seq).toBe(1);
+  expect(tip?.content).toBe("an alternate greeting");
+  expect(tip?.variantCount).toBe(2); // original greeting (idx 0) + the alternate (idx 1)
+});
+
+test("editMessage updates content + editedAt in place, no model call", async () => {
+  const db = await freshDb();
+  const { run, calls } = seqRunner(["a reply"]);
+  const chat = createChatService(db, { runTurn: run });
+
+  const { chatId } = await chat.create({ username: "owner", title: "T", ...baseChar });
+  await chat.send({ username: "owner", chatId, expectedSeq: 0, content: "hello" });
+  const userMsgId = (await chat.listMessages({ username: "owner", chatId }))[0]?.id ?? "";
+
+  const msgs = await chat.editMessage({
+    username: "owner",
+    chatId,
+    messageId: userMsgId,
+    content: "edited hello",
+  });
+
+  expect(calls).toHaveLength(1); // only the original send; edit makes no model call
+  expect(msgs[0]?.content).toBe("edited hello");
+  const row = (await db.select().from(messages).where(eq(messages.id, userMsgId)))[0];
+  expect(row?.editedAt).not.toBeNull();
+});
+
+test("swipe on a chat whose tip is not an assistant turn throws not_swipeable", async () => {
+  const db = await freshDb();
+  const chat = createChatService(db, { runTurn: seqRunner(["x"]).run });
+  const { chatId } = await chat.create({ username: "owner", title: "T", ...baseChar }); // blank chat, no messages
+
+  await expect(chat.swipe({ username: "owner", chatId, expectedSeq: 0 })).rejects.toMatchObject({
+    name: "ChatOperationError",
+    reason: "not_swipeable",
+  });
 });

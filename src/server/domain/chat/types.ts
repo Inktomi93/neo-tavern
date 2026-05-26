@@ -5,9 +5,13 @@ export interface MessageView {
   id: string;
   seq: number;
   role: "user" | "assistant" | "system";
-  content: string;
+  content: string; // the ACTIVE variant's text (= variants[activeVariantIdx].content) when variants exist
   model: string | null;
   createdAt: number;
+  /** Which swipe is shown; null = single generation (no variants). */
+  activeVariantIdx: number | null;
+  /** Total swipes for this message (0 = single generation). Drives the "3 / 5" counter. */
+  variantCount: number;
 }
 
 // send() result. A discriminated union the client renders directly.
@@ -61,6 +65,28 @@ export interface ForkChatParams {
   targetMode: "sdk" | "raw";
 }
 
+export interface SwipeParams {
+  username: string;
+  chatId: string;
+  /** The chat's current MAX seq (swipe MUTATES the tip — it does NOT advance seq). Mismatch → stale. */
+  expectedSeq: number;
+}
+
+export interface SelectVariantParams {
+  username: string;
+  chatId: string;
+  messageId: string;
+  /** Which existing swipe to make active. */
+  variantIdx: number;
+}
+
+export interface EditMessageParams {
+  username: string;
+  chatId: string;
+  messageId: string;
+  content: string;
+}
+
 export interface ChatService {
   create(params: CreateChatParams): Promise<{ chatId: string }>;
   listMessages(params: { username: string; chatId: string }): Promise<MessageView[]>;
@@ -69,6 +95,13 @@ export interface ChatService {
   convertToRaw(params: { username: string; chatId: string }): Promise<void>;
   /** Branch a chat at `atSeq` into a new chat (parentChatId/forkedAt). Returns the new id. */
   forkChat(params: ForkChatParams): Promise<{ chatId: string }>;
+  /** Regenerate the last assistant turn as a NEW variant (swipe). Returns the same result shape as
+   *  send (ok / stale / error) — a swipe is a generation, so it can be stale or fail like any turn. */
+  swipe(params: SwipeParams): Promise<SendResult>;
+  /** Make an existing variant active (swipe ← →). No model call. */
+  selectVariant(params: SelectVariantParams): Promise<MessageView[]>;
+  /** Edit a message's content in place (+ the active variant). No model call; re-seeds the sdk session. */
+  editMessage(params: EditMessageParams): Promise<MessageView[]>;
 }
 
 // Thrown when a chat doesn't exist or isn't owned by the caller. The trpc layer maps
@@ -84,7 +117,12 @@ export class ChatNotFoundError extends Error {
 // `reason` lets the transport pick the right code (BAD_REQUEST vs NOT_IMPLEMENTED) without
 // importing @trpc/server into the domain. fork_sdk_unsupported = the deferred raw→sdk
 // seeding primitive (shared with greeting seeding); see docs/build-plan.md.
-export type ChatOpReason = "not_sdk" | "invalid_fork_point";
+export type ChatOpReason =
+  | "not_sdk"
+  | "invalid_fork_point"
+  | "no_such_message"
+  | "no_such_variant"
+  | "not_swipeable";
 export class ChatOperationError extends Error {
   readonly reason: ChatOpReason;
   constructor(reason: ChatOpReason, message: string) {
