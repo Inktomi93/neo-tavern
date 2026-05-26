@@ -1,8 +1,14 @@
 # Corpus import & RAG — the answer key (card-curator + st-bridge)
 
-We are **not** the first to parse this corpus. Two of our own projects already solved
-it, validated against the real **~310-card / 124-chat-dir** SillyTavern corpus. **Port
-their logic; do not re-derive.** Both are local git repos — cite, lift, adapt to TS.
+> **The importer + RAG search are BUILT (Phase 4 — `domain/import`, `domain/corpus`,
+> `domain/search`, `/corpus` UI).** This doc is no longer a to-do; it's the **reference**:
+> the algorithms, the `file:line` provenance back to the source implementations (don't
+> re-derive), the real-ST gotchas, and the deferred extensions (find-duplicates, CLIP images).
+> The ✅ markers below mean "ported + validated" — the code is the truth for current state.
+
+We were **not** the first to parse this corpus. Two of our own projects already solved it,
+validated against the real **~310-card / 124-chat-dir** SillyTavern corpus. **Port their logic;
+do not re-derive.** Both are local git repos — cite, lift, adapt to TS.
 
 - **card-curator** (`development/card-curator`, Python) — the deep source: PNG card
   extraction, ST chat parsing, semantic indexing (embeddings + CSLS hubness + rerank).

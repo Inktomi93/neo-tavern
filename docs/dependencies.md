@@ -13,10 +13,10 @@ avoids dead deps. Uncomment + run when it's time.
 
 Runtime: `hono`, `@hono/node-server`, `@trpc/{server,client,react-query}`,
 `@tanstack/{react-query,react-router}`, `react`, `react-dom`, `zod`,
-`@anthropic-ai/claude-agent-sdk` (sdk-mode chat), `@openrouter/sdk` (raw-mode chat —
-the OFFICIAL OpenRouter SDK + Responses API; **NOT** the `openai` package, which we
-removed — the official SDK gives typed errors, routing metadata, the Responses API,
-image-gen for later), `dotenv` (loads a gitignored `.env` with `override:true` so a
+`@anthropic-ai/claude-agent-sdk` (the agent-sdk runner), `@openrouter/sdk` (the openrouter
+runner — Chat Completions + Responses; the OFFICIAL OpenRouter SDK, **NOT** the `openai`
+package, which we removed — the official SDK gives typed errors, routing metadata, the live
+model catalog, image-gen for later), `dotenv` (loads a gitignored `.env` with `override:true` so a
 local key wins over a stale shell export — see `src/server/env.ts`).
 Tooling: biome, typescript, vite, tsx, vitest, dependency-cruiser, knip, husky,
 tailwindcss (v4), concurrently.

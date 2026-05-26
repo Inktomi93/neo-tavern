@@ -116,11 +116,18 @@ reads `process.env`, which sidesteps the `noPropertyAccessFromIndexSignature` �
 
 ## Chat providers & auth
 
-Two providers are wired (adapters in `src/server/providers/`): the sdk-mode turn
-(`runChatTurn`, Claude Agent SDK) and the raw-mode turn (`runRawTurn`, OpenRouter Responses
-API). Both return the same provider-agnostic `ChatTurnResult` and log model/cost/latency.
+Two runners (adapters in `src/server/providers/`) cover four provider-mode pairings
+(`chats.api` × `chats.source`), selected per turn by `resolveTurnRouting`. Both return the same
+provider-agnostic `ChatTurnResult` and log model/cost/latency:
 
-- **Claude (sdk-mode / YGWYG) — `claude-sdk.ts`.** Uses the Claude Agent SDK,
+- **agent-sdk runner — `claude-sdk.ts`** — Claude via the Agent SDK. `source: max-pro-sub` =
+  the free Max sub; `source: openrouter` = paid Claude through OpenRouter's Anthropic skin
+  (same pipeline, credentials firewalled).
+- **openrouter runner — `openrouter.ts`** — `@openrouter/sdk`. `api: chat-completions`
+  (`chat.send`, broad catalog, 5m `cache_control` on Anthropic) and `api: responses`
+  (`beta.responses`, OpenAI-style).
+
+- **Claude auth (the agent-sdk runner) — `claude-sdk.ts`.** Uses the Claude Agent SDK,
   which spawns the official Claude Code runtime and authenticates with the
   host's **`claude login` (Max subscription)** — **no API key, no token
   extraction.** Verified: a probe ran with `apiKeySource: "none"` and succeeded.
@@ -143,16 +150,12 @@ sdk-mode models live in `src/shared/models.ts` (latest Claude per tier; default 
 exposed via the tRPC `models` query. Raw-mode models are the **live OpenRouter catalog** via the
 `rawModels` query.
 
-## Built since Phase 1
+## Status
 
-The DB schema (migrations 0000–0009, incl. enforced FKs + preset versioning + turn-metadata +
-the `greetings[]` fold), the full corpus RAG/search stack (BGE-M3 + CSLS + bge-reranker-v2-m3 +
-`discover`) + `/corpus` UI, the ST importer, the hardened sdk-mode chat turn + **prompt assembly**
-(versioned `PromptConfig` + World Info + persona pin), and **Phase 5 raw mode 5A/5B** (`@openrouter/sdk`
-Responses API: live catalog + `runRawTurn`) are built + validated. See `CLAUDE.md` build-phases +
-**`docs/build-plan.md`** (detailed next steps + the deferred backlog). **In flight (Phase 5):** mode
-routing (5C), conversion/fork (5D), swipes/edits (5E). **Still deferred:** Docker/compose, Playwright
-E2E, analytics (Phase 6), + the backlog in `build-plan.md`.
+Not narrated here (it rots). Current state = the **git log** + the **code** (`src/db/schema.ts` +
+migrations are the truth) + the **deferred backlog in `docs/build-plan.md`**. Short version: rails +
+the corpus RAG product + the chat *backend* (prompt assembly, the 4 provider modes, swipes/edits/fork)
+are built and green; the chat *frontend* is the main thing left.
 
 Deferred **dependencies** (what to add, when, and the exact command) live in
 [docs/dependencies.md](docs/dependencies.md) — `package.json` can't hold comments,
