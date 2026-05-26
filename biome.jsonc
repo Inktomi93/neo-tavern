@@ -241,8 +241,16 @@
       // wire names verbatim, so useNamingConvention can't apply here (cf. the importer +
       // embeddings overrides). Same rationale as env.ts's CONSTANT_CASE override. The
       // session-store test builds SDK SessionStoreEntry frames (compact_metadata,
-      // preserved_messages…), the same wire shape, so it shares this exemption.
-      "includes": ["src/server/providers/**", "tests/integration/chat-session-store.test.ts"],
+      // preserved_messages…), the same wire shape, so it shares this exemption. So do the seed
+      // helpers/probe (domain/chat/seed*, scripts/seed-probe), which synthesize SDK frames with
+      // snake_case wire fields (stop_reason) to seed a resumable session.
+      "includes": [
+        "src/server/providers/**",
+        "tests/integration/chat-session-store.test.ts",
+        "src/server/domain/chat/seed.ts",
+        "src/server/domain/chat/seed.test.ts",
+        "scripts/seed-probe.ts"
+      ],
       "linter": { "rules": { "style": { "useNamingConvention": "off" } } }
     },
     {

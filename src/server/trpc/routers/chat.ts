@@ -10,9 +10,8 @@ function domainErrorToTrpc(error: unknown): never {
     throw new TRPCError({ code: "NOT_FOUND", message: error.message });
   }
   if (error instanceof ChatOperationError) {
-    // fork-to-sdk is a real not-yet-built capability; the others are bad requests for the state.
-    const code = error.reason === "fork_sdk_unsupported" ? "NOT_IMPLEMENTED" : "BAD_REQUEST";
-    throw new TRPCError({ code, message: error.message });
+    // All current reasons (not_sdk, invalid_fork_point) are bad requests for the chat's state.
+    throw new TRPCError({ code: "BAD_REQUEST", message: error.message });
   }
   throw error;
 }
@@ -25,6 +24,8 @@ export const chatRouter = t.router({
         characterName: z.string().min(1).max(200),
         characterDescription: z.string().min(1),
         firstMessage: z.string().optional(),
+        // Toggle: when no firstMessage, have the model write the opening (vs the user speaking first).
+        generateOpeningIfEmpty: z.boolean().optional(),
       }),
     )
     .mutation(({ ctx, input }) => ctx.services.chat.create({ username: ctx.username, ...input })),

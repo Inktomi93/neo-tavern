@@ -219,10 +219,14 @@ soft-delete trash bin. No tautological getById tests. Catch yourself building th
   canon, source intact). tRPC `chat.convertToRaw`/`chat.fork`; `ChatOperationError`→NOT_IMPLEMENTED|BAD_REQUEST.
   raw→sdk fork throws a loud `fork_sdk_unsupported` — DEFERRED to the shared canon→session_entries seeding
   primitive (folded into greeting seeding). 96 tests green. ·
-  **Phase 5 remaining — see `docs/build-plan.md` (detailed) + the deferred backlog:** **5E** swipes/edits
-  *(immediate next)* · then greeting seeding (+ the seeding primitive → also unblocks raw→sdk fork),
-  `{{memory}}` retrieval, managed compaction, streaming/SSE, preset CRUD+editor, the
-  `TurnError`→`TurnError` rename. ·
+  **Phase 5 seeding + greeting (#39) ✅:** `domain/chat/seed.ts` `buildSeedFrames` synthesizes resumable SDK
+  frames from canon — shape EMPIRICALLY validated (`scripts/seed-probe.ts`, Haiku+Sonnet: bare frames rejected,
+  per-frame metadata load-bearing, sessionId must be uuidv4). Wired into raw→sdk fork (seeds + sessionId) +
+  greeting seeding (greetings[0] → message row #1 + sdk session via the ST invisible-user prefix) + a
+  `generateOpeningIfEmpty` toggle (model writes the opening; off by default). See `docs/sdk-notes.md`. ·
+  **Phase 5 remaining — see `docs/build-plan.md`:** **5E** swipes/edits *(immediate next; also lands alternate
+  greetings → `message_variants`)* · then `{{memory}}` retrieval, managed compaction, streaming/SSE, preset
+  CRUD+editor (cleanups: `TurnError` extraction ✅; error-variant UI pending). ·
   **Phase 6** analytics (one chart at a time, only when there's a real question).
 
 ## Start here — fast orientation (new session, read this section)

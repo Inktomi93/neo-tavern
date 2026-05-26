@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { and, asc, desc, eq, lte } from "drizzle-orm";
 import type { Db } from "../../../db/client";
 import {
@@ -31,6 +32,7 @@ import { newId } from "../_shared/ids";
 import { withChatLock } from "../_shared/lock";
 import { ensureUser } from "../_shared/users";
 import { resolveTurnRouting } from "./routing";
+import { buildSeedFrames, GREETING_USER_STUB, type SeedTurn } from "./seed";
 import { DbSessionStore } from "./store";
 import {
   ChatNotFoundError,
@@ -54,6 +56,11 @@ export interface ChatServiceDeps {
 // Recent message texts the keyword-WI marker scans. Small + tunable; includes the just-inserted
 // user message (send inserts it before assembling), which is what should trigger keyword WI.
 const RECENT_MESSAGE_WINDOW = 6;
+
+// The hidden "user" turn that elicits a generated opening (generateOpeningIfEmpty). Never stored as
+// a messages row — it only prompts the model to write the character's first message.
+const OPEN_SCENE_PROMPT =
+  "[Open the scene: write your first message to me, in character — set the scene and greet me as your character would. Stay fully in character.]";
 
 export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatService {
   const runTurn = deps.runTurn ?? runChatTurn;
@@ -220,13 +227,10 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
     const versionId = newId();
     const chatId = newId();
 
-    // Minimal character + v1 inline (the skeleton owns this; a real characters domain
-    // takes over later). The single form greeting becomes greetings[0]; it's stored on the
-    // version but NOT seeded as a message yet — greeting-as-assistant-turn seeding (+ alternates
-    // as message_variants) is a follow-up. Empty greetings → chat starts empty (user opens it).
-    // Circular FK (characters.currentVersionId ↔ character_versions.characterId, migration
-    // 0007): insert the character with a NULL currentVersionId, then the version, then repoint
-    // — same order the importer uses. Setting currentVersionId up front violates the FK.
+    // Minimal character + v1 inline (the skeleton owns this; a real characters domain takes over
+    // later). The form's first message becomes greetings[0]. Circular FK (characters.currentVersionId
+    // ↔ character_versions.characterId, migration 0007): insert the character with a NULL
+    // currentVersionId, then the version, then repoint — same order the importer uses.
     await db.insert(characters).values({
       id: characterId,
       ownerId,
@@ -253,13 +257,112 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
       characterVersionId: versionId,
       mode: "sdk",
       provider: "anthropic-sdk",
-      // model left null → resolveTurnRouting falls back to DEFAULT_CHAT_MODEL_ID. A picker / the
-      // future create options set it; mode-conversion (5D) sets the raw model.
+      // model left null → resolveTurnRouting falls back to DEFAULT_CHAT_MODEL_ID.
       createdAt: now,
       updatedAt: now,
     });
 
+    // How the chat opens:
+    //  • greeting present → seed greetings[0] as the opening (message row #1 + sdk session seed).
+    //  • else + generateOpeningIfEmpty → the model writes the opening (a no-user-message turn).
+    //  • else → blank; the user speaks first.
+    const greeting = (params.firstMessage ?? "").trim();
+    if (greeting.length > 0) {
+      const sessionId = randomUUID();
+      await db.insert(messages).values({
+        id: newId(),
+        chatId,
+        seq: 1,
+        role: "assistant",
+        content: greeting,
+        createdAt: now,
+      });
+      // Seed the sdk session so turn 1's resume sees the greeting. A greeting has no real user turn
+      // before it, so prefix the ST invisible-user stub → the validated user→assistant seed shape
+      // (./seed; the stub is session-only, never a messages row, so the UI never shows it).
+      await new DbSessionStore(db, chatId).append(
+        { projectKey: chatId, sessionId },
+        buildSeedFrames(
+          [
+            { role: "user", content: GREETING_USER_STUB },
+            { role: "assistant", content: greeting },
+          ],
+          sessionId,
+        ),
+      );
+      await db.update(chats).set({ sessionId, messageCount: 1 }).where(eq(chats.id, chatId));
+    } else if (params.generateOpeningIfEmpty === true) {
+      await generateOpening(ownerId, chatId);
+    }
+
     return { chatId };
+  }
+
+  // "Generate to open" (the create-time toggle): the model writes the first message in-character via
+  // a no-user-message turn — a hidden open-scene prompt (never stored as a messages row) elicits the
+  // opening, and runTurn lets the SDK build the session. Graceful: a provider failure leaves the chat
+  // blank (the user can just speak first) rather than failing creation.
+  async function generateOpening(ownerId: string, chatId: string): Promise<void> {
+    const chat = await loadOwnedChat(ownerId, chatId);
+    const [assembleCtx, promptConfig] = await Promise.all([
+      buildAssembleContext(chat),
+      resolveConfig(chat),
+    ]);
+    const routing = resolveTurnRouting(chat, promptConfig);
+    if (routing.mode !== "sdk") {
+      return; // create() only makes sdk chats; a raw opening would route through runRaw (not wired)
+    }
+    try {
+      const turn = await runTurn({
+        prompt: OPEN_SCENE_PROMPT,
+        model: routing.model,
+        sessionStore: new DbSessionStore(db, chatId),
+        systemPrompt: assemblePrompt(promptConfig, assembleCtx),
+      });
+      await db.insert(messages).values({
+        id: newId(),
+        chatId,
+        seq: 1,
+        role: "assistant",
+        content: turn.reply,
+        model: turn.usage.model,
+        provider: routing.provider,
+        stopReason: turn.stopReason,
+        tokensIn: turn.usage.tokensIn,
+        tokensOut: turn.usage.tokensOut,
+        cacheReadTokens: turn.usage.cacheReadTokens,
+        cacheWriteTokens: turn.usage.cacheWriteTokens,
+        cacheCreation5mTokens: turn.usage.cacheCreation5mTokens,
+        cacheCreation1hTokens: turn.usage.cacheCreation1hTokens,
+        contextWindow: turn.usage.contextWindow,
+        maxOutputTokens: turn.usage.maxOutputTokens,
+        ttftMs: turn.ttftMs,
+        terminalReason: turn.terminalReason,
+        apiErrorStatus: turn.apiErrorStatus,
+        costUsd: turn.usage.costUsd,
+        createdAt: Date.now(),
+      });
+      await db
+        .update(chats)
+        .set({
+          sessionId: turn.sessionId,
+          messageCount: 1,
+          totalTokensIn: turn.usage.tokensIn,
+          totalTokensOut: turn.usage.tokensOut,
+          updatedAt: Date.now(),
+        })
+        .where(eq(chats.id, chatId));
+      getLog().info({ chatId }, "chat: generated opening message");
+    } catch (error) {
+      if (error instanceof TurnError) {
+        getLog().warn(
+          { chatId, kind: error.kind },
+          "chat: opening generation failed — chat starts blank",
+        );
+        return;
+      }
+      throw error;
+    }
   }
 
   // Raw-mode rebuilds the conversation from canon every turn (no SDK session). user/assistant
@@ -511,18 +614,12 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
 
   // Branch a chat at `atSeq` into a NEW chat. "Canon is the only thing that crosses" (the measured
   // fork model): copy messages seq ≤ atSeq + the config pins; the original stays intact. raw-target
-  // rebuilds history from the copied canon. sdk-target needs session_entries seeding (valid-UUID
-  // frame chains) — deferred to the shared seeding primitive (see #39 / docs/build-plan.md).
+  // rebuilds history from the copied canon (no session). sdk-target seeds session_entries from the
+  // copied canon via the empirically-validated buildSeedFrames (./seed) so resume works.
   async function forkChat(params: ForkChatParams): Promise<{ chatId: string }> {
     const ownerId = await ensureUser(db, params.username);
     const source = await loadOwnedChat(ownerId, params.chatId);
 
-    if (params.targetMode === "sdk") {
-      throw new ChatOperationError(
-        "fork_sdk_unsupported",
-        "forking to sdk-mode needs canon→session_entries seeding (not yet implemented); fork to raw",
-      );
-    }
     if (params.atSeq < 1) {
       throw new ChatOperationError("invalid_fork_point", `atSeq must be ≥ 1 (got ${params.atSeq})`);
     }
@@ -544,8 +641,10 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
     const now = Date.now();
     const newChatId = newId();
     // model carries only when the mode is unchanged (same catalog); a mode switch resets to the
-    // target default (null → resolver default). Today targetMode is always raw (sdk threw above).
+    // target default (null → resolver default).
     const model = params.targetMode === source.mode ? source.model : null;
+    // sdk-target gets a fresh valid-UUID session (seeded below); raw-target has none.
+    const sessionId = params.targetMode === "sdk" ? randomUUID() : null;
     await db.insert(chats).values({
       id: newChatId,
       ownerId,
@@ -554,8 +653,9 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
       personaId: source.personaId,
       presetVersionId: source.presetVersionId,
       mode: params.targetMode,
-      provider: "openrouter",
+      provider: params.targetMode === "sdk" ? "anthropic-sdk" : "openrouter",
       model,
+      sessionId,
       parentChatId: params.chatId,
       forkedAt: now,
       messageCount: canon.length,
@@ -598,6 +698,23 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
       );
     }
 
+    // sdk-target: seed the new chat's session from the copied canon (user/assistant only — system
+    // content rides in the assembled prompt) so the next send's resume sees the branched history.
+    // The frame shape is empirically validated (./seed). raw-target needs none (rebuilds from canon).
+    if (sessionId !== null) {
+      const seedTurns: SeedTurn[] = [];
+      for (const m of canon) {
+        if (m.role === "user" || m.role === "assistant") {
+          seedTurns.push({ role: m.role, content: m.content, model: m.model });
+        }
+      }
+      // projectKey is required by SessionKey but unused by DbSessionStore (it keys on sessionId).
+      await new DbSessionStore(db, newChatId).append(
+        { projectKey: newChatId, sessionId },
+        buildSeedFrames(seedTurns, sessionId),
+      );
+    }
+
     getLog().info(
       {
         chatId: newChatId,
@@ -605,6 +722,7 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
         atSeq: params.atSeq,
         copied: canon.length,
         targetMode: params.targetMode,
+        seeded: sessionId !== null,
       },
       "chat: forked",
     );

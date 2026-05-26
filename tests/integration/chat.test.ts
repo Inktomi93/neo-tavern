@@ -1,11 +1,7 @@
 import { eq } from "drizzle-orm";
 import { expect, test } from "vitest";
-import { chats, messages } from "../../src/db/schema";
-import {
-  ChatNotFoundError,
-  ChatOperationError,
-  createChatService,
-} from "../../src/server/domain/chat";
+import { chats, messages, sessionEntries } from "../../src/db/schema";
+import { ChatNotFoundError, createChatService } from "../../src/server/domain/chat";
 import type { ChatTurnParams } from "../../src/server/providers/claude-sdk";
 import type { RawTurnParams } from "../../src/server/providers/openrouter";
 import { type ChatTurnResult, TurnError } from "../../src/server/providers/turn";
@@ -313,13 +309,89 @@ test("fork to raw branches canon at a seq into a new, independent chat", async (
   expect(srcMsgs).toHaveLength(4);
 });
 
-test("fork to sdk throws fork_sdk_unsupported (seeding deferred to #39)", async () => {
+test("fork to sdk seeds session_entries from canon + sets a valid-UUID sessionId", async () => {
+  const db = await freshDb();
+  const chat = createChatService(db, { runTurn: fakeRunner("reply").run });
+  const { chatId } = await chat.create({ username: "owner", title: "Origin", ...baseChar });
+  await chat.send({ username: "owner", chatId, expectedSeq: 0, content: "one" }); // seq 1,2
+
+  const { chatId: forkId } = await chat.forkChat({
+    username: "owner",
+    chatId,
+    atSeq: 2,
+    targetMode: "sdk",
+  });
+
+  const forkRow = (await db.select().from(chats).where(eq(chats.id, forkId)))[0];
+  expect(forkRow?.mode).toBe("sdk");
+  expect(forkRow?.provider).toBe("anthropic-sdk");
+  expect(forkRow?.sessionId).toMatch(/^[0-9a-f-]{36}$/); // a real uuidv4 (SDK rejects arbitrary ids)
+
+  // The copied canon was seeded into the new chat's session as resumable frames.
+  const seeded = await db
+    .select()
+    .from(sessionEntries)
+    .where(eq(sessionEntries.sessionId, forkRow?.sessionId ?? ""));
+  expect(seeded.length).toBeGreaterThanOrEqual(2); // ≥ the user + assistant of the copied turn
+  expect(seeded.every((f) => f.chatId === forkId)).toBe(true);
+});
+
+test("a greeting (firstMessage) seeds an opening message + an sdk session", async () => {
   const db = await freshDb();
   const chat = createChatService(db, { runTurn: fakeRunner("x").run });
-  const { chatId } = await chat.create({ username: "owner", title: "T", ...baseChar });
-  await chat.send({ username: "owner", chatId, expectedSeq: 0, content: "one" });
 
-  await expect(
-    chat.forkChat({ username: "owner", chatId, atSeq: 2, targetMode: "sdk" }),
-  ).rejects.toBeInstanceOf(ChatOperationError);
+  const { chatId } = await chat.create({
+    username: "owner",
+    title: "T",
+    ...baseChar,
+    firstMessage: "Welcome, traveler. I am Aria.",
+  });
+
+  // The greeting is messages row #1 (what the user sees).
+  const msgs = await chat.listMessages({ username: "owner", chatId });
+  expect(msgs).toHaveLength(1);
+  expect(msgs[0]?.role).toBe("assistant");
+  expect(msgs[0]?.seq).toBe(1);
+  expect(msgs[0]?.content).toBe("Welcome, traveler. I am Aria.");
+
+  // The sdk session is seeded so turn 1's resume sees the greeting; the invisible-user stub is
+  // session-only (NOT a messages row) — 2 frames (stub + greeting), 1 message.
+  const row = (await db.select().from(chats).where(eq(chats.id, chatId)))[0];
+  expect(row?.sessionId).toMatch(/^[0-9a-f-]{36}$/);
+  const frames = await db
+    .select()
+    .from(sessionEntries)
+    .where(eq(sessionEntries.sessionId, row?.sessionId ?? ""));
+  expect(frames).toHaveLength(2); // invisible user + the greeting
+});
+
+test("generateOpeningIfEmpty has the model write the opening (no greeting)", async () => {
+  const db = await freshDb();
+  const { run, calls } = fakeRunner("*The tavern door creaks open.* Welcome!");
+  const chat = createChatService(db, { runTurn: run });
+
+  const { chatId } = await chat.create({
+    username: "owner",
+    title: "T",
+    ...baseChar,
+    generateOpeningIfEmpty: true,
+  });
+
+  // The hidden open-scene prompt ran one turn; its reply is the opening message (row #1).
+  expect(calls).toHaveLength(1);
+  const msgs = await chat.listMessages({ username: "owner", chatId });
+  expect(msgs).toHaveLength(1);
+  expect(msgs[0]?.role).toBe("assistant");
+  expect(msgs[0]?.content).toBe("*The tavern door creaks open.* Welcome!");
+});
+
+test("no greeting + toggle off → blank chat, user speaks first (default)", async () => {
+  const db = await freshDb();
+  const { run, calls } = fakeRunner("x");
+  const chat = createChatService(db, { runTurn: run });
+
+  const { chatId } = await chat.create({ username: "owner", title: "T", ...baseChar });
+
+  expect(calls).toHaveLength(0); // nothing generated
+  expect(await chat.listMessages({ username: "owner", chatId })).toHaveLength(0);
 });

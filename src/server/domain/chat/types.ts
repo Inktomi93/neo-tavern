@@ -36,6 +36,11 @@ export interface CreateChatParams {
   // `| undefined` (not bare optional) so a spread carrying `firstMessage: undefined`
   // satisfies exactOptionalPropertyTypes.
   firstMessage?: string | undefined;
+  // What to do when there's NO greeting (firstMessage empty). false (default) = the chat starts
+  // blank and the USER speaks first. true = "generate to open": the model writes the opening
+  // message in-character (a no-user-message turn). A per-chat toggle because auto-opening isn't
+  // always wanted. Ignored when firstMessage is set (that greeting is always used).
+  generateOpeningIfEmpty?: boolean | undefined;
 }
 
 export interface SendParams {
@@ -79,7 +84,7 @@ export class ChatNotFoundError extends Error {
 // `reason` lets the transport pick the right code (BAD_REQUEST vs NOT_IMPLEMENTED) without
 // importing @trpc/server into the domain. fork_sdk_unsupported = the deferred raw→sdk
 // seeding primitive (shared with greeting seeding); see docs/build-plan.md.
-export type ChatOpReason = "not_sdk" | "fork_sdk_unsupported" | "invalid_fork_point";
+export type ChatOpReason = "not_sdk" | "invalid_fork_point";
 export class ChatOperationError extends Error {
   readonly reason: ChatOpReason;
   constructor(reason: ChatOpReason, message: string) {

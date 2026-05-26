@@ -348,8 +348,31 @@ different shapes/casing.
 
 - Frames link via a **`parentUuid` chain** (each → the prior frame's uuid).
 - uuid-less frames (`queue-operation`/`ai-title`/`last-prompt`) bypass our dedup index → always insert.
-- **Seeding (raw→sdk / import) must reproduce this whole structure**, not just user/assistant — and the
-  resume `sessionId` must be a real UUID (an arbitrary string is rejected outright).
+
+### Seeding a session from canon — MEASURED (`pnpm exec tsx scripts/seed-probe.ts`, Haiku + Sonnet)
+
+This is how raw→sdk fork + ST-import continuation + greeting seeding work: synthesize frames from
+plain canon (role + text) and resume. **The earlier "must reproduce the whole structure" claim was
+wrong — measured, the minimal viable shape is much smaller** (`domain/chat/seed.ts` `buildSeedFrames`):
+
+- **Bare frames are REJECTED** — `type`/`uuid`/`parentUuid`/`message` alone (even with a rich
+  `message{model,id,stop_reason}`) → the SDK errors `"No conversation found with session ID …"`.
+- **The load-bearing piece is per-frame METADATA**: `sessionId` (stamped on every frame) +
+  `isSidechain`/`cwd`/`version`/`userType` + `promptId` (user) / `requestId` (assistant) + `timestamp`.
+  Add that → resume works and the model recalls a seeded fact. ✓
+- **NOT needed** (the SDK writes them, but seeding without them resumes fine): the `thinking`
+  assistant frame, the dual-assistant-frame split (one text frame/turn suffices), `ai-title`,
+  `queue-operation`, and even the `last-prompt` bookmark.
+- The resume `sessionId` must be a real **uuidv4** (arbitrary strings are rejected).
+- `cwd`/`version` are arbitrary-but-present (part of the proven bundle) — re-run the probe if the SDK
+  is upgraded.
+- **Greeting (assistant-first) — the ST "invisible user" trick.** A session can't sensibly start with
+  a lone assistant frame: without a character system prompt the model REFUSES to own a planted
+  assistant message ("I shouldn't pretend I said…"). The fix (validated, both models): **a CHARACTER
+  system prompt + a NATURAL in-RP follow-up** make the model own the greeting; we also prefix a
+  SESSION-ONLY invisible user stub (`GREETING_USER_STUB`) so the seed is the validated user→assistant
+  shape. The stub is never a `messages` row (the UI never shows it). So greetings are seeded into
+  sdk sessions, AND work for free in raw-mode (canon rebuild includes the greeting message row).
 
 ### Compaction frames (persisted to the store)
 

@@ -164,13 +164,14 @@ empty** — 100% rails, 0% product.
   `docs/conventions.md`.
 
 **Phase 5 (chat) — beyond 5C/5D/5E above:**
-- **Greeting seeding + the shared `seedSessionFromCanon` primitive** — build canon→`session_entries` frame
-  seeding (valid uuidv4 sessionId + proper `parentUuid` chains + the full queue-operation/ai-title/last-prompt
-  framing, NOT just user/assistant — `docs/sdk-notes.md`), validated empirically (a real probe that a seeded
-  session resumes coherently). TWO consumers share it (one empirical session covers both): (a) greeting seeding —
-  `greetings[0]` → opening assistant message, alternates → `message_variants` (reuse swipe machinery); empty →
-  user speaks first / "generate to open"; (b) **raw→sdk fork** — wire `forkChat(targetMode:'sdk')` (today throws
-  `fork_sdk_unsupported`) to seed from the copied canon.
+- ✅ **Seeding primitive + greeting seeding (#39)** — `domain/chat/seed.ts` `buildSeedFrames(canon, sessionId)`
+  synthesizes resumable SDK frames from plain canon; the shape is **empirically validated** (`scripts/seed-probe.ts`,
+  Haiku + Sonnet — bare frames rejected; per-frame metadata is load-bearing; thinking/title/queue/last-prompt
+  unnecessary). Wired into: **raw→sdk fork** (`forkChat(targetMode:'sdk')` now seeds + sets a uuid sessionId) and
+  **greeting seeding** in `create()` (greetings[0] → messages row #1 + sdk session seeded via the ST invisible-user
+  prefix). Plus the **`generateOpeningIfEmpty` toggle** (no greeting → the model writes the opening, a no-user-message
+  turn; off by default = user speaks first; graceful fallback). See `docs/sdk-notes.md` "Seeding a session from canon".
+  **Still deferred:** alternate greetings → `message_variants` (needs the 5E swipe machinery to switch between them).
 - **`{{memory}}` retrieval marker** — RAG over chat history into the dynamic system prompt (reuses the
   embedding stack; embed chat-message chunks, knn scoped to this chat, inject above the boundary).
 - **Managed compaction** — `DISABLE_AUTO_COMPACT=1` + watch `contextWindow` + a manual `/compact` with an
