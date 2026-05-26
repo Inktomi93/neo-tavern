@@ -9,6 +9,7 @@ import { createChatService } from "./domain/chat";
 import { createCorpusService } from "./domain/corpus";
 import { createDebugService } from "./domain/debug";
 import { createModelsService } from "./domain/models";
+import { createPresetService } from "./domain/preset";
 import { createSearchService } from "./domain/search";
 import { env } from "./env";
 import { registerDebugRoutes } from "./observability/debug";
@@ -30,6 +31,7 @@ const services: Services = {
   chat: createChatService(db),
   corpus: createCorpusService(db),
   models: createModelsService(),
+  preset: createPresetService(db),
   search: createSearchService(db),
 };
 

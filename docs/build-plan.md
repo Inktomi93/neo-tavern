@@ -35,10 +35,10 @@ only ✅-tracking in the repo; keep it one line.
   swipes/edits/fork/seeding, `setProvider`, the read API (`chat.list`/`get`/`messages` with
   provenance), `chat.previewAssembly` (dry-run "what will this send" without spending a turn),
   one unified `GenerationParams` vocab, canonical epoch-ms-UTC time, managed compaction +
-  cross-mode `{{compact_summary}}`, persisted `chat_events`, and the `/api/_debug` read
-  surface. **Remaining backend:** the preset CRUD *service* (#43) and the `{{memory}}` marker
-  (#40); `pinnedPersonaId` (#44) is a small add. **The chat frontend that renders all of it is
-  the main thing left** — see backlog.
+  cross-mode `{{compact_summary}}`, persisted `chat_events`, the preset CRUD service (#43,
+  `preset.*` router), the content-addressed asset store (#47 infra), and the `/api/_debug` read
+  surface. **Remaining backend:** the `{{memory}}` marker (#40); `pinnedPersonaId` (#44) is a
+  small add. **The chat frontend that renders all of it is the main thing left** — see backlog.
 - **Phase 6 — analytics:** not started (one chart at a time, only for a real question).
 
 ## Deferred backlog (what's parked + where it belongs)
@@ -55,13 +55,14 @@ only ✅-tracking in the repo; keep it one line.
   the `models`/`rawModels` queries), the context-fill meter (`contextWindow` is captured per
   turn), list virtualization (`@tanstack/react-virtual`) for long chats / the 400+ char library.
   Also the app shell: the `Chat | Corpus | Characters` nav rail (`docs/ui-direction.md`).
-- **#43 — preset CRUD service + prompt-manager editor** (the *service* is backend, the editor
-  is frontend): `domain/preset` copy-on-write over the `presets`/`preset_versions` triad (edit
-  unpinned in place; edit a pinned version → fork `v=max+1` + repoint), then the UI
-  (drag-reorder `PromptConfig` sections, per-section toggles, edit literal/marker content, the
-  cache boundary as a draggable section). The read path already works — a chat consumes its
-  pinned preset version's `config` or falls back to `DEFAULT_PROMPT_CONFIG` — so only the
-  write/fork side is missing. Marinara's `PresetEditor` = reference.
+- **#43 — preset CRUD service ✅ DONE; prompt-manager editor (frontend) remaining**: `domain/preset`
+  copy-on-write over the `presets`/`preset_versions` triad is BUILT — create/list/get/update/delete +
+  the tRPC `preset.*` router; editing config mutates an unpinned version in place, forks `v=max+1` +
+  repoints when the current version is pinned by a chat/message (immutable provenance), owner-scoped.
+  **Left (frontend):** the editor UI (drag-reorder `PromptConfig` sections, per-section toggles, edit
+  literal/marker content, the cache boundary as a draggable section — Marinara's `PresetEditor` =
+  reference) AND the **chat↔preset picker** that sets `chats.presetVersionId` (today chats use
+  `DEFAULT_PROMPT_CONFIG`; the service + read path are ready for it).
 
 **Runtime / engine:**
 - **#42 — streaming → SSE** (token deltas over a tRPC v11 subscription): sdk-mode

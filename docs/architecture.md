@@ -102,7 +102,7 @@ src/
 │   ├── storage/         # INFRA — content-addressed blob store (cas.ts) — shared-only, NO db
 │   ├── domain/          # BUSINESS LOGIC — one dir per feature
 │   │   ├── _shared/     #   cross-feature domain helpers (the only shared escape)
-│   │   └── <feature>/   #   assets/, chat/, corpus/, debug/, import/, models/, search/ — entered via index.ts
+│   │   └── <feature>/   #   assets/, chat/, corpus/, debug/, import/, models/, preset/, search/ — entered via index.ts
 │   ├── jobs/            # DRIVER — IN-SERVER background workers (reach db only via domain)
 │   └── trpc/            # DRIVER — transport
 │       ├── context.ts
