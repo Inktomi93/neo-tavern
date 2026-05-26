@@ -4,7 +4,9 @@
 truth) and evolves via additive migrations in `src/db/migrations/`. This doc is NOT a parallel
 schema listing (that just drifts); it's the **design rationale** behind the tables — the "why"
 that the code can't fully carry. Conventions: `id` = text (nanoid); timestamps = integer (unix
-epoch ms); JSON columns use Drizzle `{ mode: 'json' }`; enums = text + `enum` constraint.
+epoch ms — always a **UTC** instant, parsed/normalized via `src/shared/time.ts` at every
+provider/import boundary, rendered local on the client; see `docs/conventions.md` → "Time & dates");
+JSON columns use Drizzle `{ mode: 'json' }`; enums = text + `enum` constraint.
 
 ## Character versioning (identity / content / instance)
 `characters` is the stable identity (immutable `id`, rename-able `handle`, starred, archived);
