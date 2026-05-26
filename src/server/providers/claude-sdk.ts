@@ -487,8 +487,11 @@ export async function consumeTurnStream(
             usage.cacheReadTokens += modelUsage.cacheReadInputTokens;
             usage.cacheWriteTokens += modelUsage.cacheCreationInputTokens;
             usage.costUsd += modelUsage.costUSD;
-            usage.contextWindow = Math.max(usage.contextWindow, modelUsage.contextWindow);
-            usage.maxOutputTokens = Math.max(usage.maxOutputTokens, modelUsage.maxOutputTokens);
+            usage.contextWindow = Math.max(usage.contextWindow ?? 0, modelUsage.contextWindow);
+            usage.maxOutputTokens = Math.max(
+              usage.maxOutputTokens ?? 0,
+              modelUsage.maxOutputTokens,
+            );
           }
           // Guard despite the non-null type: a null/undefined at runtime here would throw
           // INSIDE the try, and the generic catch would wrap a SUCCESSFUL turn as a server

@@ -85,6 +85,13 @@
       "when": 1779772800000,
       "tag": "0011_provider_api_source",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1779820000000,
+      "tag": "0012_message_gen_timing",
+      "breakpoints": true
     }
   ]
 }

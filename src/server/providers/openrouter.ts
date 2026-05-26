@@ -280,6 +280,18 @@ export interface RawTurnParams {
   providerRouting?: Record<string, unknown> | undefined;
 }
 
+// OpenRouter usage doesn't report the model's context window — backfill it from the cached catalog
+// (contextLength) so the context-fill meter works on openrouter chats too, instead of a null/0 hole.
+// Best-effort: a catalog miss or fetch failure → null (genuinely unknown), never a thrown turn.
+async function lookupContextWindow(model: string): Promise<number | null> {
+  try {
+    const models = await listOpenRouterModels();
+    return models.find((m) => m.id === model)?.contextLength ?? null;
+  } catch {
+    return null;
+  }
+}
+
 // Translate the unified reasoning knobs into OpenRouter's `reasoning.effort`. "off" → "none"
 // (disables reasoning on reasoning models); otherwise the effort level, with the agnostic "max"
 // (Claude-only) mapped to "xhigh" (OpenRouter's enum has no "max"). undefined = no preference.
@@ -501,10 +513,11 @@ export async function runChatCompletionTurn(params: RawTurnParams): Promise<Chat
     tokensOut: u?.completionTokens ?? 0,
     cacheReadTokens: u?.promptTokensDetails?.cachedTokens ?? 0,
     cacheWriteTokens: u?.promptTokensDetails?.cacheWriteTokens ?? 0,
-    cacheCreation5mTokens: 0,
-    cacheCreation1hTokens: 0,
-    contextWindow: 0,
-    maxOutputTokens: 0,
+    // The 5m/1h split is Anthropic/sdk-internal — openrouter can't report it → null (NA, not 0).
+    cacheCreation5mTokens: null,
+    cacheCreation1hTokens: null,
+    contextWindow: await lookupContextWindow(params.model),
+    maxOutputTokens: cfg.maxOutputTokens ?? null, // echo the requested cap; null if none asked
     costUsd: u?.cost ?? 0,
   };
 
@@ -640,10 +653,11 @@ export async function runRawTurn(params: RawTurnParams): Promise<ChatTurnResult>
     tokensOut: u?.outputTokens ?? 0,
     cacheReadTokens: u?.inputTokensDetails?.cachedTokens ?? 0,
     cacheWriteTokens: 0,
-    cacheCreation5mTokens: 0,
-    cacheCreation1hTokens: 0,
-    contextWindow: 0,
-    maxOutputTokens: 0,
+    // 5m/1h split is Anthropic/sdk-internal; null (NA) not 0. contextWindow ← catalog; maxOutput ← request.
+    cacheCreation5mTokens: null,
+    cacheCreation1hTokens: null,
+    contextWindow: await lookupContextWindow(params.model),
+    maxOutputTokens: cfg.maxOutputTokens ?? null,
     costUsd: u?.cost ?? 0,
   };
 

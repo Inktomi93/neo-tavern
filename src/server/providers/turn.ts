@@ -120,12 +120,18 @@ export interface ChatTurnUsage {
   tokensOut: number;
   cacheReadTokens: number;
   cacheWriteTokens: number;
-  /** Split of cache-creation tokens by TTL bucket (usage.cache_creation) — sub-mode defaults 1h. */
-  cacheCreation5mTokens: number;
-  cacheCreation1hTokens: number;
-  /** Model context window + output ceiling (from modelUsage) — drives the context-fill meter. */
-  contextWindow: number;
-  maxOutputTokens: number;
+  // The fields below are `| null` where a runner genuinely can't report them — null means
+  // "not available in this mode," distinct from a real 0, so cross-mode filtering/analytics stay
+  // honest (a null contextWindow ≠ a 0-token window). agent-sdk reports all of them; the openrouter
+  // runner backfills contextWindow from the catalog and leaves the Anthropic-only cache split null.
+  /** Cache-creation tokens by TTL bucket (usage.cache_creation) — Anthropic/sdk only; null on openrouter. */
+  cacheCreation5mTokens: number | null;
+  cacheCreation1hTokens: number | null;
+  /** Model context window — drives the context-fill meter. sdk reports it; openrouter backfills from
+   *  the catalog `contextLength` (null if the model isn't in the catalog). */
+  contextWindow: number | null;
+  /** Output ceiling. sdk reports the effective cap; openrouter echoes the requested cap (else null). */
+  maxOutputTokens: number | null;
   costUsd: number;
 }
 

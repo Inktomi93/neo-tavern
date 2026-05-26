@@ -267,6 +267,8 @@ export function createImportService(db: Db, deps: ImportServiceDeps): ImportServ
             model: m.model,
             provider: m.provider,
             tokensOut: m.tokensOut,
+            genStarted: m.genStarted,
+            genFinished: m.genFinished,
             activeVariantIdx: m.activeVariantIdx,
             createdAt: m.sendDate ?? created,
           });

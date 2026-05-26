@@ -234,6 +234,11 @@ export const messages = sqliteTable(
       { onDelete: "restrict" },
     ),
     reasoningEffort: text("reasoning_effort"), // per-turn provenance (e.g. low|medium|high) — analytics axis
+    // Generation timing (ms epoch UTC). Live sdk/raw turns don't report per-message gen timing on
+    // the base row (swipes carry it on message_variants); the ST importer populates these from a
+    // message's top-level gen_started/gen_finished where present. Null = not provided.
+    genStarted: integer("gen_started"),
+    genFinished: integer("gen_finished"),
     rawRequest: text("raw_request", { mode: "json" }), // null in sdk-mode (body not exposed)
     rawResponse: text("raw_response", { mode: "json" }),
     // Which message_variants.idx is the rendered/selected swipe. null = no variants
