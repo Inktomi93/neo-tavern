@@ -64,18 +64,21 @@ only ✅-tracking in the repo; keep it one line.
   applied to live chat): embed chat-message chunks (new entityType, owner+chat scoped), knn scoped
   to this chat, protect recent N, threshold + optional rerank, inject into the dynamic
   (cache-safe) system-prompt half. Reuses the embedding stack. Complements #41.
-- **#41 — managed compaction** (`DISABLE_AUTO_COMPACT` + steered manual `/compact`): SDK
-  auto-compaction is lossy for tool-less RP (its summary points at a dead `/tmp` transcript —
-  measured). Watch `contextWindow` per turn, trigger manual `/compact` with RP-tuned instructions
-  before the window fills. Optional owned-context `load()`.
+- **#41 — managed compaction:** ✅ **DONE.** `GenerationParams.compaction` (`shared/generation.ts`):
+  mode `auto` (SDK default; `thresholdPct` → `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`) · `managed`
+  (`DISABLE_AUTO_COMPACT` + the domain auto-fires a steered `/compact` after a turn once context-fill
+  crosses `thresholdPct`, default 0.85) · `off` (disabled; owner triggers `chat.compact` manually).
+  RP-tuned default instructions; agent-sdk only; opt-in (default `auto` = no behavior change).
+  Compactions land in `chat_events`. (Owned-context `load()` still optional/deferred.)
 - **#44 — `chats.pinnedPersonaId`** (true persona-switch divergence): today one `personaId` serves
   both the pinned (card `{{user}}`) and active (user-field `{{user}}`) roles — `assemblePrompt`
   already resolves them separately. Add an immutable `pinnedPersonaId` (captured at chat open) so
   they diverge. Small migration + wire `buildAssembleContext`.
-- **#48 — raw-mode refinements** (low priority): (1) granular raw caching — `cache_control`
-  breakpoints at the static/dynamic split / history depth (à la ST), beyond the current static-
-  block 5m directive; (2) a persisted `chat_events` table for compaction/retry/rate-limit history
-  (the log ring + `events[]` suffice for now).
+- **#48 — raw-mode refinements:** (1) granular raw caching — `cache_control` breakpoints at the
+  static/dynamic split / history depth (à la ST), beyond the current static-block 5m directive — still
+  deferred (low priority). (2) ✅ **DONE — the persisted `chat_events` table** (migration 0014):
+  every turn's `TurnEvent[]` (compaction/retry/rate-limit/status/auth) is recorded + surfaced in the
+  `/api/_debug/db/chat` inspector.
 
 **Infra / corpus:**
 - **#46 — Docker/compose image + Playwright E2E**: one image into the authentik+caddy stack, port

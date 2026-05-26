@@ -35,13 +35,17 @@ export const generationParamsSchema = z.object({
   // The openrouter runner has no per-request budget, so it's a no-op there.
   maxBudgetUsd: z.number().positive().optional(),
   // Compaction — AGENT-SDK-ONLY (the openrouter runner is stateless, rebuilt from canon, so there's
-  // nothing to compact). "auto" (default) = the SDK's own auto-compaction, with `thresholdPct`
-  // tuning when it fires (CLAUDE_AUTOCOMPACT_PCT_OVERRIDE). "off" = disable auto-compaction
-  // (DISABLE_AUTO_COMPACT); the owner then triggers `chat.compact` manually — steered by
-  // `instructions` (an RP-tuned /compact prompt) — when the context-fill meter runs high.
+  // nothing to compact). `thresholdPct` is the context-fill fraction (0.5–0.99) that drives it.
+  //   • "auto" (default) — the SDK's own auto-compaction; thresholdPct tunes WHEN it fires
+  //     (CLAUDE_AUTOCOMPACT_PCT_OVERRIDE).
+  //   • "managed" — DISABLE_AUTO_COMPACT + WE auto-fire a steered `/compact` after a turn once fill
+  //     crosses thresholdPct (default 0.85), so the next turn starts smaller. RP-grade vs the SDK's
+  //     generic summary; opt-in (so no surprise spend on the default).
+  //   • "off" — DISABLE_AUTO_COMPACT, never auto-fire; the owner triggers `chat.compact` manually.
+  // `instructions` steers the /compact prompt (managed + manual); falls back to an RP-tuned default.
   compaction: z
     .object({
-      mode: z.enum(["auto", "off"]).optional(),
+      mode: z.enum(["auto", "managed", "off"]).optional(),
       thresholdPct: z.number().min(0.5).max(0.99).optional(),
       instructions: z.string().optional(),
     })

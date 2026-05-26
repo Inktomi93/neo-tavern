@@ -40,18 +40,21 @@ describe("agent-sdk generation translation (toSdkGeneration)", () => {
     expect(options.maxBudgetUsd).toBe(0.25);
   });
 
-  test("compaction off → disableAutoCompact; auto+threshold → autoCompactPct (fraction→percent)", () => {
-    const off = toSdkGeneration({ compaction: { mode: "off" } });
-    expect(off.envOverrides.disableAutoCompact).toBe(true);
-    expect(off.envOverrides.autoCompactPct).toBeUndefined();
+  test("compaction off/managed → disableAutoCompact; auto+threshold → autoCompactPct (fraction→percent)", () => {
+    // Both "off" and "managed" disable the SDK's auto-compaction (managed = WE drive /compact).
+    expect(toSdkGeneration({ compaction: { mode: "off" } }).envOverrides.disableAutoCompact).toBe(
+      true,
+    );
+    const managed = toSdkGeneration({ compaction: { mode: "managed", thresholdPct: 0.9 } });
+    expect(managed.envOverrides.disableAutoCompact).toBe(true);
+    expect(managed.envOverrides.autoCompactPct).toBeUndefined(); // managed doesn't use the SDK override
 
     const auto = toSdkGeneration({ compaction: { mode: "auto", thresholdPct: 0.85 } });
     expect(auto.envOverrides.disableAutoCompact).toBeUndefined();
-    expect(auto.envOverrides.autoCompactPct).toBe(85);
+    expect(auto.envOverrides.autoCompactPct).toBe(85); // auto tunes the SDK's own threshold
 
     // default (no compaction config) leaves auto-compaction alone
-    const none = toSdkGeneration({});
-    expect(none.envOverrides.disableAutoCompact).toBeUndefined();
+    expect(toSdkGeneration({}).envOverrides.disableAutoCompact).toBeUndefined();
   });
 });
 

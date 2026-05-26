@@ -15,6 +15,7 @@ import {
   sessionEntries,
   worldEntries,
 } from "../../../db/schema";
+import type { ChatModelId } from "../../../shared/models";
 import {
   type AssembleContext,
   type AssemblePersona,
@@ -28,7 +29,7 @@ import {
   type WorldInfoScope,
 } from "../../../shared/prompt-config";
 import { getLog } from "../../observability/logger";
-import { runChatTurn } from "../../providers/claude-sdk";
+import { type ClaudeSource, runChatTurn } from "../../providers/claude-sdk";
 import { runChatCompletionTurn, runRawTurn } from "../../providers/openrouter";
 import { type ChatTurnResult, TurnError, type TurnEvent } from "../../providers/turn";
 import { newId } from "../_shared/ids";
@@ -78,6 +79,9 @@ const OPEN_SCENE_PROMPT =
 // coding-agent summary (which recalls early canon unreliably for tool-less RP — docs/sdk-notes.md).
 const DEFAULT_COMPACT_INSTRUCTIONS =
   "Summarize the roleplay so far for continuation: preserve each character's voice and persona, the relationships and their current state, established facts and world details, unresolved threads, and the present scene/location. Be concise but lossless on canon — names, commitments, and specific details must survive.";
+
+// Managed-compaction default: fire when the context is this fraction full (overridable per preset).
+const MANAGED_COMPACT_DEFAULT_PCT = 0.85;
 
 export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatService {
   const runTurn = deps.runTurn ?? runChatTurn;
@@ -767,6 +771,29 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
         })
         .where(eq(chats.id, params.chatId));
 
+      // Managed compaction (opt-in): once the context-fill crosses the threshold, fire a steered
+      // /compact NOW (we already hold the lock — runCompaction is lock-free) so the next turn starts
+      // smaller. agent-sdk only; best-effort (a compaction failure never fails the just-saved turn).
+      const compaction = promptConfig.params.compaction;
+      if (routing.runner === "agent-sdk" && compaction?.mode === "managed") {
+        const window = turn.usage.contextWindow;
+        const used = turn.usage.tokensIn + turn.usage.tokensOut;
+        const threshold = compaction.thresholdPct ?? MANAGED_COMPACT_DEFAULT_PCT;
+        const sessionId = turn.sessionId || chat.sessionId;
+        if (window !== null && window > 0 && used / window >= threshold && sessionId !== null) {
+          await runCompaction({
+            chatId: params.chatId,
+            sessionId,
+            model: routing.model,
+            source: routing.source,
+            systemPrompt,
+            generation: promptConfig.params,
+            instructions: compaction.instructions ?? DEFAULT_COMPACT_INSTRUCTIONS,
+            trigger: "managed",
+          });
+        }
+      }
+
       // chatId-scoped turn summary (the provider already logs each event at its own level;
       // this adds the chat context + the context-fill signal the UI will show). INFO (not debug) so
       // cost-per-chat is correlatable at the default LOG_LEVEL — the provider-level "turn complete"
@@ -1336,10 +1363,55 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
     });
   }
 
+  // Lock-free compaction core: run a steered `/compact` turn (resume the session, compact, no reply,
+  // no message row) → repoint the session + record the compaction event. Shared by the manual
+  // compact() (takes the lock) and the managed auto-trigger inside send() (already holds the lock —
+  // so this MUST stay lock-free to avoid a re-entrant deadlock). Best-effort: a TurnError → false.
+  async function runCompaction(args: {
+    chatId: string;
+    sessionId: string;
+    model: ChatModelId;
+    source: ClaudeSource;
+    systemPrompt: { static: string; dynamic: string };
+    generation: PromptConfig["params"];
+    instructions: string;
+    trigger: "manual" | "managed";
+  }): Promise<boolean> {
+    try {
+      const turn = await runTurn({
+        prompt: `/compact ${args.instructions}`,
+        model: args.model,
+        source: args.source,
+        sessionStore: new DbSessionStore(db, args.chatId),
+        systemPrompt: args.systemPrompt,
+        generation: args.generation,
+        resume: args.sessionId,
+      });
+      await db
+        .update(chats)
+        .set({ sessionId: turn.sessionId || args.sessionId, updatedAt: Date.now() })
+        .where(eq(chats.id, args.chatId));
+      await recordTurnEvents(args.chatId, null, turn.events);
+      getLog().info(
+        { chatId: args.chatId, trigger: args.trigger, events: turn.events.length },
+        "chat: compacted",
+      );
+      return true;
+    } catch (error) {
+      if (error instanceof TurnError) {
+        getLog().warn(
+          { chatId: args.chatId, trigger: args.trigger, kind: error.kind },
+          "chat: compaction failed",
+        );
+        return false;
+      }
+      throw error;
+    }
+  }
+
   // Manually compact an agent-sdk chat's session via a steered `/compact` turn (the lever for
-  // compaction mode "off"). No-op for openrouter (stateless — nothing to compact) or a chat with no
-  // session yet. /compact compacts the transcript without generating a reply; we keep canon (the
-  // messages) untouched and just repoint the session + record the compaction event.
+  // compaction mode "off"/"managed"). No-op for openrouter (stateless — nothing to compact) or a
+  // chat with no session yet. Canon (the messages) is untouched.
   async function compact(params: CompactParams): Promise<{ compacted: boolean }> {
     const ownerId = await ensureUser(db, params.username);
     return withChatLock(params.chatId, async () => {
@@ -1355,40 +1427,20 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
       if (routing.runner !== "agent-sdk") {
         return { compacted: false };
       }
-      const instructions =
-        params.instructions ??
-        promptConfig.params.compaction?.instructions ??
-        DEFAULT_COMPACT_INSTRUCTIONS;
-      try {
-        const turn = await runTurn({
-          prompt: `/compact ${instructions}`,
-          model: routing.model,
-          source: routing.source,
-          sessionStore: new DbSessionStore(db, params.chatId),
-          systemPrompt: assemblePrompt(promptConfig, assembleCtx),
-          generation: promptConfig.params,
-          resume: chat.sessionId,
-        });
-        await db
-          .update(chats)
-          .set({ sessionId: turn.sessionId || chat.sessionId, updatedAt: Date.now() })
-          .where(eq(chats.id, params.chatId));
-        await recordTurnEvents(params.chatId, null, turn.events);
-        getLog().info(
-          { chatId: params.chatId, events: turn.events.length },
-          "chat: compacted (manual)",
-        );
-        return { compacted: true };
-      } catch (error) {
-        if (error instanceof TurnError) {
-          getLog().warn(
-            { chatId: params.chatId, kind: error.kind },
-            "chat: manual compaction failed",
-          );
-          return { compacted: false };
-        }
-        throw error;
-      }
+      const compacted = await runCompaction({
+        chatId: params.chatId,
+        sessionId: chat.sessionId,
+        model: routing.model,
+        source: routing.source,
+        systemPrompt: assemblePrompt(promptConfig, assembleCtx),
+        generation: promptConfig.params,
+        instructions:
+          params.instructions ??
+          promptConfig.params.compaction?.instructions ??
+          DEFAULT_COMPACT_INSTRUCTIONS,
+        trigger: "manual",
+      });
+      return { compacted };
     });
   }
 

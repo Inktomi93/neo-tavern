@@ -251,18 +251,20 @@ export function toSdkGeneration(generation: GenerationParams | undefined): {
   if (g.maxBudgetUsd !== undefined) {
     options.maxBudgetUsd = g.maxBudgetUsd;
   }
-  // Compaction: "off" disables the SDK's auto-compaction (owner triggers chat.compact); "auto"
-  // (default) leaves it on, with thresholdPct → the percent-of-window override when set.
-  const compactionOff = g.compaction?.mode === "off";
+  // Compaction: "off" AND "managed" both disable the SDK's auto-compaction (managed = WE fire a
+  // steered /compact via the domain layer; off = manual only). "auto" leaves it on, with
+  // thresholdPct → the percent-of-window override when set.
+  const mode = g.compaction?.mode;
+  const disableAutoCompact = mode === "off" || mode === "managed";
   const autoCompactPct =
-    !compactionOff && g.compaction?.thresholdPct !== undefined
+    mode === "auto" && g.compaction?.thresholdPct !== undefined
       ? Math.round(g.compaction.thresholdPct * 100)
       : undefined;
   return {
     envOverrides: {
       maxOutputTokens: g.maxOutputTokens,
       disableThinking: !thinkingOn,
-      disableAutoCompact: compactionOff ? true : undefined,
+      disableAutoCompact: disableAutoCompact ? true : undefined,
       autoCompactPct,
     },
     options,

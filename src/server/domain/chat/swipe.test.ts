@@ -8,6 +8,8 @@ import {
   chats,
   messages,
   messageVariants,
+  presets,
+  presetVersions,
   users,
 } from "../../../db/schema";
 import type { ChatTurnResult } from "../../providers/turn";
@@ -208,6 +210,54 @@ describe("manual compaction", () => {
     // no message row was added (compaction doesn't generate)
     const msgs = await db.select().from(messages).where(eq(messages.chatId, "ch1"));
     expect(msgs).toHaveLength(2);
+  });
+
+  test("managed mode auto-fires /compact after a send once context-fill crosses the threshold", async () => {
+    const now = Date.now();
+    // A turn that reports a nearly-full context (180k / 200k = 0.9) so managed compaction triggers.
+    const fullTurn: ChatTurnResult = {
+      ...fakeTurn(),
+      usage: { ...fakeTurn().usage, tokensIn: 180_000, contextWindow: 200_000 },
+    };
+    const prompts: string[] = [];
+    const svc = createChatService(db, {
+      runTurn: async (p) => {
+        prompts.push(p.prompt);
+        return fullTurn;
+      },
+    });
+    await seed(); // ch1: agent-sdk, sessionId sess-1, tip at seq 2
+
+    // Pin a preset with compaction managed @ 50% so the 0.9 fill trips it.
+    await db
+      .insert(presets)
+      .values({ id: "p1", ownerId: "u1", name: "x", kind: "x", createdAt: now, updatedAt: now });
+    await db.insert(presetVersions).values({
+      id: "pv1",
+      presetId: "p1",
+      version: 1,
+      schemaVersion: 1,
+      config: {
+        schemaVersion: 1,
+        sections: [],
+        params: { compaction: { mode: "managed", thresholdPct: 0.5 } },
+      },
+      createdAt: now,
+    });
+    await db.update(chats).set({ presetVersionId: "pv1" }).where(eq(chats.id, "ch1"));
+
+    const result = await svc.send({
+      username: "u1",
+      chatId: "ch1",
+      expectedSeq: 2,
+      content: "hello",
+    });
+
+    expect(result.status).toBe("ok");
+    // Two runTurn calls: the user turn, then the auto-fired /compact.
+    expect(prompts).toHaveLength(2);
+    expect(prompts[0]).toBe("hello");
+    expect(prompts[1]?.startsWith("/compact ")).toBe(true);
   });
 
   test("compact() is a no-op for a chat with no session yet", async () => {
