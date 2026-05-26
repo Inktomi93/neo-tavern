@@ -21,7 +21,7 @@ async function call(n: number, userMsg: string): Promise<void> {
     model: MODEL,
     systemPrompt: { static: BIG_PREFIX, dynamic: "" },
     history: [{ role: "user", content: userMsg }],
-    params: { maxOutputTokens: 60 },
+    generation: { maxOutputTokens: 60 },
   });
   console.log(`\ncall ${n}: reply=${JSON.stringify(turn.reply.slice(0, 90))}`);
   console.log(

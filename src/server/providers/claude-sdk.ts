@@ -1,4 +1,5 @@
 import {
+  type EffortLevel,
   type Options,
   query,
   type SDKAssistantMessageError,
@@ -7,13 +8,22 @@ import {
   type SessionStore,
   SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
   type TerminalReason,
+  type ThinkingConfig,
 } from "@anthropic-ai/claude-agent-sdk";
+import { type GenerationParams, isThinkingOn } from "../../shared/generation";
 import { type ChatModelId, DEFAULT_CHAT_MODEL_ID } from "../../shared/models";
-import { buildClaudeOpenRouterEnv, buildClaudeSdkEnv, env } from "../env";
+import { secondsToMs } from "../../shared/time";
+import {
+  buildClaudeOpenRouterEnv,
+  buildClaudeSdkEnv,
+  type ClaudeGenerationOverrides,
+  env,
+} from "../env";
 import { getLog } from "../observability/logger";
 import {
   type ChatTurnResult,
   type ChatTurnUsage,
+  normalizeFinishReason,
   type RateLimitSnapshot,
   TurnError,
   type TurnErrorKind,
@@ -35,7 +45,10 @@ import {
 // skin (paid, credentials firewalled to an isolated config dir — see buildClaudeOpenRouterEnv).
 export type ClaudeSource = "max-pro-sub" | "openrouter";
 
-export function disciplineOptions(source: ClaudeSource = "max-pro-sub") {
+export function disciplineOptions(
+  source: ClaudeSource = "max-pro-sub",
+  overrides: ClaudeGenerationOverrides = {},
+) {
   return {
     tools: [],
     mcpServers: {},
@@ -43,8 +56,8 @@ export function disciplineOptions(source: ClaudeSource = "max-pro-sub") {
     settingSources: [],
     env:
       source === "openrouter"
-        ? buildClaudeOpenRouterEnv(env.OPENROUTER_API_KEY ?? "")
-        : buildClaudeSdkEnv(),
+        ? buildClaudeOpenRouterEnv(env.OPENROUTER_API_KEY ?? "", overrides)
+        : buildClaudeSdkEnv(overrides),
   };
 }
 
@@ -195,6 +208,10 @@ export interface ChatTurnParams {
    *  goes after SYSTEM_PROMPT_DYNAMIC_BOUNDARY so it re-evaluates per turn without busting the
    *  cached prefix (see docs/sdk-notes.md). Built by domain/chat via shared/prompt-assemble. */
   systemPrompt?: { static: string; dynamic: string };
+  /** The unified generation knobs (shared/generation.ts). The runner translates them to typed SDK
+   *  Options (thinking/effort/maxBudgetUsd) + env (maxOutputTokens, thinking-disable). temperature/
+   *  topP are no-ops here (the SDK owns sampling). undefined = the owner defaults. */
+  generation?: GenerationParams | undefined;
   /** Optional live event sink (compaction/retry/rate-limit/...). The streaming-UI seam:
    *  a future SSE subscription forwards these; default undefined = collect-and-return only.
    *  (Token-delta streaming via includePartialMessages is deliberately NOT wired yet — no
@@ -211,15 +228,60 @@ export interface ChatTurnParams {
  * typed, provider-agnostic reason. Injected into `domain/chat` as a seam so the
  * turn logic is testable with a fake (no sub queries in `pnpm check`).
  */
+// Translate the unified GenerationParams into the agent-sdk's native surface: typed Options
+// (thinking/effort/maxBudgetUsd) for the things the SDK types directly, plus env overrides for the
+// rest (output cap; thinking-disable, the owner default). effort/thinking only apply when thinking
+// is on (the SDK ignores effort otherwise). temperature/topP have no agent-sdk knob → dropped.
+export function toSdkGeneration(generation: GenerationParams | undefined): {
+  envOverrides: ClaudeGenerationOverrides;
+  options: { thinking?: ThinkingConfig; effort?: EffortLevel; maxBudgetUsd?: number };
+} {
+  const g = generation ?? {};
+  const thinkingOn = isThinkingOn(g);
+  const options: { thinking?: ThinkingConfig; effort?: EffortLevel; maxBudgetUsd?: number } = {};
+  if (thinkingOn) {
+    options.thinking =
+      g.thinkingBudgetTokens !== undefined
+        ? { type: "enabled", budgetTokens: g.thinkingBudgetTokens }
+        : { type: "adaptive" };
+    if (g.effort !== undefined) {
+      options.effort = g.effort; // model-gated; the SDK clamps unsupported levels
+    }
+  }
+  if (g.maxBudgetUsd !== undefined) {
+    options.maxBudgetUsd = g.maxBudgetUsd;
+  }
+  // Compaction: "off" AND "managed" both disable the SDK's auto-compaction (managed = WE fire a
+  // steered /compact via the domain layer; off = manual only). "auto" leaves it on, with
+  // thresholdPct → the percent-of-window override when set.
+  const mode = g.compaction?.mode;
+  const disableAutoCompact = mode === "off" || mode === "managed";
+  const autoCompactPct =
+    mode === "auto" && g.compaction?.thresholdPct !== undefined
+      ? Math.round(g.compaction.thresholdPct * 100)
+      : undefined;
+  return {
+    envOverrides: {
+      maxOutputTokens: g.maxOutputTokens,
+      disableThinking: !thinkingOn,
+      disableAutoCompact: disableAutoCompact ? true : undefined,
+      autoCompactPct,
+    },
+    options,
+  };
+}
+
 // async (not a bare Promise-returning fn) so a synchronous throw from query() (e.g. bad
 // options) surfaces as a rejected promise, not a sync throw at the call site.
 export async function runChatTurn(params: ChatTurnParams): Promise<ChatTurnResult> {
   const systemPrompt = buildSystemPrompt(params.systemPrompt);
+  const gen = toSdkGeneration(params.generation);
   const stream = query({
     prompt: params.prompt,
     options: {
-      ...disciplineOptions(params.source),
+      ...disciplineOptions(params.source, gen.envOverrides),
       ...observabilityOptions(),
+      ...gen.options,
       model: params.model,
       maxTurns: 1,
       sessionStore: params.sessionStore,
@@ -377,10 +439,13 @@ export async function consumeTurnStream(
 
         case "rate_limit_event": {
           const info = message.rate_limit_info;
+          // The SDK reports resetsAt in epoch SECONDS — normalize to our canonical epoch-ms at the
+          // boundary so everything downstream (UI countdown, TurnError) is one unit (shared/time.ts).
+          const resetsAtMs = secondsToMs(info.resetsAt);
           rateLimit = {
             status: info.status,
             rateLimitType: info.rateLimitType,
-            resetsAt: info.resetsAt,
+            resetsAt: resetsAtMs,
             utilization: info.utilization,
           };
           emit({
@@ -388,7 +453,7 @@ export async function consumeTurnStream(
             at: Date.now(),
             status: info.status,
             rateLimitType: info.rateLimitType,
-            resetsAt: info.resetsAt,
+            resetsAt: resetsAtMs,
             utilization: info.utilization,
           });
           // WARN when we're being throttled/rejected; debug when merely "allowed".
@@ -402,7 +467,7 @@ export async function consumeTurnStream(
               {
                 status: info.status,
                 rateLimitType: info.rateLimitType,
-                resetsAt: info.resetsAt,
+                resetsAt: resetsAtMs,
                 utilization: info.utilization,
               },
               "claude: rate-limited",
@@ -437,8 +502,11 @@ export async function consumeTurnStream(
             usage.cacheReadTokens += modelUsage.cacheReadInputTokens;
             usage.cacheWriteTokens += modelUsage.cacheCreationInputTokens;
             usage.costUsd += modelUsage.costUSD;
-            usage.contextWindow = Math.max(usage.contextWindow, modelUsage.contextWindow);
-            usage.maxOutputTokens = Math.max(usage.maxOutputTokens, modelUsage.maxOutputTokens);
+            usage.contextWindow = Math.max(usage.contextWindow ?? 0, modelUsage.contextWindow);
+            usage.maxOutputTokens = Math.max(
+              usage.maxOutputTokens ?? 0,
+              modelUsage.maxOutputTokens,
+            );
           }
           // Guard despite the non-null type: a null/undefined at runtime here would throw
           // INSIDE the try, and the generic catch would wrap a SUCCESSFUL turn as a server
@@ -557,6 +625,8 @@ export async function consumeTurnStream(
     sessionId,
     stopReason,
     terminalReason,
+    // stop_reason is the per-message signal; fall back to the loop-level terminalReason.
+    finishReason: normalizeFinishReason(stopReason ?? terminalReason),
     ttftMs,
     apiErrorStatus,
     numTurns,

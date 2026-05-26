@@ -182,5 +182,15 @@ is the main thing missing. Run `pnpm check` (must be green) and skim recent comm
 - **Prompt structure lives in the preset `config` blob** (`PromptConfig`, `shared/prompt-config.ts`)
   — reorderable sections + a cache `boundary`, NOT normalized rows. `assemblePrompt`
   (`shared/prompt-assemble.ts`) → static/dynamic system halves.
+- **Generation knobs are ONE provider-agnostic vocab** (`GenerationParams`, `shared/generation.ts`,
+  in the preset `config.params`): temperature/topP/maxOutputTokens/thinking/effort/maxBudgetUsd.
+  Each runner translates it (agent-sdk → typed `thinking`/`effort`/`maxBudgetUsd` Options + env;
+  openrouter → request params + `reasoning`); a knob a runner can't honor is a no-op. Reasoning on
+  agent-sdk is the TYPED `effort`/`thinking` Options (verified), NOT the env vars; `effort` is
+  model-gated (`xhigh`=Opus 4.7, `max`=Opus 4.6/4.7+Sonnet 4.6). (`docs/sdk-notes.md`)
+- **Time is epoch-ms UTC EVERYWHERE.** `shared/time.ts` (Luxon) is the only parser; normalize at
+  every provider/import boundary (Agent-SDK `resetsAt` is epoch SECONDS; ST imports parse as UTC;
+  the old local-tz `new Date(y,mo,d)` was a bug). Client renders local via `Intl`. The lone ISO
+  string we emit is the Agent SDK's session-frame `timestamp` (its shape). (`docs/conventions.md`)
 
 When unclear, ask. Don't re-litigate locked decisions — raise a question if you disagree.

@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { and, asc, desc, eq, inArray, lt, lte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, lt, lte, sql } from "drizzle-orm";
 import type { Db } from "../../../db/client";
 import {
   characters,
   characterVersions,
   characterVersionWorldEntries,
+  chatEvents,
   chats,
   chatWorldEntries,
   messages,
@@ -14,6 +15,7 @@ import {
   sessionEntries,
   worldEntries,
 } from "../../../db/schema";
+import type { ChatModelId } from "../../../shared/models";
 import {
   type AssembleContext,
   type AssemblePersona,
@@ -27,9 +29,9 @@ import {
   type WorldInfoScope,
 } from "../../../shared/prompt-config";
 import { getLog } from "../../observability/logger";
-import { runChatTurn } from "../../providers/claude-sdk";
-import { type RawTurnParams, runChatCompletionTurn, runRawTurn } from "../../providers/openrouter";
-import { type ChatTurnResult, TurnError } from "../../providers/turn";
+import { type ClaudeSource, runChatTurn } from "../../providers/claude-sdk";
+import { runChatCompletionTurn, runRawTurn } from "../../providers/openrouter";
+import { type ChatTurnResult, TurnError, type TurnEvent } from "../../providers/turn";
 import { newId } from "../_shared/ids";
 import { withChatLock } from "../_shared/lock";
 import { ensureUser } from "../_shared/users";
@@ -37,9 +39,13 @@ import { resolveTurnRouting } from "./routing";
 import { buildSeedFrames, GREETING_USER_STUB, type SeedTurn } from "./seed";
 import { DbSessionStore } from "./store";
 import {
+  type AssemblyPreview,
+  type ChatDetail,
   ChatNotFoundError,
   ChatOperationError,
   type ChatService,
+  type ChatSummary,
+  type CompactParams,
   type CreateChatParams,
   type EditMessageParams,
   type ForkChatParams,
@@ -69,6 +75,31 @@ const RECENT_MESSAGE_WINDOW = 6;
 const OPEN_SCENE_PROMPT =
   "[Open the scene: write your first message to me, in character — set the scene and greet me as your character would. Stay fully in character.]";
 
+// Default steering for a manual `/compact` (compaction mode "off"). RP-tuned vs the SDK's generic
+// coding-agent summary (which recalls early canon unreliably for tool-less RP — docs/sdk-notes.md).
+const DEFAULT_COMPACT_INSTRUCTIONS =
+  "Summarize the roleplay so far for continuation: preserve each character's voice and persona, the relationships and their current state, established facts and world details, unresolved threads, and the present scene/location. Be concise but lossless on canon — names, commitments, and specific details must survive.";
+
+// Managed-compaction default: fire when the context is this fraction full (overridable per preset).
+const MANAGED_COMPACT_DEFAULT_PCT = 0.85;
+
+// A session-frame message.content is a string OR an array of content blocks — flatten to text.
+function frameContentToText(content: unknown): string {
+  if (typeof content === "string") {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  return content
+    .map((b) =>
+      b !== null && typeof b === "object" && typeof (b as { text?: unknown }).text === "string"
+        ? (b as { text: string }).text
+        : "",
+    )
+    .join("");
+}
+
 export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatService {
   const runTurn = deps.runTurn ?? runChatTurn;
   const runRaw = deps.runRaw ?? runRawTurn;
@@ -86,7 +117,19 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
       role: row.role,
       content: row.content,
       model: row.model,
+      provider: row.provider,
+      stopReason: row.stopReason,
+      finishReason: row.finishReason,
+      tokensIn: row.tokensIn,
+      tokensOut: row.tokensOut,
+      cacheReadTokens: row.cacheReadTokens,
+      cacheWriteTokens: row.cacheWriteTokens,
+      contextWindow: row.contextWindow,
+      costUsd: row.costUsd,
+      ttftMs: row.ttftMs,
+      terminalReason: row.terminalReason,
       createdAt: row.createdAt,
+      editedAt: row.editedAt,
       activeVariantIdx: row.activeVariantIdx,
       variantCount,
     };
@@ -133,6 +176,57 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
       counts.set(v.messageId, Number(v.n));
     }
     return rows.map((r) => toView(r, counts.get(r.id) ?? 0));
+  }
+
+  // Persist a turn's structured events (compaction / retry / rate-limit / status / auth) to the
+  // durable chat_events history — the in-memory log ring resets on restart, this doesn't. Metadata
+  // only (the TurnEvent payloads carry no RP content). No-op when a turn produced none.
+  async function recordTurnEvents(
+    chatId: string,
+    messageId: string | null,
+    events: TurnEvent[],
+  ): Promise<void> {
+    if (events.length === 0) {
+      return;
+    }
+    const now = Date.now();
+    await db.insert(chatEvents).values(
+      events.map((event) => ({
+        id: newId(),
+        chatId,
+        messageId,
+        kind: event.kind,
+        at: event.at,
+        data: event,
+        createdAt: now,
+      })),
+    );
+  }
+
+  // After a /compact, the SDK writes the summary as a synthetic `user` frame in the session store
+  // ("This session is being continued from a previous conversation… Summary: …"). Recover that text
+  // so it becomes our portable artifact. Best-effort + defensive about the frame shape — a format
+  // change just yields null (caller degrades to full canon). Scans the few most-recent user frames.
+  async function extractCompactSummary(sessionId: string): Promise<string | null> {
+    const rows = await db
+      .select({ entry: sessionEntries.entry })
+      .from(sessionEntries)
+      .where(and(eq(sessionEntries.sessionId, sessionId), eq(sessionEntries.type, "user")))
+      .orderBy(desc(sessionEntries.seq))
+      .limit(10);
+    for (const row of rows) {
+      const frame = row.entry;
+      if (frame === null || typeof frame !== "object") {
+        continue;
+      }
+      const message = (frame as { message?: unknown }).message;
+      const content = (message as { content?: unknown } | undefined)?.content;
+      const text = frameContentToText(content);
+      if (text.toLowerCase().includes("session is being continued")) {
+        return text;
+      }
+    }
+    return null;
   }
 
   async function maxSeq(chatId: string): Promise<number> {
@@ -236,6 +330,9 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
         ...cvWi.map((r) => toWorldEntry(r, "character")),
       ],
       recentMessages: recent.map((r) => r.content).reverse(),
+      // Only the STATELESS openrouter runner injects the summary (the agent-sdk session carries
+      // compaction natively — injecting it there would double up). So agent-sdk chats see null.
+      compactSummary: chat.api === "agent-sdk" ? null : chat.compactSummary,
     };
   }
 
@@ -351,9 +448,11 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
         source: routing.source,
         sessionStore: new DbSessionStore(db, chatId),
         systemPrompt: assemblePrompt(promptConfig, assembleCtx),
+        generation: promptConfig.params,
       });
+      const openingMsgId = newId();
       await db.insert(messages).values({
-        id: newId(),
+        id: openingMsgId,
         chatId,
         seq: 1,
         role: "assistant",
@@ -361,6 +460,8 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
         model: turn.usage.model,
         provider: `${routing.api}/${routing.source}`,
         stopReason: turn.stopReason,
+        finishReason: turn.finishReason,
+        reasoningEffort: promptConfig.params.effort ?? null,
         tokensIn: turn.usage.tokensIn,
         tokensOut: turn.usage.tokensOut,
         cacheReadTokens: turn.usage.cacheReadTokens,
@@ -375,6 +476,7 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
         costUsd: turn.usage.costUsd,
         createdAt: Date.now(),
       });
+      await recordTurnEvents(chatId, openingMsgId, turn.events);
       await db
         .update(chats)
         .set({
@@ -399,20 +501,25 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
   }
 
   // Raw-mode rebuilds the conversation from canon every turn (no SDK session). user/assistant
-  // turns only — system content is carried by the assembled `instructions`, not `input`. `beforeSeq`
-  // bounds it to seq < beforeSeq (a swipe regenerates the turn from the history BEFORE the user msg).
+  // turns only — system content is carried by the assembled `instructions`, not `input`.
+  //  • beforeSeq → seq < beforeSeq (a swipe regenerates from the history BEFORE the user msg).
+  //  • afterSeq → seq > afterSeq (compaction pickup: the {{compact_summary}} marker stands in for
+  //    everything ≤ the compaction anchor, so we only resend the turns after it).
   async function loadCanonHistory(
     chatId: string,
-    beforeSeq?: number,
+    bounds: { beforeSeq?: number | undefined; afterSeq?: number | undefined } = {},
   ): Promise<{ role: "user" | "assistant"; content: string }[]> {
+    const filters = [eq(messages.chatId, chatId)];
+    if (bounds.beforeSeq !== undefined) {
+      filters.push(lt(messages.seq, bounds.beforeSeq));
+    }
+    if (bounds.afterSeq !== undefined) {
+      filters.push(gt(messages.seq, bounds.afterSeq));
+    }
     const rows = await db
       .select({ role: messages.role, content: messages.content })
       .from(messages)
-      .where(
-        beforeSeq === undefined
-          ? eq(messages.chatId, chatId)
-          : and(eq(messages.chatId, chatId), lt(messages.seq, beforeSeq)),
-      )
+      .where(and(...filters))
       .orderBy(asc(messages.seq));
     return rows
       .filter((r): r is { role: "user" | "assistant"; content: string } => r.role !== "system")
@@ -426,6 +533,115 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
     const ownerId = await ensureUser(db, params.username);
     await loadOwnedChat(ownerId, params.chatId); // ownership check
     return listByChat(params.chatId);
+  }
+
+  async function listChats(params: { username: string }): Promise<ChatSummary[]> {
+    const ownerId = await ensureUser(db, params.username);
+    const rows = await db
+      .select({
+        id: chats.id,
+        title: chats.title,
+        characterName: characterVersions.name,
+        api: chats.api,
+        source: chats.source,
+        model: chats.model,
+        messageCount: chats.messageCount,
+        totalTokensIn: chats.totalTokensIn,
+        totalTokensOut: chats.totalTokensOut,
+        starred: chats.starred,
+        archived: chats.archived,
+        createdAt: chats.createdAt,
+        updatedAt: chats.updatedAt,
+      })
+      .from(chats)
+      .leftJoin(characterVersions, eq(chats.characterVersionId, characterVersions.id))
+      .where(eq(chats.ownerId, ownerId))
+      .orderBy(desc(chats.updatedAt));
+    return rows.map((r) => ({
+      id: r.id,
+      title: r.title,
+      characterName: r.characterName,
+      api: r.api,
+      source: r.source,
+      model: r.model,
+      messageCount: r.messageCount ?? 0,
+      totalTokensIn: r.totalTokensIn ?? 0,
+      totalTokensOut: r.totalTokensOut ?? 0,
+      starred: r.starred ?? false,
+      archived: r.archived ?? false,
+      createdAt: r.createdAt,
+      updatedAt: r.updatedAt,
+    }));
+  }
+
+  // Dry-run the prompt assembly + routing for a chat's NEXT turn — no model call. Reuses the exact
+  // same helpers send() does, so what you preview is what a turn would actually send.
+  async function previewAssembly(params: {
+    username: string;
+    chatId: string;
+  }): Promise<AssemblyPreview> {
+    const ownerId = await ensureUser(db, params.username);
+    const chat = await loadOwnedChat(ownerId, params.chatId);
+    const [assembleCtx, promptConfig] = await Promise.all([
+      buildAssembleContext(chat),
+      resolveConfig(chat),
+    ]);
+    const systemPrompt = assemblePrompt(promptConfig, assembleCtx);
+    const routing = resolveTurnRouting(chat, promptConfig);
+    return {
+      routing: {
+        runner: routing.runner,
+        api: routing.api,
+        source: routing.source,
+        model: routing.model,
+      },
+      preset: chat.presetVersionId === null ? "default" : "pinned",
+      systemPrompt: { static: systemPrompt.static, dynamic: systemPrompt.dynamic },
+      trace: {
+        staticChars: systemPrompt.static.length,
+        dynamicChars: systemPrompt.dynamic.length,
+        staticSections: systemPrompt.trace.staticSections,
+        dynamicSections: systemPrompt.trace.dynamicSections,
+        worldInfoAttached: assembleCtx.worldEntries.length,
+        worldInfoIncluded: systemPrompt.trace.worldInfoIncluded,
+        matchedKeys: systemPrompt.trace.matchedKeys,
+        hasPersona: assembleCtx.activePersona !== null,
+      },
+    };
+  }
+
+  async function getChat(params: { username: string; chatId: string }): Promise<ChatDetail> {
+    const ownerId = await ensureUser(db, params.username);
+    const chat = await loadOwnedChat(ownerId, params.chatId); // throws ChatNotFoundError if unowned
+    const cv = (
+      await db
+        .select({ name: characterVersions.name, characterId: characterVersions.characterId })
+        .from(characterVersions)
+        .where(eq(characterVersions.id, chat.characterVersionId))
+        .limit(1)
+    )[0];
+    return {
+      id: chat.id,
+      title: chat.title,
+      characterName: cv?.name ?? null,
+      api: chat.api,
+      source: chat.source,
+      model: chat.model,
+      messageCount: chat.messageCount ?? 0,
+      totalTokensIn: chat.totalTokensIn ?? 0,
+      totalTokensOut: chat.totalTokensOut ?? 0,
+      starred: chat.starred ?? false,
+      archived: chat.archived ?? false,
+      createdAt: chat.createdAt,
+      updatedAt: chat.updatedAt,
+      characterId: cv?.characterId ?? null,
+      characterVersionId: chat.characterVersionId,
+      personaId: chat.personaId,
+      presetVersionId: chat.presetVersionId,
+      parentChatId: chat.parentChatId,
+      forkedAt: chat.forkedAt,
+      hasSession: chat.sessionId !== null,
+    };
   }
 
   async function send(params: SendParams): Promise<SendResult> {
@@ -519,24 +735,23 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
             source: routing.source,
             sessionStore: new DbSessionStore(db, params.chatId),
             systemPrompt,
+            generation: promptConfig.params,
             ...(chat.sessionId ? { resume: chat.sessionId } : {}),
           });
         } else {
           // openrouter runner: rebuild the conversation from canon (incl. the user message just
           // inserted) → chat.send or beta.responses (by api). No session store; routing rides through.
-          const rawParams: RawTurnParams["params"] = {
-            ...(routing.params.temperature !== undefined
-              ? { temperature: routing.params.temperature }
-              : {}),
-            ...(routing.params.maxOutputTokens !== undefined
-              ? { maxOutputTokens: routing.params.maxOutputTokens }
-              : {}),
-          };
+          // Compaction pickup: when the {{compact_summary}} marker put the summary in the prompt,
+          // resend only the turns AFTER the compaction anchor (the summary covers the rest).
+          const afterSeq =
+            systemPrompt.trace.compactSummaryIncluded && chat.compactedAtSeq !== null
+              ? chat.compactedAtSeq
+              : undefined;
           turn = await openRouterRunner(routing.api)({
             model: routing.model,
             systemPrompt,
-            history: await loadCanonHistory(params.chatId),
-            params: rawParams,
+            history: await loadCanonHistory(params.chatId, { afterSeq }),
+            generation: routing.params,
             providerRouting: routing.providerRouting,
           });
         }
@@ -570,8 +785,9 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
         throw error; // unexpected (non-provider) failure — let it propagate
       }
 
+      const assistantMsgId = newId();
       await db.insert(messages).values({
-        id: newId(),
+        id: assistantMsgId,
         chatId: params.chatId,
         seq: userSeq + 1,
         role: "assistant",
@@ -579,6 +795,8 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
         model: turn.usage.model,
         provider: `${routing.api}/${routing.source}`,
         stopReason: turn.stopReason,
+        finishReason: turn.finishReason,
+        reasoningEffort: promptConfig.params.effort ?? null,
         tokensIn: turn.usage.tokensIn,
         tokensOut: turn.usage.tokensOut,
         cacheReadTokens: turn.usage.cacheReadTokens,
@@ -593,6 +811,7 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
         costUsd: turn.usage.costUsd,
         createdAt: Date.now(),
       });
+      await recordTurnEvents(params.chatId, assistantMsgId, turn.events);
 
       await db
         .update(chats)
@@ -609,14 +828,43 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
         })
         .where(eq(chats.id, params.chatId));
 
+      // Managed compaction (opt-in): once the context-fill crosses the threshold, fire a steered
+      // /compact NOW (we already hold the lock — runCompaction is lock-free) so the next turn starts
+      // smaller. agent-sdk only; best-effort (a compaction failure never fails the just-saved turn).
+      const compaction = promptConfig.params.compaction;
+      if (routing.runner === "agent-sdk" && compaction?.mode === "managed") {
+        const window = turn.usage.contextWindow;
+        const used = turn.usage.tokensIn + turn.usage.tokensOut;
+        const threshold = compaction.thresholdPct ?? MANAGED_COMPACT_DEFAULT_PCT;
+        const sessionId = turn.sessionId || chat.sessionId;
+        if (window !== null && window > 0 && used / window >= threshold && sessionId !== null) {
+          await runCompaction({
+            chatId: params.chatId,
+            sessionId,
+            model: routing.model,
+            source: routing.source,
+            systemPrompt,
+            generation: promptConfig.params,
+            instructions: compaction.instructions ?? DEFAULT_COMPACT_INSTRUCTIONS,
+            trigger: "managed",
+          });
+        }
+      }
+
       // chatId-scoped turn summary (the provider already logs each event at its own level;
-      // this adds the chat context + the context-fill signal the UI will show).
-      getLog().debug(
+      // this adds the chat context + the context-fill signal the UI will show). INFO (not debug) so
+      // cost-per-chat is correlatable at the default LOG_LEVEL — the provider-level "turn complete"
+      // carries cost but no chatId, so this is the one line that ties tokens/cost to a chat.
+      getLog().info(
         {
           chatId: params.chatId,
           seq: userSeq + 1,
+          model: turn.usage.model,
           tokensIn: turn.usage.tokensIn,
+          tokensOut: turn.usage.tokensOut,
+          costUsd: turn.usage.costUsd,
           contextWindow: turn.usage.contextWindow,
+          finishReason: turn.finishReason,
           compactions: turn.events.filter((event) => event.kind === "compaction").length,
           rateLimit: turn.rateLimit?.status,
         },
@@ -722,6 +970,10 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
     const model = sameProvider ? source.model : null;
     // agent-sdk target gets a fresh valid-UUID session (seeded below); openrouter target has none.
     const sessionId = params.targetApi === "agent-sdk" ? randomUUID() : null;
+    // Carry the compaction artifact only if the fork point includes the compaction anchor (so the
+    // forked range is genuinely "post-compaction"); a fork before it predates compaction → none.
+    // This is what lets a compacted agent-sdk chat fork into openrouter and pick up from the summary.
+    const carryCompaction = source.compactedAtSeq !== null && source.compactedAtSeq <= params.atSeq;
     await db.insert(chats).values({
       id: newChatId,
       ownerId,
@@ -733,6 +985,8 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
       source: params.targetSource,
       model,
       sessionId,
+      compactSummary: carryCompaction ? source.compactSummary : null,
+      compactedAtSeq: carryCompaction ? source.compactedAtSeq : null,
       parentChatId: params.chatId,
       forkedAt: now,
       messageCount: canon.length,
@@ -900,7 +1154,9 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
         .limit(1);
       const lastUser = userRows[0] ?? null;
       const regenPrompt = lastUser?.content ?? OPEN_SCENE_PROMPT;
-      const history = await loadCanonHistory(params.chatId, lastUser?.seq ?? tip.seq);
+      const history = await loadCanonHistory(params.chatId, {
+        beforeSeq: lastUser?.seq ?? tip.seq,
+      });
 
       const [assembleCtx, promptConfig] = await Promise.all([
         buildAssembleContext(chat),
@@ -929,6 +1185,7 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
               source: routing.source,
               sessionStore: store,
               systemPrompt,
+              generation: promptConfig.params,
               resume: seededSessionId,
             });
           } else {
@@ -939,22 +1196,15 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
               source: routing.source,
               sessionStore: store,
               systemPrompt,
+              generation: promptConfig.params,
             });
           }
         } else {
-          const rawParams: RawTurnParams["params"] = {
-            ...(promptConfig.params.temperature !== undefined
-              ? { temperature: promptConfig.params.temperature }
-              : {}),
-            ...(promptConfig.params.maxOutputTokens !== undefined
-              ? { maxOutputTokens: promptConfig.params.maxOutputTokens }
-              : {}),
-          };
           turn = await openRouterRunner(routing.api)({
             model: routing.model,
             systemPrompt,
             history: [...history, { role: "user", content: regenPrompt }],
-            params: rawParams,
+            generation: promptConfig.params,
             providerRouting: routing.providerRouting,
           });
         }
@@ -986,6 +1236,9 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
       const now = Date.now();
       let nextIdx = 0;
       if (existing.length === 0) {
+        // Preserve the first generation's provenance in variant 0 (incl. its tokens) before the
+        // message row gets repointed to the new variant below — else variant 0's per-variant token
+        // counts would be lost (the message row's columns are about to change).
         await db.insert(messageVariants).values({
           id: newId(),
           messageId: tip.id,
@@ -993,6 +1246,8 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
           content: tip.content,
           model: tip.model,
           provider: tip.provider,
+          tokensIn: tip.tokensIn,
+          tokensOut: tip.tokensOut,
           createdAt: tip.createdAt,
         });
         nextIdx = 1;
@@ -1006,30 +1261,64 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
         content: turn.reply,
         model: turn.usage.model,
         provider: `${routing.api}/${routing.source}`,
+        reasoningEffort: promptConfig.params.effort ?? null,
         tokensIn: turn.usage.tokensIn,
         tokensOut: turn.usage.tokensOut,
         genStarted: startedAt,
         genFinished: now,
         createdAt: now,
       });
+      // The message row tracks the ACTIVE variant in BOTH content and provenance — so its token/
+      // cost/context columns describe what's rendered, not a buried first gen. (The full per-gen
+      // record lives in message_variants; the richer fields here = the latest generation.)
       await db
         .update(messages)
-        .set({ activeVariantIdx: nextIdx, content: turn.reply })
+        .set({
+          activeVariantIdx: nextIdx,
+          content: turn.reply,
+          model: turn.usage.model,
+          provider: `${routing.api}/${routing.source}`,
+          stopReason: turn.stopReason,
+          finishReason: turn.finishReason,
+          reasoningEffort: promptConfig.params.effort ?? null,
+          tokensIn: turn.usage.tokensIn,
+          tokensOut: turn.usage.tokensOut,
+          cacheReadTokens: turn.usage.cacheReadTokens,
+          cacheWriteTokens: turn.usage.cacheWriteTokens,
+          cacheCreation5mTokens: turn.usage.cacheCreation5mTokens,
+          cacheCreation1hTokens: turn.usage.cacheCreation1hTokens,
+          contextWindow: turn.usage.contextWindow,
+          maxOutputTokens: turn.usage.maxOutputTokens,
+          ttftMs: turn.ttftMs,
+          terminalReason: turn.terminalReason,
+          apiErrorStatus: turn.apiErrorStatus,
+          costUsd: turn.usage.costUsd,
+        })
         .where(eq(messages.id, tip.id));
+      await recordTurnEvents(params.chatId, tip.id, turn.events);
 
       // agent-sdk: the regen session (seeded → completed, or the fresh greeting session) is now
       // canonical. Drop the pre-swipe session's frames and point the chat at the new one. The
       // openrouter runner has no session.
+      // A swipe is a real generation — its tokens count toward the chat totals (else regenerations
+      // silently undercount cost/allowance). messageCount is unchanged (the swipe mutates the tip).
+      const tokenTotals = {
+        totalTokensIn: (chat.totalTokensIn ?? 0) + turn.usage.tokensIn,
+        totalTokensOut: (chat.totalTokensOut ?? 0) + turn.usage.tokensOut,
+      };
       if (routing.runner === "agent-sdk") {
         if (chat.sessionId !== null && chat.sessionId !== turn.sessionId) {
           await db.delete(sessionEntries).where(eq(sessionEntries.sessionId, chat.sessionId));
         }
         await db
           .update(chats)
-          .set({ sessionId: turn.sessionId || chat.sessionId, updatedAt: now })
+          .set({ sessionId: turn.sessionId || chat.sessionId, ...tokenTotals, updatedAt: now })
           .where(eq(chats.id, params.chatId));
       } else {
-        await db.update(chats).set({ updatedAt: now }).where(eq(chats.id, params.chatId));
+        await db
+          .update(chats)
+          .set({ ...tokenTotals, updatedAt: now })
+          .where(eq(chats.id, params.chatId));
       }
 
       getLog().info(
@@ -1053,7 +1342,13 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
       const chat = await loadOwnedChat(ownerId, params.chatId);
       await loadOwnedMessage(params.chatId, params.messageId); // ownership + existence
       const vRows = await db
-        .select({ content: messageVariants.content })
+        .select({
+          content: messageVariants.content,
+          model: messageVariants.model,
+          provider: messageVariants.provider,
+          tokensIn: messageVariants.tokensIn,
+          tokensOut: messageVariants.tokensOut,
+        })
         .from(messageVariants)
         .where(
           and(
@@ -1069,9 +1364,20 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
           `variant ${params.variantIdx} not found on message ${params.messageId}`,
         );
       }
+      // Keep the message row's per-variant provenance (tokens/model/provider) consistent with the
+      // selected variant's content. (The richer columns — cost/context/cache/ttft — aren't stored
+      // per variant, so they continue to reflect the latest generation; full per-variant provenance
+      // is a future migration.)
       await db
         .update(messages)
-        .set({ activeVariantIdx: params.variantIdx, content: variant.content })
+        .set({
+          activeVariantIdx: params.variantIdx,
+          content: variant.content,
+          model: variant.model,
+          provider: variant.provider,
+          tokensIn: variant.tokensIn,
+          tokensOut: variant.tokensOut,
+        })
         .where(eq(messages.id, params.messageId));
       const newSessionId = await reseedSdkSession(chat);
       if (newSessionId !== null) {
@@ -1122,8 +1428,107 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
     });
   }
 
+  // Lock-free compaction core: run a steered `/compact` turn (resume the session, compact, no reply,
+  // no message row) → repoint the session + record the compaction event. Shared by the manual
+  // compact() (takes the lock) and the managed auto-trigger inside send() (already holds the lock —
+  // so this MUST stay lock-free to avoid a re-entrant deadlock). Best-effort: a TurnError → false.
+  async function runCompaction(args: {
+    chatId: string;
+    sessionId: string;
+    model: ChatModelId;
+    source: ClaudeSource;
+    systemPrompt: { static: string; dynamic: string };
+    generation: PromptConfig["params"];
+    instructions: string;
+    trigger: "manual" | "managed";
+  }): Promise<boolean> {
+    try {
+      const turn = await runTurn({
+        prompt: `/compact ${args.instructions}`,
+        model: args.model,
+        source: args.source,
+        sessionStore: new DbSessionStore(db, args.chatId),
+        systemPrompt: args.systemPrompt,
+        generation: args.generation,
+        resume: args.sessionId,
+      });
+      const newSessionId = turn.sessionId || args.sessionId;
+      // Capture the SDK's summary + the canon anchor it covers → the portable, cross-mode artifact
+      // (openrouter mode reads these to pick up from the compaction point). Best-effort: if we can't
+      // recover the summary frame, leave compactSummary/anchor untouched (degrade to full canon).
+      const summary = await extractCompactSummary(newSessionId);
+      const anchorSeq = summary !== null ? await maxSeq(args.chatId) : null;
+      await db
+        .update(chats)
+        .set({
+          sessionId: newSessionId,
+          ...(summary !== null ? { compactSummary: summary, compactedAtSeq: anchorSeq } : {}),
+          updatedAt: Date.now(),
+        })
+        .where(eq(chats.id, args.chatId));
+      await recordTurnEvents(args.chatId, null, turn.events);
+      getLog().info(
+        {
+          chatId: args.chatId,
+          trigger: args.trigger,
+          events: turn.events.length,
+          summaryCaptured: summary !== null,
+        },
+        "chat: compacted",
+      );
+      return true;
+    } catch (error) {
+      if (error instanceof TurnError) {
+        getLog().warn(
+          { chatId: args.chatId, trigger: args.trigger, kind: error.kind },
+          "chat: compaction failed",
+        );
+        return false;
+      }
+      throw error;
+    }
+  }
+
+  // Manually compact an agent-sdk chat's session via a steered `/compact` turn (the lever for
+  // compaction mode "off"/"managed"). No-op for openrouter (stateless — nothing to compact) or a
+  // chat with no session yet. Canon (the messages) is untouched.
+  async function compact(params: CompactParams): Promise<{ compacted: boolean }> {
+    const ownerId = await ensureUser(db, params.username);
+    return withChatLock(params.chatId, async () => {
+      const chat = await loadOwnedChat(ownerId, params.chatId);
+      if (chat.api !== "agent-sdk" || chat.sessionId === null) {
+        return { compacted: false };
+      }
+      const [assembleCtx, promptConfig] = await Promise.all([
+        buildAssembleContext(chat),
+        resolveConfig(chat),
+      ]);
+      const routing = resolveTurnRouting(chat, promptConfig);
+      if (routing.runner !== "agent-sdk") {
+        return { compacted: false };
+      }
+      const compacted = await runCompaction({
+        chatId: params.chatId,
+        sessionId: chat.sessionId,
+        model: routing.model,
+        source: routing.source,
+        systemPrompt: assemblePrompt(promptConfig, assembleCtx),
+        generation: promptConfig.params,
+        instructions:
+          params.instructions ??
+          promptConfig.params.compaction?.instructions ??
+          DEFAULT_COMPACT_INSTRUCTIONS,
+        trigger: "manual",
+      });
+      return { compacted };
+    });
+  }
+
   return {
     create,
+    listChats,
+    getChat,
+    previewAssembly,
     listMessages,
     send,
     setProvider,
@@ -1131,5 +1536,6 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
     swipe,
     selectVariant,
     editMessage,
+    compact,
   };
 }

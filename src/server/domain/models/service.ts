@@ -5,6 +5,7 @@ import {
   listOpenRouterEndpoints,
   listOpenRouterModels,
   listOpenRouterProviders,
+  type OpenRouterActivityItem,
   type OpenRouterCredits,
   type RawModel,
 } from "../../providers/openrouter";
@@ -29,8 +30,8 @@ export interface ModelsService {
   rawCatalog(): Promise<RawModel[]>;
   /** OpenRouter credit balance (total purchased + used, USD). */
   credits(): Promise<OpenRouterCredits>;
-  /** Recent usage analytics (last ~30 UTC days, grouped by day/model). */
-  activity(): Promise<unknown[]>;
+  /** Recent usage analytics (last ~30 UTC days, grouped by day/model), date normalized to dateMs. */
+  activity(): Promise<OpenRouterActivityItem[]>;
   /** Authoritative per-generation cost by id (settles shortly after a turn). */
   generationCost(
     id: string,

@@ -97,6 +97,32 @@ transformers.js `session_options`, OS env vars) trip `useNamingConvention`. Two 
   plus the internal FKs from migration 0007 (cascade policy in `docs/data-model.md`); polymorphic
   refs (`embeddings`/`taggables` entity columns) stay plain `text`.
 
+## Time & dates — one canonical format: epoch-ms UTC
+
+**Every timestamp we store or surface is an integer epoch-MILLISECONDS UTC instant.** No ISO
+strings in columns, no local-tz, no epoch-seconds leaking past a boundary. The client renders it in
+the viewer's timezone (`Intl.DateTimeFormat`) — store UTC, display local.
+
+- **`src/shared/time.ts` is the ONLY place that parses/normalizes time** (Luxon-backed). Use its
+  helpers; don't hand-roll:
+  - `epochToMs(n)` — a number that may be seconds OR ms → ms (the ≥1e12 heuristic).
+  - `secondsToMs(n)` — a DOCUMENTED-seconds field → ms (composes with `undefined`).
+  - `isoToMs(s)` — ISO-8601 → ms; a naive (no-offset) string is read as **UTC**, deterministically.
+  - `utcFormatToMs(s, fmt)` — an explicit Luxon format token, parsed as UTC.
+- **Normalize at the boundary, never downstream.** Known provider/import units (all converted on
+  the way in): Agent-SDK rate-limit **`resetsAt` is epoch SECONDS**; OpenRouter `created` is epoch
+  seconds (we don't store it — receipt `Date.now()` instead); OpenRouter `activity.date` is
+  `"YYYY-MM-DD"` (→ `dateMs`); ST imports are epoch s/ms · ISO · `@14h56m48s` · human — `parseStDate`
+  parses **all as UTC**.
+- **Banned:** `new Date(y, mo, d, …)` (LOCAL tz — the importer bug we fixed) and `Date.parse` on a
+  naive ISO string (engine-dependent local-vs-UTC). Use `Date.UTC(...)` or the `shared/time.ts`
+  parsers.
+- **The one sanctioned ISO-string exception:** `domain/chat/seed.ts` emits ISO-UTC `timestamp`
+  strings because the Agent SDK's session-FRAME format requires ISO — that's the SDK's shape, not
+  our storage. Everything we own stays epoch-ms.
+- **Library:** Luxon (server-side, for parsing) backs `shared/time.ts`. The client needs no date
+  dep — `Intl` formats epoch-ms in the viewer's zone when the UI lands.
+
 ## Workflow
 
 - **Commit directly to `main`** (homelab, no CI). `pnpm check` is the green-to-ship gate and runs

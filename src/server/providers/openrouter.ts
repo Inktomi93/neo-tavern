@@ -1,8 +1,16 @@
 import { createHash } from "node:crypto";
 import { OpenRouter } from "@openrouter/sdk";
+import { type GenerationParams, isThinkingOn } from "../../shared/generation";
+import { isoToMs } from "../../shared/time";
 import { env } from "../env";
 import { getLog } from "../observability/logger";
-import { type ChatTurnResult, type ChatTurnUsage, TurnError, type TurnErrorKind } from "./turn";
+import {
+  type ChatTurnResult,
+  type ChatTurnUsage,
+  normalizeFinishReason,
+  TurnError,
+  type TurnErrorKind,
+} from "./turn";
 
 // The OpenRouter-runner side of the provider architecture (the @openrouter/sdk path, distinct from
 // the Agent-SDK runner used for Claude). Two endpoints:
@@ -200,16 +208,54 @@ export async function getOpenRouterGenerationCost(
   }
 }
 
-/** Recent usage analytics, grouped by day/model (last ~30 UTC days). Returns the raw rows.
+/** A usage-analytics row, normalized: OpenRouter reports `date` as a "YYYY-MM-DD" UTC day string;
+ *  we add the canonical `dateMs` (epoch-ms at UTC midnight) so the client never re-parses a string,
+ *  consistent with every other timestamp in the app (shared/time.ts). The `date` label is kept for
+ *  a chart axis. */
+export interface OpenRouterActivityItem {
+  date: string;
+  dateMs: number | null;
+  model: string;
+  providerName: string;
+  promptTokens: number;
+  completionTokens: number;
+  reasoningTokens: number;
+  requests: number;
+  usageUsd: number;
+}
+
+// The @openrouter/sdk normalizes the wire to camelCase; we read leniently (every field optional).
+interface RawActivityRow {
+  date?: string;
+  model?: string;
+  providerName?: string;
+  promptTokens?: number;
+  completionTokens?: number;
+  reasoningTokens?: number;
+  requests?: number;
+  usage?: number;
+}
+
+/** Recent usage analytics, grouped by day/model (last ~30 UTC days), normalized (date → dateMs).
  *  NOTE: OpenRouter restricts this to MANAGEMENT (provisioning) keys — a normal inference key
  *  gets 401 "Only management keys can fetch activity". So this throws for most keys; that's an
  *  account-tier limitation, not a bug (logged at warn). credits/providers/catalog work on any key. */
-export async function getOpenRouterActivity(): Promise<unknown[]> {
+export async function getOpenRouterActivity(): Promise<OpenRouterActivityItem[]> {
   try {
     const res = (await getOpenRouterClient().analytics.getUserActivity()) as unknown as {
-      data?: unknown[];
+      data?: RawActivityRow[];
     };
-    const rows = res.data ?? [];
+    const rows = (res.data ?? []).map((r) => ({
+      date: r.date ?? "",
+      dateMs: r.date !== undefined ? isoToMs(r.date) : null, // "YYYY-MM-DD" → UTC-midnight epoch-ms
+      model: r.model ?? "",
+      providerName: r.providerName ?? "",
+      promptTokens: r.promptTokens ?? 0,
+      completionTokens: r.completionTokens ?? 0,
+      reasoningTokens: r.reasoningTokens ?? 0,
+      requests: r.requests ?? 0,
+      usageUsd: r.usage ?? 0,
+    }));
     getLog().debug({ rows: rows.length }, "openrouter: activity");
     return rows;
   } catch (error) {
@@ -270,18 +316,40 @@ export interface RawTurnParams {
   systemPrompt: { static: string; dynamic: string };
   /** Full conversation from canon, oldest→newest (the last entry is the new user message). */
   history: { role: "user" | "assistant"; content: string }[];
-  /** Generation params, flowing from the preset config. */
-  params?: {
-    temperature?: number;
-    topP?: number;
-    maxOutputTokens?: number;
-    frequencyPenalty?: number;
-    presencePenalty?: number;
-    reasoningEffort?: "low" | "medium" | "high";
-  };
+  /** The unified generation knobs (shared/generation.ts). temperature/topP/maxOutputTokens map to
+   *  request fields; thinking/effort → the `reasoning` block; maxBudgetUsd is a no-op here (no
+   *  per-request budget). undefined = the model/provider defaults. */
+  generation?: GenerationParams | undefined;
   /** OpenRouter provider-routing preferences (order/allowFallbacks/sort/only/ignore/…). Lenient
    *  pass-through (OpenRouter owns the schema); undefined = default routing. From chats.metadata. */
   providerRouting?: Record<string, unknown> | undefined;
+}
+
+// OpenRouter usage doesn't report the model's context window — backfill it from the cached catalog
+// (contextLength) so the context-fill meter works on openrouter chats too, instead of a null/0 hole.
+// Best-effort: a catalog miss or fetch failure → null (genuinely unknown), never a thrown turn.
+async function lookupContextWindow(model: string): Promise<number | null> {
+  try {
+    const models = await listOpenRouterModels();
+    return models.find((m) => m.id === model)?.contextLength ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// Translate the unified reasoning knobs into OpenRouter's `reasoning.effort`. "off" → "none"
+// (disables reasoning on reasoning models); otherwise the effort level, with the agnostic "max"
+// (Claude-only) mapped to "xhigh" (OpenRouter's enum has no "max"). undefined = no preference.
+// A fixed thinking budget has no OpenRouter chat equivalent, so it's treated as "on" (effort only).
+export function toReasoningEffort(generation: GenerationParams | undefined): string | undefined {
+  const g = generation ?? {};
+  if (g.thinking === "off") {
+    return "none";
+  }
+  if (!isThinkingOn(g)) {
+    return undefined;
+  }
+  return g.effort === "max" ? "xhigh" : (g.effort ?? "high");
 }
 
 // Map @openrouter/sdk errors → our provider-agnostic kinds. Response errors carry a numeric
@@ -435,7 +503,7 @@ function buildChatSystemMessage(
  */
 export async function runChatCompletionTurn(params: RawTurnParams): Promise<ChatTurnResult> {
   const startedAt = Date.now();
-  const cfg = params.params ?? {};
+  const cfg = params.generation ?? {};
   const anthropic = isAnthropicModel(params.model);
 
   const systemMessage = buildChatSystemMessage(
@@ -450,6 +518,7 @@ export async function runChatCompletionTurn(params: RawTurnParams): Promise<Chat
       .map((m) => ({ role: m.role, content: m.content })),
   ];
   const chatProvider = effectiveProviderRouting(params.model, params.providerRouting);
+  const reasoningEffort = toReasoningEffort(cfg);
 
   const chatRequest = {
     model: params.model,
@@ -457,9 +526,7 @@ export async function runChatCompletionTurn(params: RawTurnParams): Promise<Chat
     ...(cfg.temperature !== undefined ? { temperature: cfg.temperature } : {}),
     ...(cfg.topP !== undefined ? { topP: cfg.topP } : {}),
     ...(cfg.maxOutputTokens !== undefined ? { maxCompletionTokens: cfg.maxOutputTokens } : {}),
-    ...(cfg.frequencyPenalty !== undefined ? { frequencyPenalty: cfg.frequencyPenalty } : {}),
-    ...(cfg.presencePenalty !== undefined ? { presencePenalty: cfg.presencePenalty } : {}),
-    ...(cfg.reasoningEffort ? { reasoning: { effort: cfg.reasoningEffort } } : {}),
+    ...(reasoningEffort !== undefined ? { reasoning: { effort: reasoningEffort } } : {}),
     ...(chatProvider !== undefined ? { provider: chatProvider } : {}),
   };
 
@@ -491,10 +558,11 @@ export async function runChatCompletionTurn(params: RawTurnParams): Promise<Chat
     tokensOut: u?.completionTokens ?? 0,
     cacheReadTokens: u?.promptTokensDetails?.cachedTokens ?? 0,
     cacheWriteTokens: u?.promptTokensDetails?.cacheWriteTokens ?? 0,
-    cacheCreation5mTokens: 0,
-    cacheCreation1hTokens: 0,
-    contextWindow: 0,
-    maxOutputTokens: 0,
+    // The 5m/1h split is Anthropic/sdk-internal — openrouter can't report it → null (NA, not 0).
+    cacheCreation5mTokens: null,
+    cacheCreation1hTokens: null,
+    contextWindow: await lookupContextWindow(params.model),
+    maxOutputTokens: cfg.maxOutputTokens ?? null, // echo the requested cap; null if none asked
     costUsd: u?.cost ?? 0,
   };
 
@@ -512,11 +580,13 @@ export async function runChatCompletionTurn(params: RawTurnParams): Promise<Chat
     "openrouter: chat turn complete",
   );
 
+  const chatFinish = view.choices?.[0]?.finishReason ?? null;
   return {
     reply: extractChatReply(view),
     sessionId: "", // the openrouter runner has no SDK session — history is rebuilt from canon
-    stopReason: view.choices?.[0]?.finishReason ?? null,
+    stopReason: chatFinish,
     terminalReason: null,
+    finishReason: normalizeFinishReason(chatFinish),
     ttftMs: null,
     apiErrorStatus: null,
     numTurns: 1,
@@ -532,6 +602,10 @@ export async function runChatCompletionTurn(params: RawTurnParams): Promise<Chat
 interface ResponsesView {
   output?: Array<{ type: string; content?: Array<{ type: string; text?: string }> }>;
   outputText?: string;
+  // The finish signal: status ("completed"|"incomplete"|…) + the reason when incomplete
+  // ("max_output_tokens"|"content_filter"). incomplete reason wins (it's more specific).
+  status?: string;
+  incompleteDetails?: { reason?: string } | null;
   usage?: {
     inputTokens?: number;
     outputTokens?: number;
@@ -575,7 +649,7 @@ function extractResponsesReply(view: ResponsesView): string {
 export async function runRawTurn(params: RawTurnParams): Promise<ChatTurnResult> {
   const startedAt = Date.now();
   const instructions = joinSystemPrompt(params.systemPrompt);
-  const cfg = params.params ?? {};
+  const cfg = params.generation ?? {};
   const anthropic = isAnthropicModel(params.model);
 
   // A stable per-system-prompt key lets OpenAI-style providers reuse their automatic cache across
@@ -585,6 +659,7 @@ export async function runRawTurn(params: RawTurnParams): Promise<ChatTurnResult>
       ? createHash("sha1").update(`${params.model} ${instructions}`).digest("hex").slice(0, 32)
       : undefined;
   const responsesProvider = effectiveProviderRouting(params.model, params.providerRouting);
+  const reasoningEffort = toReasoningEffort(cfg);
 
   const responsesRequest = {
     model: params.model,
@@ -594,10 +669,10 @@ export async function runRawTurn(params: RawTurnParams): Promise<ChatTurnResult>
     ...(promptCacheKey !== undefined ? { promptCacheKey } : {}),
     ...(cfg.temperature !== undefined ? { temperature: cfg.temperature } : {}),
     ...(cfg.topP !== undefined ? { topP: cfg.topP } : {}),
-    ...(cfg.frequencyPenalty !== undefined ? { frequencyPenalty: cfg.frequencyPenalty } : {}),
-    ...(cfg.presencePenalty !== undefined ? { presencePenalty: cfg.presencePenalty } : {}),
     ...(cfg.maxOutputTokens !== undefined ? { maxOutputTokens: cfg.maxOutputTokens } : {}),
-    ...(cfg.reasoningEffort ? { reasoning: { effort: cfg.reasoningEffort, summary: "auto" } } : {}),
+    ...(reasoningEffort !== undefined
+      ? { reasoning: { effort: reasoningEffort, summary: "auto" } }
+      : {}),
     ...(responsesProvider !== undefined ? { provider: responsesProvider } : {}),
   };
 
@@ -629,10 +704,11 @@ export async function runRawTurn(params: RawTurnParams): Promise<ChatTurnResult>
     tokensOut: u?.outputTokens ?? 0,
     cacheReadTokens: u?.inputTokensDetails?.cachedTokens ?? 0,
     cacheWriteTokens: 0,
-    cacheCreation5mTokens: 0,
-    cacheCreation1hTokens: 0,
-    contextWindow: 0,
-    maxOutputTokens: 0,
+    // 5m/1h split is Anthropic/sdk-internal; null (NA) not 0. contextWindow ← catalog; maxOutput ← request.
+    cacheCreation5mTokens: null,
+    cacheCreation1hTokens: null,
+    contextWindow: await lookupContextWindow(params.model),
+    maxOutputTokens: cfg.maxOutputTokens ?? null,
     costUsd: u?.cost ?? 0,
   };
 
@@ -649,11 +725,14 @@ export async function runRawTurn(params: RawTurnParams): Promise<ChatTurnResult>
     "openrouter: responses turn complete",
   );
 
+  // The incomplete reason (e.g. max_output_tokens) is the specific signal; else the status.
+  const responsesFinish = view.incompleteDetails?.reason ?? view.status ?? null;
   return {
     reply: extractResponsesReply(view),
     sessionId: "",
-    stopReason: null,
+    stopReason: responsesFinish,
     terminalReason: null,
+    finishReason: normalizeFinishReason(responsesFinish),
     ttftMs: null,
     apiErrorStatus: null,
     numTurns: 1,

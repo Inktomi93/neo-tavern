@@ -414,8 +414,9 @@ wrong — measured, the minimal viable shape is much smaller** (`domain/chat/see
 | model / resume / store | `model`, `resume`, `sessionStore` options | ✅ |
 | **max output tokens** | `CLAUDE_CODE_MAX_OUTPUT_TOKENS` (env) | ✅ verified (`scripts/env-knob-probe.ts`) — caps the reply; **don't set absurdly low** (64 errored to empty; use a sane value) |
 | **1M context toggle (Opus)** | `CLAUDE_CODE_DISABLE_1M_CONTEXT=1` (env) | ✅ verified — Opus defaults to a **1,000,000** window; the flag drops it to 200k. (Haiku/Sonnet report 200k.) **Now set in `buildClaudeSdkEnv()` (owner default: capped at 200k).** |
-| **thinking on/off** | `CLAUDE_CODE_DISABLE_THINKING=1` (env) | ✅ verified — Sonnet thinkingBlocks 1→0, output 763→255 tok. **Now set in `buildClaudeSdkEnv()` (owner default: OFF).** Related: `CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING`, `DISABLE_INTERLEAVED_THINKING` (candidate). |
-| **effort / reasoning level** | `CLAUDE_EFFORT` / `CLAUDE_CODE_EFFORT_LEVEL` (env) | ⚠ candidate — the host had `CLAUDE_EFFORT=xhigh` SET and `buildClaudeSdkEnv()` spread `process.env`, leaking xhigh into every chat. **Now NEUTRALIZED** (`CLAUDE_EFFORT: undefined` in `buildClaudeSdkEnv` — moot with thinking off). |
+| **thinking on/off + mode** | typed `Options.thinking` (`{type:'disabled'\|'adaptive'\|'enabled',budgetTokens}`) — NOT the env var for ON | ✅ — **drive via the typed Option.** `CLAUDE_CODE_DISABLE_THINKING=1` (env) still forces OFF (owner default; verified Sonnet 1→0 blocks); to turn thinking ON the runner clears that env AND sets `thinking:{type:'adaptive'\|'enabled'}`. "adaptive thinking" = `{type:'adaptive'}` (a typed variant, NOT the `CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING` env). |
+| **effort / reasoning level** | typed `Options.effort` (`low\|medium\|high\|xhigh\|max`) — NOT the env var | ✅ verified (`scripts/effort-probe.ts`, since removed) — typed `effort` **bites**: Sonnet low=273ch → high=555ch reasoning (clean dose-response). The `CLAUDE_EFFORT` / `CLAUDE_CODE_EFFORT_LEVEL` **env vars are noise** (no dose-response — wrong lever). **MODEL-GATED (SDK docs):** `xhigh`=Opus 4.7 only; `max`=Opus 4.6/4.7 + Sonnet 4.6 — the SDK clamps unsupported levels (that, plus the wrong lever, is why `CLAUDE_EFFORT=xhigh` on Sonnet looked flat). `CLAUDE_EFFORT` stays neutralized (`undefined`) in `buildClaudeSdkEnv`. |
+| **hard cost cap** | typed `Options.maxBudgetUsd` | ✅ — per-query USD ceiling; returns `error_max_budget_usd`. Now exposed via the unified `GenerationParams.maxBudgetUsd`. |
 | effective context size | `CLAUDE_CODE_MAX_CONTEXT_TOKENS` (env) | ✖ verified NO effect on the reported `contextWindow` (stayed 200k on haiku) — it is NOT the meter lever; the reported per-model window IS the denominator |
 | other compaction env | `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, `DISABLE_COMPACT`, `USE_API_CONTEXT_MANAGEMENT`, `CLAUDE_CODE_COLD_COMPACT`, `CLAUDE_AFTER_LAST_COMPACT`, `CLAUDE_CODE_DISABLE_PRECOMPACT_SKIP` | ⚠ candidate |
 | inline `settings.autoCompactEnabled` / `autoCompactWindow` | typed `Options.settings` | ✖ did NOT change behavior in test (window=2000 never fired) — **use the env vars instead** |
@@ -424,6 +425,13 @@ wrong — measured, the minimal viable shape is much smaller** (`domain/chat/see
 binary references (filter: `DISCOVER=cache|context|…`); `scripts/env-knob-probe.ts` runs a real turn per
 knob and observes the effect (output cap / reported window / thinking blocks) — that's what promoted the
 rows above from candidate to ✅/✖. Re-run after an SDK upgrade.
+
+**One vocab to set them all:** the knobs above aren't set ad-hoc per call — they flow from the SINGLE
+provider-agnostic `GenerationParams` (`src/shared/generation.ts`, stored in the preset `config.params`).
+Each runner translates it: agent-sdk via `toSdkGeneration` (typed `thinking`/`effort`/`maxBudgetUsd`
+Options + env `maxOutputTokens`/`disableThinking`), openrouter via `toReasoningEffort` + request params
+(temperature/topP/maxOutputTokens, `reasoning.effort` with `max`→`xhigh`). A knob a runner can't honor
+(temperature on agent-sdk; maxBudgetUsd on openrouter) is a documented no-op, so a preset stays portable.
 
 **Read-only — reported back, capture for analytics/UX but can't dictate:**
 - `compact_metadata` (stream): `trigger`, `pre_tokens`, `post_tokens`, `duration_ms`.

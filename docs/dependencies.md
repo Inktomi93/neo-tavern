@@ -17,7 +17,10 @@ Runtime: `hono`, `@hono/node-server`, `@trpc/{server,client,react-query}`,
 runner — Chat Completions + Responses; the OFFICIAL OpenRouter SDK, **NOT** the `openai`
 package, which we removed — the official SDK gives typed errors, routing metadata, the live
 model catalog, image-gen for later), `dotenv` (loads a gitignored `.env` with `override:true` so a
-local key wins over a stale shell export — see `src/server/env.ts`).
+local key wins over a stale shell export — see `src/server/env.ts`),
+`luxon` (+ `@types/luxon` dev) — the canonical time layer: all timestamps are epoch-ms UTC, parsed
+deterministically as UTC at every provider/import boundary (`src/shared/time.ts`); the client renders
+in the viewer's tz via `Intl` when the UI lands.
 Tooling: biome, typescript, vite, tsx, vitest, dependency-cruiser, knip, husky,
 tailwindcss (v4), concurrently.
 

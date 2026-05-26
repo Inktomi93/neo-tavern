@@ -6,6 +6,7 @@ import { createDb, runMigrations } from "../db/client";
 import { resolveUsername } from "./auth/trust-header";
 import { createChatService } from "./domain/chat";
 import { createCorpusService } from "./domain/corpus";
+import { createDebugService } from "./domain/debug";
 import { createModelsService } from "./domain/models";
 import { createSearchService } from "./domain/search";
 import { env } from "./env";
@@ -35,8 +36,9 @@ const app = new Hono();
 // Must be first: assigns the request id + binds the request-scoped logger.
 app.use(observability);
 
-// Gated in-process introspection — see docs/observability.md.
-registerDebugRoutes(app);
+// Gated in-process introspection — see docs/observability.md. The debug service adds the
+// /api/_debug/db/* read-only DB inspector (counts, FK/integrity, chat provenance dump).
+registerDebugRoutes(app, createDebugService(db));
 
 app.get("/api/healthz", (c) => c.json({ ok: true, version: APP_VERSION }));
 

@@ -1,17 +1,64 @@
 import type { TurnErrorKind } from "../../providers/turn";
 
-// Shaped, client-safe view of a message row (we don't leak every column).
+// Shaped, client-safe view of a message row. Carries the per-turn provenance the chat UI needs
+// (the context-fill meter off contextWindow, a cost/latency readout, the edited marker) — the
+// columns the old lean projection hid. Metadata only; never any non-message column.
+// These columns track the ACTIVE variant (mirrored on swipe/select). The token/model/provider are
+// kept exact per variant; the richer cost/context/cache/ttft fields reflect the latest GENERATION
+// (not yet stored per variant — message_variants holds the per-gen record).
 export interface MessageView {
   id: string;
   seq: number;
   role: "user" | "assistant" | "system";
   content: string; // the ACTIVE variant's text (= variants[activeVariantIdx].content) when variants exist
   model: string | null;
+  provider: string | null;
+  stopReason: string | null;
+  /** Normalized cross-mode finish reason ("length" = truncated, etc.) — drives a UI indicator. */
+  finishReason: string | null;
+  tokensIn: number | null;
+  tokensOut: number | null;
+  cacheReadTokens: number | null;
+  cacheWriteTokens: number | null;
+  contextWindow: number | null;
+  costUsd: number | null;
+  ttftMs: number | null;
+  terminalReason: string | null;
   createdAt: number;
+  editedAt: number | null;
   /** Which swipe is shown; null = single generation (no variants). */
   activeVariantIdx: number | null;
   /** Total swipes for this message (0 = single generation). Drives the "3 / 5" counter. */
   variantCount: number;
+}
+
+// Chat list-row view (chat.list) — what the chat-list rail renders. Owner-scoped, newest first.
+export interface ChatSummary {
+  id: string;
+  title: string;
+  characterName: string | null;
+  api: ChatApi;
+  source: ChatSource;
+  model: string | null;
+  messageCount: number;
+  totalTokensIn: number;
+  totalTokensOut: number;
+  starred: boolean;
+  archived: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+
+// Single-chat view (chat.get) — the summary + the pins/links the chat header + provider picker need.
+export interface ChatDetail extends ChatSummary {
+  characterId: string | null;
+  characterVersionId: string;
+  personaId: string | null;
+  presetVersionId: string | null;
+  parentChatId: string | null;
+  forkedAt: number | null;
+  /** Whether an agent-sdk resume session exists (the raw uuid isn't useful to the client). */
+  hasSession: boolean;
 }
 
 // send() result. A discriminated union the client renders directly.
@@ -45,6 +92,26 @@ export interface CreateChatParams {
   // message in-character (a no-user-message turn). A per-chat toggle because auto-opening isn't
   // always wanted. Ignored when firstMessage is set (that greeting is always used).
   generateOpeningIfEmpty?: boolean | undefined;
+}
+
+// Dry-run prompt assembly for a chat — what the NEXT turn would send, WITHOUT spending a turn.
+// Owner-scoped (you preview your own chat); returns the assembled system prompt + the trace
+// (which world-info fired, section breakdown, cached-prefix size) + the resolved routing.
+export interface AssemblyPreview {
+  routing: { runner: string; api: ChatApi; source: ChatSource; model: string };
+  preset: "default" | "pinned";
+  /** The assembled system prompt halves (static = cached prefix, dynamic = per-turn suffix). */
+  systemPrompt: { static: string; dynamic: string };
+  trace: {
+    staticChars: number;
+    dynamicChars: number;
+    staticSections: string[];
+    dynamicSections: string[];
+    worldInfoAttached: number;
+    worldInfoIncluded: number;
+    matchedKeys: string[];
+    hasPersona: boolean;
+  };
 }
 
 export interface SendParams {
@@ -103,8 +170,21 @@ export interface EditMessageParams {
   content: string;
 }
 
+export interface CompactParams {
+  username: string;
+  chatId: string;
+  /** RP-tuned /compact steering; falls back to the preset's compaction.instructions, then a default. */
+  instructions?: string | undefined;
+}
+
 export interface ChatService {
   create(params: CreateChatParams): Promise<{ chatId: string }>;
+  /** The caller's chats, newest-updated first (owner-scoped). Drives the chat-list rail. */
+  listChats(params: { username: string }): Promise<ChatSummary[]>;
+  /** One owned chat's metadata (summary + pins/links). Throws ChatNotFoundError if unowned. */
+  getChat(params: { username: string; chatId: string }): Promise<ChatDetail>;
+  /** Dry-run: what the next turn's prompt + routing would be, without generating. */
+  previewAssembly(params: { username: string; chatId: string }): Promise<AssemblyPreview>;
   listMessages(params: { username: string; chatId: string }): Promise<MessageView[]>;
   send(params: SendParams): Promise<SendResult>;
   /** Switch a chat's api/source/model in place (the generalized escape valve). Handles the session
@@ -119,6 +199,9 @@ export interface ChatService {
   selectVariant(params: SelectVariantParams): Promise<MessageView[]>;
   /** Edit a message's content in place (+ the active variant). No model call; re-seeds the sdk session. */
   editMessage(params: EditMessageParams): Promise<MessageView[]>;
+  /** Manually compact an agent-sdk chat's session (steered `/compact`). No-op (compacted:false) for
+   *  openrouter chats or a chat with no session yet. The lever for compaction mode "off". */
+  compact(params: CompactParams): Promise<{ compacted: boolean }>;
 }
 
 // Thrown when a chat doesn't exist or isn't owned by the caller. The trpc layer maps

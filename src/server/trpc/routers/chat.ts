@@ -30,11 +30,33 @@ export const chatRouter = t.router({
     )
     .mutation(({ ctx, input }) => ctx.services.chat.create({ username: ctx.username, ...input })),
 
+  // The caller's chats, newest-updated first (owner-scoped) — the chat-list rail.
+  list: publicProcedure.query(({ ctx }) => ctx.services.chat.listChats({ username: ctx.username })),
+
+  // One owned chat's metadata (summary + pins/links). NOT_FOUND if unowned.
+  get: publicProcedure
+    .input(z.object({ chatId: z.string().min(1) }))
+    .query(({ ctx, input }) =>
+      ctx.services.chat
+        .getChat({ username: ctx.username, chatId: input.chatId })
+        .catch(domainErrorToTrpc),
+    ),
+
   messages: publicProcedure
     .input(z.object({ chatId: z.string().min(1) }))
     .query(({ ctx, input }) =>
       ctx.services.chat
         .listMessages({ username: ctx.username, chatId: input.chatId })
+        .catch(domainErrorToTrpc),
+    ),
+
+  // Dry-run: the system prompt + routing the NEXT turn would use, WITHOUT generating. The
+  // "what will this send / why did this world-info fire" inspector. NOT_FOUND if unowned.
+  previewAssembly: publicProcedure
+    .input(z.object({ chatId: z.string().min(1) }))
+    .query(({ ctx, input }) =>
+      ctx.services.chat
+        .previewAssembly({ username: ctx.username, chatId: input.chatId })
         .catch(domainErrorToTrpc),
     ),
 
@@ -112,5 +134,13 @@ export const chatRouter = t.router({
     )
     .mutation(({ ctx, input }) =>
       ctx.services.chat.editMessage({ username: ctx.username, ...input }).catch(domainErrorToTrpc),
+    ),
+
+  // Manually compact an agent-sdk chat's session (steered /compact). { compacted: false } if the
+  // chat can't be compacted (openrouter, or no session yet).
+  compact: publicProcedure
+    .input(z.object({ chatId: z.string().min(1), instructions: z.string().min(1).optional() }))
+    .mutation(({ ctx, input }) =>
+      ctx.services.chat.compact({ username: ctx.username, ...input }).catch(domainErrorToTrpc),
     ),
 });

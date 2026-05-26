@@ -167,6 +167,13 @@ export const chats = sqliteTable(
     // (provenance). Validation is at selection time (the picker), not on the send hot path.
     model: text("model"),
     sessionId: text("session_id"), // SDK session; null after conversion to raw / for imports
+    // Compaction artifact (portable across modes). A /compact (managed or manual) captures the
+    // SDK's summary here + the canon `seq` it covers (compactedAtSeq). agent-sdk handles compaction
+    // natively in its session, but the STATELESS openrouter runner uses these to "pick up from the
+    // compaction point": inject the summary via the {{compact_summary}} marker + rebuild history
+    // from seq > compactedAtSeq. Canon (messages) is untouched — pre-compaction stays viewable.
+    compactSummary: text("compact_summary"),
+    compactedAtSeq: integer("compacted_at_seq"),
     // Self-ref fork link. SET NULL so a fork survives its parent's deletion.
     parentChatId: text("parent_chat_id").references((): AnySQLiteColumn => chats.id, {
       onDelete: "set null",
@@ -209,7 +216,10 @@ export const messages = sqliteTable(
     toolCalls: text("tool_calls", { mode: "json" }),
     model: text("model"),
     provider: text("provider"),
-    stopReason: text("stop_reason"),
+    stopReason: text("stop_reason"), // RAW provider stop string (Anthropic stop_reason / OpenAI finish_reason)
+    // Normalized cross-mode finish reason (stop|length|filter|tool|other) — the queryable one
+    // (providers/turn.ts normalizeFinishReason); stopReason keeps the raw value as provenance.
+    finishReason: text("finish_reason"),
     tokensIn: integer("tokens_in"),
     tokensOut: integer("tokens_out"),
     cacheReadTokens: integer("cache_read_tokens"),
@@ -234,6 +244,11 @@ export const messages = sqliteTable(
       { onDelete: "restrict" },
     ),
     reasoningEffort: text("reasoning_effort"), // per-turn provenance (e.g. low|medium|high) — analytics axis
+    // Generation timing (ms epoch UTC). Live sdk/raw turns don't report per-message gen timing on
+    // the base row (swipes carry it on message_variants); the ST importer populates these from a
+    // message's top-level gen_started/gen_finished where present. Null = not provided.
+    genStarted: integer("gen_started"),
+    genFinished: integer("gen_finished"),
     rawRequest: text("raw_request", { mode: "json" }), // null in sdk-mode (body not exposed)
     rawResponse: text("raw_response", { mode: "json" }),
     // Which message_variants.idx is the rendered/selected swipe. null = no variants
@@ -271,6 +286,30 @@ export const messageVariants = sqliteTable(
     createdAt: integer("created_at").notNull(),
   },
   (t) => [uniqueIndex("message_variants_msg_idx_unq").on(t.messageId, t.idx)],
+);
+
+// Durable per-chat event history (compaction / api_retry / rate_limit / status / auth_status) — the
+// TurnEvent[] the runner returns, persisted so the record survives a restart (the in-memory log
+// ring doesn't). METADATA only (never RP content). `at` is the event's epoch-ms; `data` is the full
+// TurnEvent payload as json. messageId links to the turn's assistant message (SET NULL if it goes).
+export const chatEvents = sqliteTable(
+  "chat_events",
+  {
+    id: text("id").primaryKey(),
+    chatId: text("chat_id")
+      .notNull()
+      .references(() => chats.id, { onDelete: "cascade" }), // events die with the chat
+    messageId: text("message_id").references((): AnySQLiteColumn => messages.id, {
+      onDelete: "set null",
+    }),
+    kind: text("kind", {
+      enum: ["compaction", "api_retry", "rate_limit", "status", "auth_status"],
+    }).notNull(),
+    at: integer("at").notNull(), // epoch-ms UTC (TurnEvent.at)
+    data: text("data", { mode: "json" }).notNull(), // the full TurnEvent payload (metadata)
+    createdAt: integer("created_at").notNull(),
+  },
+  (t) => [index("chat_events_chat_idx").on(t.chatId, t.at)],
 );
 
 // ───────────────────────── World info (explicit attachment, never keyword-scanned) ─────────────────────────

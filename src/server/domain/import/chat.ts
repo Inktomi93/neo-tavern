@@ -15,6 +15,8 @@
 // Resilient: a corrupt message line is skipped, not fatal (real corpus had 0, but
 // docker cp / partial writes happen).
 
+import { epochToMs, isoToMs } from "../../../shared/time";
+
 export type MessageRole = "user" | "assistant" | "system";
 
 export type ChatBucket = "header_only" | "all_empty_msgs" | "greeting_only" | "real_conversation";
@@ -111,17 +113,16 @@ function asObj(v: unknown): Record<string, unknown> | null {
   return typeof v === "object" && v !== null ? (v as Record<string, unknown>) : null;
 }
 
-/** Parse ST's many date encodings → ms epoch. Port of chats.py:parse_send_date
+/** Parse ST's many date encodings → epoch ms (UTC). Port of chats.py:parse_send_date
  *  (epoch s/ms · ISO 8601 · ST "2025-07-03@14h56m48s[989ms]" · "August 27, 2025 6:36pm").
- *  Naive/local-tz datetimes match card-curator (single-user, local analytics). */
+ *  ALL formats are interpreted as UTC (`Date.UTC` / the shared UTC parsers) — diverging from
+ *  card-curator's local-naive behavior ON PURPOSE: one canonical UTC instant, no server-tz drift
+ *  (docs/data-model.md + shared/time.ts). The client renders in the viewer's zone. */
 export function parseStDate(v: unknown): number | null {
   if (v == null || v === "") return null;
 
-  // Epoch (number): >1e12 ⇒ already ms; else seconds.
-  if (typeof v === "number") {
-    const ms = v > 1e12 ? v : v * 1000;
-    return Number.isFinite(ms) ? ms : null;
-  }
+  // Epoch (number): ≥1e12 ⇒ already ms; else seconds (the shared seconds-or-ms heuristic).
+  if (typeof v === "number") return epochToMs(v);
 
   const s = String(v).trim();
   if (!s) return null;
@@ -130,31 +131,24 @@ export function parseStDate(v: unknown): number | null {
   // Guard to ≥10 digits so a bare "2025" isn't misread as 2025 epoch-seconds.
   if (/^\d{10,}$/.test(s)) {
     const n = Number(s);
-    if (Number.isFinite(n)) return n > 1e12 ? n : n * 1000;
+    if (Number.isFinite(n)) return epochToMs(n);
   }
 
-  // ISO 8601 (newer ST). Date handles the "Z" suffix + fractional seconds natively.
+  // ISO 8601 (newer ST). Naive (no-offset) ISO is read as UTC — deterministic, unlike Date.parse.
   if (s.includes("T")) {
-    const t = Date.parse(s);
-    if (!Number.isNaN(t)) return t;
+    const t = isoToMs(s);
+    if (t !== null) return t;
   }
 
-  // ST create_date: "2025-07-03@14h56m48s" (+ optional "989ms"), whitespace-tolerant.
+  // ST create_date: "2025-07-03@14h56m48s" (+ optional "989ms"), whitespace-tolerant. UTC.
   const at = s.match(/(\d{4})-(\d{2})-(\d{2})\s*@\s*(\d{2})h\s*(\d{2})m\s*(\d{2})s/);
   if (at) {
     const [, y, mo, d, h, mi, se] = at;
-    const t = new Date(
-      Number(y),
-      Number(mo) - 1,
-      Number(d),
-      Number(h),
-      Number(mi),
-      Number(se),
-    ).getTime();
+    const t = Date.UTC(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi), Number(se));
     if (!Number.isNaN(t)) return t;
   }
 
-  // Human readable: "August 27, 2025 6:36pm" (with or without the time).
+  // Human readable: "August 27, 2025 6:36pm" (with or without the time). UTC.
   const lower = s.toLowerCase();
   for (const [name, mo] of Object.entries(MONTHS)) {
     if (!lower.includes(name)) continue;
@@ -166,13 +160,13 @@ export function parseStDate(v: unknown): number | null {
       let hour = Number(hh);
       if (ap === "pm" && hour !== 12) hour += 12;
       else if (ap === "am" && hour === 12) hour = 0;
-      const t = new Date(Number(y), mo - 1, Number(d), hour, Number(mm)).getTime();
+      const t = Date.UTC(Number(y), mo - 1, Number(d), hour, Number(mm));
       if (!Number.isNaN(t)) return t;
     }
     const dateOnly = lower.match(new RegExp(`${name}\\s+(\\d{1,2}),?\\s+(\\d{4})`));
     if (dateOnly) {
       const [, d, y] = dateOnly;
-      const t = new Date(Number(y), mo - 1, Number(d)).getTime();
+      const t = Date.UTC(Number(y), mo - 1, Number(d));
       if (!Number.isNaN(t)) return t;
     }
     break;

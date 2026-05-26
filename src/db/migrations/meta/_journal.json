@@ -85,6 +85,34 @@
       "when": 1779772800000,
       "tag": "0011_provider_api_source",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1779820000000,
+      "tag": "0012_message_gen_timing",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
+      "when": 1779830000000,
+      "tag": "0013_message_finish_reason",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "6",
+      "when": 1779840000000,
+      "tag": "0014_chat_events",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "6",
+      "when": 1779850000000,
+      "tag": "0015_chat_compact_summary",
+      "breakpoints": true
     }
   ]
 }
