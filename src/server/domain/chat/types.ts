@@ -170,6 +170,13 @@ export interface EditMessageParams {
   content: string;
 }
 
+export interface CompactParams {
+  username: string;
+  chatId: string;
+  /** RP-tuned /compact steering; falls back to the preset's compaction.instructions, then a default. */
+  instructions?: string | undefined;
+}
+
 export interface ChatService {
   create(params: CreateChatParams): Promise<{ chatId: string }>;
   /** The caller's chats, newest-updated first (owner-scoped). Drives the chat-list rail. */
@@ -192,6 +199,9 @@ export interface ChatService {
   selectVariant(params: SelectVariantParams): Promise<MessageView[]>;
   /** Edit a message's content in place (+ the active variant). No model call; re-seeds the sdk session. */
   editMessage(params: EditMessageParams): Promise<MessageView[]>;
+  /** Manually compact an agent-sdk chat's session (steered `/compact`). No-op (compacted:false) for
+   *  openrouter chats or a chat with no session yet. The lever for compaction mode "off". */
+  compact(params: CompactParams): Promise<{ compacted: boolean }>;
 }
 
 // Thrown when a chat doesn't exist or isn't owned by the caller. The trpc layer maps

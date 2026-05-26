@@ -4,6 +4,7 @@ import { createDb, type Db, runMigrations } from "../../../db/client";
 import {
   characters,
   characterVersions,
+  chatEvents,
   chats,
   messages,
   messageVariants,
@@ -140,5 +141,99 @@ describe("swipe provenance", () => {
     expect(tip?.tokensIn).toBe(200);
     expect(tip?.tokensOut).toBe(10);
     expect(tip?.model).toBe("claude-opus-4-7");
+  });
+
+  test("a turn's structured events are persisted to chat_events (linked to the message)", async () => {
+    const turnWithEvent: ChatTurnResult = {
+      ...fakeTurn(),
+      events: [
+        {
+          kind: "compaction",
+          at: 1_700_000_000_000,
+          trigger: "auto",
+          preTokens: 100_000,
+          postTokens: 40_000,
+          durationMs: 6_000,
+          preserved: false,
+        },
+      ],
+    };
+    const svc = createChatService(db, { runTurn: async () => turnWithEvent });
+    await seed();
+
+    await svc.swipe({ username: "u1", chatId: "ch1", expectedSeq: 2 });
+
+    const events = await db.select().from(chatEvents).where(eq(chatEvents.chatId, "ch1"));
+    expect(events).toHaveLength(1);
+    expect(events[0]?.kind).toBe("compaction");
+    expect(events[0]?.messageId).toBe("m2");
+    expect(events[0]?.at).toBe(1_700_000_000_000);
+  });
+});
+
+describe("manual compaction", () => {
+  test("compact() runs a /compact turn on an agent-sdk chat and records the compaction event", async () => {
+    const compactTurn: ChatTurnResult = {
+      ...fakeTurn(),
+      reply: "",
+      events: [
+        {
+          kind: "compaction",
+          at: 1_700_000_000_000,
+          trigger: "manual",
+          preTokens: 120_000,
+          postTokens: 30_000,
+          durationMs: 8_000,
+          preserved: false,
+        },
+      ],
+    };
+    let sawPrompt = "";
+    const svc = createChatService(db, {
+      runTurn: async (p) => {
+        sawPrompt = p.prompt;
+        return compactTurn;
+      },
+    });
+    await seed(); // ch1 is agent-sdk with sessionId "sess-1"
+
+    const result = await svc.compact({ username: "u1", chatId: "ch1" });
+
+    expect(result.compacted).toBe(true);
+    expect(sawPrompt.startsWith("/compact ")).toBe(true); // steered compaction prompt
+    const events = await db.select().from(chatEvents).where(eq(chatEvents.chatId, "ch1"));
+    expect(events).toHaveLength(1);
+    expect(events[0]?.kind).toBe("compaction");
+    expect(events[0]?.messageId).toBeNull(); // compaction isn't tied to a message
+    // no message row was added (compaction doesn't generate)
+    const msgs = await db.select().from(messages).where(eq(messages.chatId, "ch1"));
+    expect(msgs).toHaveLength(2);
+  });
+
+  test("compact() is a no-op for a chat with no session yet", async () => {
+    const svc = createChatService(db, { runTurn: async () => fakeTurn() });
+    await db.insert(users).values({ id: "u1", handle: "u1", createdAt: Date.now() });
+    await db
+      .insert(characters)
+      .values({ id: "c1", ownerId: "u1", handle: "p", createdAt: Date.now() });
+    await db.insert(characterVersions).values({
+      id: "v1",
+      characterId: "c1",
+      version: 1,
+      name: "P",
+      description: "d",
+      createdAt: Date.now(),
+    });
+    await db.update(characters).set({ currentVersionId: "v1" }).where(eq(characters.id, "c1"));
+    await db.insert(chats).values({
+      id: "ch2",
+      ownerId: "u1",
+      title: "t",
+      characterVersionId: "v1",
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    }); // no sessionId
+
+    expect(await svc.compact({ username: "u1", chatId: "ch2" })).toEqual({ compacted: false });
   });
 });

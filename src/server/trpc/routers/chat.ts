@@ -135,4 +135,12 @@ export const chatRouter = t.router({
     .mutation(({ ctx, input }) =>
       ctx.services.chat.editMessage({ username: ctx.username, ...input }).catch(domainErrorToTrpc),
     ),
+
+  // Manually compact an agent-sdk chat's session (steered /compact). { compacted: false } if the
+  // chat can't be compacted (openrouter, or no session yet).
+  compact: publicProcedure
+    .input(z.object({ chatId: z.string().min(1), instructions: z.string().min(1).optional() }))
+    .mutation(({ ctx, input }) =>
+      ctx.services.chat.compact({ username: ctx.username, ...input }).catch(domainErrorToTrpc),
+    ),
 });

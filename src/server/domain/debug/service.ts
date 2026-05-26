@@ -3,13 +3,14 @@
 // Owner-agnostic on purpose: it's ops/verification tooling behind the DEBUG_TOKEN gate, not a
 // user-facing read path (the chat UI uses the tRPC chat router, which IS owner-scoped).
 
-import { asc, eq, getTableName, inArray, sql } from "drizzle-orm";
+import { asc, desc, eq, getTableName, inArray, sql } from "drizzle-orm";
 import type { SQLiteTable } from "drizzle-orm/sqlite-core";
 import type { Db } from "../../../db/client";
 import {
   assets,
   characters,
   characterVersions,
+  chatEvents,
   chats,
   embeddings,
   messages,
@@ -51,6 +52,8 @@ export interface ChatInspection {
   messages: (MessageRow & { variants: VariantRow[] })[];
   /** session_entries frames for the chat's current sessionId (the agent-sdk resume substrate). */
   sessionFrameCount: number;
+  /** Recent durable events for the chat (compaction/retry/rate-limit/…), newest first. */
+  recentEvents: (typeof chatEvents.$inferSelect)[];
 }
 
 export interface DebugService {
@@ -74,6 +77,7 @@ const COUNTED_TABLES: SQLiteTable[] = [
   presets,
   presetVersions,
   sessionEntries,
+  chatEvents,
   embeddings,
   assets,
   tags,
@@ -120,7 +124,14 @@ export function createDebugService(db: Db): DebugService {
       const chatRow =
         (await db.select().from(chats).where(eq(chats.id, chatId)).limit(1))[0] ?? null;
       if (chatRow === null) {
-        return { found: false, chat: null, character: null, messages: [], sessionFrameCount: 0 };
+        return {
+          found: false,
+          chat: null,
+          character: null,
+          messages: [],
+          sessionFrameCount: 0,
+          recentEvents: [],
+        };
       }
 
       const character =
@@ -167,12 +178,20 @@ export function createDebugService(db: Db): DebugService {
         sessionFrameCount = Number(rows[0]?.n ?? 0);
       }
 
+      const recentEvents = await db
+        .select()
+        .from(chatEvents)
+        .where(eq(chatEvents.chatId, chatId))
+        .orderBy(desc(chatEvents.at))
+        .limit(50);
+
       return {
         found: true,
         chat: chatRow,
         character,
         messages: msgRows.map((m) => ({ ...m, variants: byMessage.get(m.id) ?? [] })),
         sessionFrameCount,
+        recentEvents,
       };
     },
   };

@@ -84,6 +84,12 @@ export interface ClaudeGenerationOverrides {
    *  when the preset enables thinking — then it drives depth via the typed `thinking`/`effort`
    *  Options instead (those don't bite while DISABLE_THINKING is set). undefined ⇒ off (default). */
   disableThinking?: boolean | undefined;
+  /** Disable the SDK's auto-compaction (CLAUDE_CODE → DISABLE_AUTO_COMPACT="1") — set for compaction
+   *  mode "off", where the owner triggers `chat.compact` manually. undefined ⇒ auto-compaction ON. */
+  disableAutoCompact?: boolean | undefined;
+  /** Tune WHEN auto-compaction fires, as a PERCENT of the context window
+   *  (CLAUDE_AUTOCOMPACT_PCT_OVERRIDE). Only meaningful in "auto" mode. undefined ⇒ the SDK default. */
+  autoCompactPct?: number | undefined;
 }
 
 /**
@@ -130,6 +136,11 @@ export function buildClaudeSdkEnv(
     // CLAUDE_CODE_MAX_OUTPUT_TOKENS export can't silently steer chats — same discipline as CLAUDE_EFFORT.
     CLAUDE_CODE_MAX_OUTPUT_TOKENS:
       overrides.maxOutputTokens !== undefined ? String(overrides.maxOutputTokens) : undefined,
+    // Compaction levers (compaction mode "off" disables auto; thresholdPct tunes "auto"). Always
+    // set so an ambient export can't steer it — same discipline as the knobs above.
+    DISABLE_AUTO_COMPACT: overrides.disableAutoCompact === true ? "1" : undefined,
+    CLAUDE_AUTOCOMPACT_PCT_OVERRIDE:
+      overrides.autoCompactPct !== undefined ? String(overrides.autoCompactPct) : undefined,
   };
 }
 
@@ -196,6 +207,9 @@ export function buildClaudeOpenRouterEnv(
     // Per-turn reply cap from the preset (mirrors sub mode — same discipline, neutralizes ambient).
     CLAUDE_CODE_MAX_OUTPUT_TOKENS:
       overrides.maxOutputTokens !== undefined ? String(overrides.maxOutputTokens) : undefined,
+    DISABLE_AUTO_COMPACT: overrides.disableAutoCompact === true ? "1" : undefined,
+    CLAUDE_AUTOCOMPACT_PCT_OVERRIDE:
+      overrides.autoCompactPct !== undefined ? String(overrides.autoCompactPct) : undefined,
     // The OpenRouter Anthropic-skin trio.
     ANTHROPIC_API_KEY: "",
     ANTHROPIC_BASE_URL: "https://openrouter.ai/api",

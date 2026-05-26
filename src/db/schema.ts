@@ -281,6 +281,30 @@ export const messageVariants = sqliteTable(
   (t) => [uniqueIndex("message_variants_msg_idx_unq").on(t.messageId, t.idx)],
 );
 
+// Durable per-chat event history (compaction / api_retry / rate_limit / status / auth_status) — the
+// TurnEvent[] the runner returns, persisted so the record survives a restart (the in-memory log
+// ring doesn't). METADATA only (never RP content). `at` is the event's epoch-ms; `data` is the full
+// TurnEvent payload as json. messageId links to the turn's assistant message (SET NULL if it goes).
+export const chatEvents = sqliteTable(
+  "chat_events",
+  {
+    id: text("id").primaryKey(),
+    chatId: text("chat_id")
+      .notNull()
+      .references(() => chats.id, { onDelete: "cascade" }), // events die with the chat
+    messageId: text("message_id").references((): AnySQLiteColumn => messages.id, {
+      onDelete: "set null",
+    }),
+    kind: text("kind", {
+      enum: ["compaction", "api_retry", "rate_limit", "status", "auth_status"],
+    }).notNull(),
+    at: integer("at").notNull(), // epoch-ms UTC (TurnEvent.at)
+    data: text("data", { mode: "json" }).notNull(), // the full TurnEvent payload (metadata)
+    createdAt: integer("created_at").notNull(),
+  },
+  (t) => [index("chat_events_chat_idx").on(t.chatId, t.at)],
+);
+
 // ───────────────────────── World info (explicit attachment, never keyword-scanned) ─────────────────────────
 export const worldBooks = sqliteTable("world_books", {
   id: text("id").primaryKey(),

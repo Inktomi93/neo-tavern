@@ -251,8 +251,20 @@ export function toSdkGeneration(generation: GenerationParams | undefined): {
   if (g.maxBudgetUsd !== undefined) {
     options.maxBudgetUsd = g.maxBudgetUsd;
   }
+  // Compaction: "off" disables the SDK's auto-compaction (owner triggers chat.compact); "auto"
+  // (default) leaves it on, with thresholdPct → the percent-of-window override when set.
+  const compactionOff = g.compaction?.mode === "off";
+  const autoCompactPct =
+    !compactionOff && g.compaction?.thresholdPct !== undefined
+      ? Math.round(g.compaction.thresholdPct * 100)
+      : undefined;
   return {
-    envOverrides: { maxOutputTokens: g.maxOutputTokens, disableThinking: !thinkingOn },
+    envOverrides: {
+      maxOutputTokens: g.maxOutputTokens,
+      disableThinking: !thinkingOn,
+      disableAutoCompact: compactionOff ? true : undefined,
+      autoCompactPct,
+    },
     options,
   };
 }

@@ -99,6 +99,13 @@
       "when": 1779830000000,
       "tag": "0013_message_finish_reason",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "6",
+      "when": 1779840000000,
+      "tag": "0014_chat_events",
+      "breakpoints": true
     }
   ]
 }

@@ -39,6 +39,20 @@ describe("agent-sdk generation translation (toSdkGeneration)", () => {
     expect(envOverrides.maxOutputTokens).toBe(1024);
     expect(options.maxBudgetUsd).toBe(0.25);
   });
+
+  test("compaction off → disableAutoCompact; auto+threshold → autoCompactPct (fraction→percent)", () => {
+    const off = toSdkGeneration({ compaction: { mode: "off" } });
+    expect(off.envOverrides.disableAutoCompact).toBe(true);
+    expect(off.envOverrides.autoCompactPct).toBeUndefined();
+
+    const auto = toSdkGeneration({ compaction: { mode: "auto", thresholdPct: 0.85 } });
+    expect(auto.envOverrides.disableAutoCompact).toBeUndefined();
+    expect(auto.envOverrides.autoCompactPct).toBe(85);
+
+    // default (no compaction config) leaves auto-compaction alone
+    const none = toSdkGeneration({});
+    expect(none.envOverrides.disableAutoCompact).toBeUndefined();
+  });
 });
 
 describe("openrouter reasoning translation (toReasoningEffort)", () => {

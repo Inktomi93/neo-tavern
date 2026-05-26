@@ -34,6 +34,18 @@ export const generationParamsSchema = z.object({
   // Hard per-turn cost cap — AGENT-SDK-ONLY (typed `maxBudgetUsd`; returns error_max_budget_usd).
   // The openrouter runner has no per-request budget, so it's a no-op there.
   maxBudgetUsd: z.number().positive().optional(),
+  // Compaction — AGENT-SDK-ONLY (the openrouter runner is stateless, rebuilt from canon, so there's
+  // nothing to compact). "auto" (default) = the SDK's own auto-compaction, with `thresholdPct`
+  // tuning when it fires (CLAUDE_AUTOCOMPACT_PCT_OVERRIDE). "off" = disable auto-compaction
+  // (DISABLE_AUTO_COMPACT); the owner then triggers `chat.compact` manually — steered by
+  // `instructions` (an RP-tuned /compact prompt) — when the context-fill meter runs high.
+  compaction: z
+    .object({
+      mode: z.enum(["auto", "off"]).optional(),
+      thresholdPct: z.number().min(0.5).max(0.99).optional(),
+      instructions: z.string().optional(),
+    })
+    .optional(),
 });
 export type GenerationParams = z.infer<typeof generationParamsSchema>;
 

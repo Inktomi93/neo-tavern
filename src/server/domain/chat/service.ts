@@ -5,6 +5,7 @@ import {
   characters,
   characterVersions,
   characterVersionWorldEntries,
+  chatEvents,
   chats,
   chatWorldEntries,
   messages,
@@ -29,7 +30,7 @@ import {
 import { getLog } from "../../observability/logger";
 import { runChatTurn } from "../../providers/claude-sdk";
 import { runChatCompletionTurn, runRawTurn } from "../../providers/openrouter";
-import { type ChatTurnResult, TurnError } from "../../providers/turn";
+import { type ChatTurnResult, TurnError, type TurnEvent } from "../../providers/turn";
 import { newId } from "../_shared/ids";
 import { withChatLock } from "../_shared/lock";
 import { ensureUser } from "../_shared/users";
@@ -43,6 +44,7 @@ import {
   ChatOperationError,
   type ChatService,
   type ChatSummary,
+  type CompactParams,
   type CreateChatParams,
   type EditMessageParams,
   type ForkChatParams,
@@ -71,6 +73,11 @@ const RECENT_MESSAGE_WINDOW = 6;
 // a messages row — it only prompts the model to write the character's first message.
 const OPEN_SCENE_PROMPT =
   "[Open the scene: write your first message to me, in character — set the scene and greet me as your character would. Stay fully in character.]";
+
+// Default steering for a manual `/compact` (compaction mode "off"). RP-tuned vs the SDK's generic
+// coding-agent summary (which recalls early canon unreliably for tool-less RP — docs/sdk-notes.md).
+const DEFAULT_COMPACT_INSTRUCTIONS =
+  "Summarize the roleplay so far for continuation: preserve each character's voice and persona, the relationships and their current state, established facts and world details, unresolved threads, and the present scene/location. Be concise but lossless on canon — names, commitments, and specific details must survive.";
 
 export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatService {
   const runTurn = deps.runTurn ?? runChatTurn;
@@ -148,6 +155,31 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
       counts.set(v.messageId, Number(v.n));
     }
     return rows.map((r) => toView(r, counts.get(r.id) ?? 0));
+  }
+
+  // Persist a turn's structured events (compaction / retry / rate-limit / status / auth) to the
+  // durable chat_events history — the in-memory log ring resets on restart, this doesn't. Metadata
+  // only (the TurnEvent payloads carry no RP content). No-op when a turn produced none.
+  async function recordTurnEvents(
+    chatId: string,
+    messageId: string | null,
+    events: TurnEvent[],
+  ): Promise<void> {
+    if (events.length === 0) {
+      return;
+    }
+    const now = Date.now();
+    await db.insert(chatEvents).values(
+      events.map((event) => ({
+        id: newId(),
+        chatId,
+        messageId,
+        kind: event.kind,
+        at: event.at,
+        data: event,
+        createdAt: now,
+      })),
+    );
   }
 
   async function maxSeq(chatId: string): Promise<number> {
@@ -368,8 +400,9 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
         systemPrompt: assemblePrompt(promptConfig, assembleCtx),
         generation: promptConfig.params,
       });
+      const openingMsgId = newId();
       await db.insert(messages).values({
-        id: newId(),
+        id: openingMsgId,
         chatId,
         seq: 1,
         role: "assistant",
@@ -393,6 +426,7 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
         costUsd: turn.usage.costUsd,
         createdAt: Date.now(),
       });
+      await recordTurnEvents(chatId, openingMsgId, turn.events);
       await db
         .update(chats)
         .set({
@@ -690,8 +724,9 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
         throw error; // unexpected (non-provider) failure — let it propagate
       }
 
+      const assistantMsgId = newId();
       await db.insert(messages).values({
-        id: newId(),
+        id: assistantMsgId,
         chatId: params.chatId,
         seq: userSeq + 1,
         role: "assistant",
@@ -715,6 +750,7 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
         costUsd: turn.usage.costUsd,
         createdAt: Date.now(),
       });
+      await recordTurnEvents(params.chatId, assistantMsgId, turn.events);
 
       await db
         .update(chats)
@@ -1167,6 +1203,7 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
           costUsd: turn.usage.costUsd,
         })
         .where(eq(messages.id, tip.id));
+      await recordTurnEvents(params.chatId, tip.id, turn.events);
 
       // agent-sdk: the regen session (seeded → completed, or the fresh greeting session) is now
       // canonical. Drop the pre-swipe session's frames and point the chat at the new one. The
@@ -1299,6 +1336,62 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
     });
   }
 
+  // Manually compact an agent-sdk chat's session via a steered `/compact` turn (the lever for
+  // compaction mode "off"). No-op for openrouter (stateless — nothing to compact) or a chat with no
+  // session yet. /compact compacts the transcript without generating a reply; we keep canon (the
+  // messages) untouched and just repoint the session + record the compaction event.
+  async function compact(params: CompactParams): Promise<{ compacted: boolean }> {
+    const ownerId = await ensureUser(db, params.username);
+    return withChatLock(params.chatId, async () => {
+      const chat = await loadOwnedChat(ownerId, params.chatId);
+      if (chat.api !== "agent-sdk" || chat.sessionId === null) {
+        return { compacted: false };
+      }
+      const [assembleCtx, promptConfig] = await Promise.all([
+        buildAssembleContext(chat),
+        resolveConfig(chat),
+      ]);
+      const routing = resolveTurnRouting(chat, promptConfig);
+      if (routing.runner !== "agent-sdk") {
+        return { compacted: false };
+      }
+      const instructions =
+        params.instructions ??
+        promptConfig.params.compaction?.instructions ??
+        DEFAULT_COMPACT_INSTRUCTIONS;
+      try {
+        const turn = await runTurn({
+          prompt: `/compact ${instructions}`,
+          model: routing.model,
+          source: routing.source,
+          sessionStore: new DbSessionStore(db, params.chatId),
+          systemPrompt: assemblePrompt(promptConfig, assembleCtx),
+          generation: promptConfig.params,
+          resume: chat.sessionId,
+        });
+        await db
+          .update(chats)
+          .set({ sessionId: turn.sessionId || chat.sessionId, updatedAt: Date.now() })
+          .where(eq(chats.id, params.chatId));
+        await recordTurnEvents(params.chatId, null, turn.events);
+        getLog().info(
+          { chatId: params.chatId, events: turn.events.length },
+          "chat: compacted (manual)",
+        );
+        return { compacted: true };
+      } catch (error) {
+        if (error instanceof TurnError) {
+          getLog().warn(
+            { chatId: params.chatId, kind: error.kind },
+            "chat: manual compaction failed",
+          );
+          return { compacted: false };
+        }
+        throw error;
+      }
+    });
+  }
+
   return {
     create,
     listChats,
@@ -1311,5 +1404,6 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
     swipe,
     selectVariant,
     editMessage,
+    compact,
   };
 }
