@@ -80,8 +80,19 @@ export async function listOpenRouterModels(force = false): Promise<RawModel[]> {
   if (!force && catalogCache !== null && Date.now() - catalogCache.at < CATALOG_TTL_MS) {
     return catalogCache.models;
   }
-  const res = await fetch(`${OPENROUTER_BASE_URL}/models`);
+  let res: Response;
+  try {
+    res = await fetch(`${OPENROUTER_BASE_URL}/models`);
+  } catch (error) {
+    // Network failure (DNS/connection) — surface it in /api/_debug/errors, not just the throw.
+    getLog().error(
+      { err: error instanceof Error ? error.message : String(error) },
+      "openrouter: model catalog fetch failed",
+    );
+    throw error;
+  }
   if (!res.ok) {
+    getLog().error({ status: res.status }, "openrouter: model catalog fetch failed");
     throw new Error(`OpenRouter /models returned ${res.status}`);
   }
   const parsed = catalogSchema.parse(await res.json());
@@ -94,6 +105,8 @@ export async function listOpenRouterModels(force = false): Promise<RawModel[]> {
     inputModalities: m.architecture?.input_modalities ?? [],
   }));
   catalogCache = { at: Date.now(), models };
+  // Infrequent (1h cache) so info-level is fine — a notable refresh, not per-op noise.
+  getLog().info({ count: models.length }, "openrouter: model catalog refreshed");
   return models;
 }
 

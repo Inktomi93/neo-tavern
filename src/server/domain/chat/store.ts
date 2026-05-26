@@ -2,6 +2,7 @@ import type { SessionKey, SessionStore, SessionStoreEntry } from "@anthropic-ai/
 import { and, asc, desc, eq } from "drizzle-orm";
 import type { Db } from "../../../db/client";
 import { sessionEntries } from "../../../db/schema";
+import { getLog } from "../../observability/logger";
 import { newId } from "../_shared/ids";
 
 // The main transcript has no SessionKey.subpath. We store "" (NOT null) for it so the
@@ -59,6 +60,18 @@ export class DbSessionStore implements SessionStore {
     // partial unique index (SDK replays uuids on retry / import); frames without a
     // uuid (titles, mode markers) always insert. onConflictDoNothing covers both.
     await this.db.insert(sessionEntries).values(rows).onConflictDoNothing();
+
+    // Per-op trace of the resume substrate growing — metadata only (frame types/counts, never
+    // content). Makes session growth + compaction curl-able at LOG_LEVEL=debug.
+    getLog().debug(
+      {
+        chatId: this.chatId,
+        sessionId: key.sessionId,
+        added: rows.length,
+        types: rows.map((r) => r.type),
+      },
+      "session store: appended frames",
+    );
   }
 
   async load(key: SessionKey): Promise<SessionStoreEntry[] | null> {
@@ -68,6 +81,10 @@ export class DbSessionStore implements SessionStore {
       .where(and(eq(sessionEntries.sessionId, key.sessionId), this.subpathFilter(key.subpath)))
       .orderBy(asc(sessionEntries.seq));
 
+    getLog().debug(
+      { chatId: this.chatId, sessionId: key.sessionId, frames: rows.length },
+      "session store: loaded frames for resume",
+    );
     if (rows.length === 0) {
       return null; // "never written" — the SDK starts a fresh session
     }

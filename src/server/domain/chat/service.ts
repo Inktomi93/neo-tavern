@@ -321,7 +321,24 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
       const systemPrompt = assemblePrompt(promptConfig, assembleCtx);
 
       // The single point where model + provider are chosen (no hardcoded model anywhere here).
-      const routing = resolveTurnRouting(chat, promptConfig);
+      // A throw here is a config invariant (incoherent/unimplemented combo) — log it with the
+      // chat context the pure resolver lacks, then let it propagate to the tRPC error sink.
+      let routing: ReturnType<typeof resolveTurnRouting>;
+      try {
+        routing = resolveTurnRouting(chat, promptConfig);
+      } catch (error) {
+        getLog().error(
+          {
+            chatId: params.chatId,
+            mode: chat.mode,
+            provider: chat.provider,
+            model: chat.model,
+            err: error instanceof Error ? error.message : String(error),
+          },
+          "chat: turn routing failed",
+        );
+        throw error;
+      }
 
       // Prompt assembly + routing are otherwise opaque — log what they produced so "why did/didn't
       // this world-info fire / which persona / which model+provider / how big is the cached prefix"

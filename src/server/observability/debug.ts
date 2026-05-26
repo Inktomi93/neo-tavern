@@ -2,6 +2,7 @@ import { Buffer } from "node:buffer";
 import { timingSafeEqual } from "node:crypto";
 import process from "node:process";
 import type { Hono } from "hono";
+import { DEFAULT_CHAT_MODEL_ID, DEFAULT_RAW_MODEL_ID } from "../../shared/models";
 import { env } from "../env";
 import { APP_VERSION } from "../version";
 import { logRing, recentRequests } from "./logger";
@@ -76,7 +77,16 @@ export function registerDebugRoutes(app: Hono): void {
       pid: process.pid,
       uptimeSec: Math.round(process.uptime()),
       memory: process.memoryUsage(),
-      providers: { openrouter: env.OPENROUTER_API_KEY !== undefined },
+      providers: {
+        // sdk-mode auth is the host `claude login` (Max sub) — can't cheaply probe here without a
+        // sub query; report the default model (verify auth via `pnpm verify:claude`).
+        sdkMode: { defaultModel: DEFAULT_CHAT_MODEL_ID },
+        // raw-mode (OpenRouter) readiness = key present; the live catalog is a separate fetch.
+        openrouter: {
+          configured: env.OPENROUTER_API_KEY !== undefined,
+          defaultModel: DEFAULT_RAW_MODEL_ID,
+        },
+      },
     }),
   );
 
