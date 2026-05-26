@@ -80,11 +80,20 @@ mode.
   subprocess to babysit, and editing stays trivial (every turn already resumes from a
   branch point). A warm streaming session (~5ms/msg, proven) is a future toggle, not
   built. The DB-backed SessionStore is canon; the SDK's local JSONL is transient scratch.
-- **Cache strategy:** sdk mode — the runtime places `cache_control`, defaults to a
-  **1h TTL** (env-overridable: `FORCE_PROMPT_CACHING_5M` / `ENABLE_PROMPT_CACHING_1H`),
-  and the cached prefix survives resume *and* fork (measured) — so stateless costs no
-  cache. raw mode — we place explicit breakpoints: stable system+character, rolling
-  history every N turns, fresh tail.
+- **Cache strategy (measured, May 2026 — supersedes the earlier env-knob claim):**
+  *Agent-SDK runner* (Claude Sub + Claude API) — the runtime places `cache_control` itself
+  and the cached prefix survives resume *and* fork (measured), so stateless costs no cache.
+  Its TTL is **SDK-internal** (the `extended_cache_ttl` beta — effectively ~1h; there is **no**
+  `FORCE_PROMPT_CACHING_5M`/`ENABLE_PROMPT_CACHING_1H` env knob — that was wrong). On the FREE
+  sub this is allowance, not dollars; for **paid Claude via OpenRouter the 1h write costs ~2×**,
+  so the cost-controlled paid-Claude path is the **OpenRouter Chat Completions** runner.
+  *OpenRouter runner* (chat-completions / responses) — caching is **Anthropic-only** (`cache_control`
+  is an Anthropic feature; other providers auto-cache). We place a **per-block `cache_control` on the
+  static system block** at the **5m default TTL** (1h needs the `anthropic-beta: extended-cache-ttl`
+  header the SDK doesn't send → no cache; and costs ~2×), and **pin `provider:{order:["Anthropic"]}`**
+  for Anthropic models (an unpinned route can land on an endpoint that ignores `cache_control` —
+  measured: 0 cache). Proven: cacheWrite→cacheRead, ~11× cheaper on the read. (History-depth
+  breakpoints à la SillyTavern → #48.)
 
 ## Locked decisions (current — supersedes the original brief where noted)
 

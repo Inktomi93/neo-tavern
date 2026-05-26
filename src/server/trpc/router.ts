@@ -16,6 +16,16 @@ export const appRouter = t.router({
   })),
   // raw-mode model picker — the LIVE OpenRouter catalog (fetched + cached via domain → provider).
   rawModels: publicProcedure.query(({ ctx }) => ctx.services.models.rawCatalog()),
+  // OpenRouter account info (the SDK's analytics/credits/providers/endpoints/generations surface).
+  orCredits: publicProcedure.query(({ ctx }) => ctx.services.models.credits()),
+  orActivity: publicProcedure.query(({ ctx }) => ctx.services.models.activity()),
+  orProviders: publicProcedure.query(({ ctx }) => ctx.services.models.providers()),
+  orEndpoints: publicProcedure
+    .input(z.object({ model: z.string().min(1) }))
+    .query(({ ctx, input }) => ctx.services.models.endpoints(input.model)),
+  orGenerationCost: publicProcedure
+    .input(z.object({ id: z.string().min(1) }))
+    .query(({ ctx, input }) => ctx.services.models.generationCost(input.id)),
   chat: chatRouter,
   corpus: corpusRouter,
   search: searchRouter,

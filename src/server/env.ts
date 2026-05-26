@@ -141,6 +141,12 @@ function ephemeralClaudeConfigDir(): string {
  *
  * Takes the key as an argument (required, non-empty) rather than reading it here, so the function
  * is pure + unit-testable and the "key required" invariant is explicit at the call site.
+ *
+ * COST NOTE: this path inherits the Agent SDK's INTERNAL cache TTL (the `extended_cache_ttl` beta —
+ * effectively ~1h), which is NOT env-overridable (there is no FORCE_PROMPT_CACHING_5M knob). 1h
+ * cache writes cost ~2× the 5m rate, so for cost-sensitive PAID Claude prefer the OpenRouter Chat
+ * Completions runner (api="chat-completions" + an anthropic/* model), where we control the 5m
+ * per-block cache_control directly. Mode 2 trades that cost lever for full-pipeline reuse.
  */
 export function buildClaudeOpenRouterEnv(
   openRouterApiKey: string,
