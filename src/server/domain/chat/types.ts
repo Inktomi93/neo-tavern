@@ -53,7 +53,8 @@ export interface ChatSummary {
 export interface ChatDetail extends ChatSummary {
   characterId: string | null;
   characterVersionId: string;
-  personaId: string | null;
+  personaId: string | null; // the ACTIVE persona (user-field {{user}})
+  pinnedPersonaId: string | null; // the persona pinned at open (card {{user}}); null → falls back to personaId
   presetVersionId: string | null;
   parentChatId: string | null;
   forkedAt: number | null;

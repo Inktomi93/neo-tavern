@@ -275,17 +275,22 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
       .limit(1);
     const cv = cvRows[0];
 
-    // The chat's persona. Today it serves as BOTH the pinned (card-field) and active
-    // (user-field) persona; they diverge once persona-switching + a pinned column land.
-    let persona: AssemblePersona | null = null;
-    if (chat.personaId !== null) {
-      const personaRows = await db
+    // {{user}} resolves against the ACTIVE persona (chats.personaId) for user-authored sections and
+    // the PINNED persona (chats.pinnedPersonaId, captured at open) for card-derived ones — so
+    // switching who you play mid-chat never rewrites the card's {{user}}. pinnedPersonaId null →
+    // falls back to the active persona (chats opened before the column / no persona at open).
+    const loadPersona = async (id: string | null): Promise<AssemblePersona | null> => {
+      if (id === null) return null;
+      const rows = await db
         .select({ name: personas.name, description: personas.description })
         .from(personas)
-        .where(eq(personas.id, chat.personaId))
+        .where(eq(personas.id, id))
         .limit(1);
-      persona = personaRows[0] ?? null;
-    }
+      return rows[0] ?? null;
+    };
+    const activePersona = await loadPersona(chat.personaId);
+    const pinnedPersona =
+      chat.pinnedPersonaId === null ? activePersona : await loadPersona(chat.pinnedPersonaId);
 
     const wiSelect = {
       content: worldEntries.content,
@@ -323,8 +328,8 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
             postHistoryInstructions: cv.postHistoryInstructions,
           }
         : { name: "Assistant", description: "" },
-      pinnedPersona: persona,
-      activePersona: persona,
+      pinnedPersona,
+      activePersona,
       worldEntries: [
         ...chatWi.map((r) => toWorldEntry(r, "chat")),
         ...cvWi.map((r) => toWorldEntry(r, "character")),
@@ -637,6 +642,7 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
       characterId: cv?.characterId ?? null,
       characterVersionId: chat.characterVersionId,
       personaId: chat.personaId,
+      pinnedPersonaId: chat.pinnedPersonaId,
       presetVersionId: chat.presetVersionId,
       parentChatId: chat.parentChatId,
       forkedAt: chat.forkedAt,
@@ -980,6 +986,7 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
       title: `${source.title} (fork)`,
       characterVersionId: source.characterVersionId, // the PIN — shared immutable version, not a copy
       personaId: source.personaId,
+      pinnedPersonaId: source.pinnedPersonaId, // preserve the pinned identity across the fork
       presetVersionId: source.presetVersionId,
       api: params.targetApi,
       source: params.targetSource,

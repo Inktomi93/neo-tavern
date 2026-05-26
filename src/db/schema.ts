@@ -148,6 +148,13 @@ export const chats = sqliteTable(
       .notNull()
       .references(() => characterVersions.id, { onDelete: "restrict" }),
     personaId: text("persona_id").references(() => personas.id, { onDelete: "set null" }),
+    // The persona pinned at chat open — what the CARD's {{user}} references resolve against. It
+    // diverges from the (active) personaId once persona-switching lands, so switching who you play
+    // mid-chat never retroactively rewrites the card's {{user}}. Null → falls back to personaId
+    // (chats opened before this column / no persona chosen at open). SET NULL, like personaId.
+    pinnedPersonaId: text("pinned_persona_id").references(() => personas.id, {
+      onDelete: "set null",
+    }),
     // The chat's default preset config for its next turn. RESTRICT preserves provenance.
     presetVersionId: text("preset_version_id").references(
       (): AnySQLiteColumn => presetVersions.id,

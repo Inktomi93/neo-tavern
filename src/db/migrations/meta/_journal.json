@@ -120,6 +120,13 @@
       "when": 1779860000000,
       "tag": "0016_assets_cas_and_image_embeddings",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "6",
+      "when": 1779828336893,
+      "tag": "0017_chat_pinned_persona",
+      "breakpoints": true
     }
   ]
 }

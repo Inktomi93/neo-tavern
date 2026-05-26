@@ -37,8 +37,8 @@ only ✅-tracking in the repo; keep it one line.
   one unified `GenerationParams` vocab, canonical epoch-ms-UTC time, managed compaction +
   cross-mode `{{compact_summary}}`, persisted `chat_events`, the preset CRUD service (#43,
   `preset.*` router), the content-addressed asset store (#47 infra), and the `/api/_debug` read
-  surface. **Remaining backend:** the `{{memory}}` marker (#40); `pinnedPersonaId` (#44) is a
-  small add. **The chat frontend that renders all of it is the main thing left** — see backlog.
+  surface, `chats.pinnedPersonaId` (#44). **Remaining backend:** the `{{memory}}` marker (#40).
+  **The chat frontend that renders all of it is the main thing left** — see backlog.
 - **Phase 6 — analytics:** not started (one chart at a time, only for a real question).
 
 ## Deferred backlog (what's parked + where it belongs)
@@ -83,10 +83,11 @@ only ✅-tracking in the repo; keep it one line.
   marker injects it and the stateless openrouter runner "picks up from the compaction point" (history
   from seq > anchor), carried across `forkChat`. Canon (`messages`) is never touched — pre-compaction
   stays fully viewable. (Owned-context `load()` still optional/deferred.)
-- **#44 — `chats.pinnedPersonaId`** (true persona-switch divergence): today one `personaId` serves
-  both the pinned (card `{{user}}`) and active (user-field `{{user}}`) roles — `assemblePrompt`
-  already resolves them separately. Add an immutable `pinnedPersonaId` (captured at chat open) so
-  they diverge. Small migration + wire `buildAssembleContext`.
+- **#44 — `chats.pinnedPersonaId`** ✅ **DONE** (migration 0017): the card's `{{user}}` resolves
+  against the pinned persona, the persona marker / literal sections against the active `personaId`,
+  so switching who you play mid-chat never rewrites the card's references. `buildAssembleContext`
+  loads them distinctly (pinned null → falls back to active); `forkChat` preserves the pin. The
+  active-persona-switch *API* is still frontend (today both are null/equal at create).
 - **#48 — raw-mode refinements:** (1) granular raw caching — `cache_control` breakpoints at the
   static/dynamic split / history depth (à la ST), beyond the current static-block 5m directive — still
   deferred (low priority). (2) ✅ **DONE — the persisted `chat_events` table** (migration 0014):
