@@ -59,14 +59,18 @@ transformers.js `session_options`, OS env vars) trip `useNamingConvention`. Two 
   generated migration SQL (see `0001`/`0016`). Migrations are **additive**: never regenerate `0000–N`;
   hand-read the generated SQL (the SQLite differ sometimes recreates more than intended — confirm
   it doesn't drop columns/indexes from earlier migrations).
-- **The drizzle-kit snapshots are FROZEN at `0010`; `0011+` are HAND-WRITTEN** (no snapshot/journal
-  regen). So `drizzle-kit generate` diffs against stale state (it still thinks `chats` has the
-  retired `mode`/`provider` cols) AND it **prompts interactively** (no TTY in CI/web → it errors out).
-  **Don't fight it — hand-write the migration**: copy the proven table-recreate shape from `0007`
-  (SQLite can't `ALTER ADD CONSTRAINT`, so an FK on an existing column = `PRAGMA foreign_keys=OFF` →
-  `__new_*` table → copy → drop → rename → recreate indexes → `ON`), use plain `ALTER TABLE ADD/DROP
-  COLUMN` where possible (`0011`/`0016`), then add the `_journal.json` entry by hand. Validate by
-  running the suite (`freshDb` applies every migration — a wrong column list fails the import tests).
+- **`drizzle-kit generate` WORKS — the snapshot baseline was repaired** (it was frozen at `0010`
+  while `0011–0016` were hand-written, so generate used to diff against stale state — phantom
+  `mode`/`provider` renames — and prompt interactively). Fix: a single accurate **`meta/0016_snapshot.json`**
+  (rebaselined from the current schema; `prevId` → 0010, the `0011–0015` snapshots are intentionally
+  absent — generate loads the highest snapshot as baseline, so the gap is invisible). Snapshots are
+  dev-tooling only (never applied to a DB), so this changed no database. **Going forward: just
+  `pnpm exec drizzle-kit generate --name <x>`** (verified: a no-op diff reports "No schema changes").
+  TWO things still need a hand-edit after generate: (1) **the ANN index** — drizzle can't emit
+  `libsql_vector_idx`, so add the `CREATE INDEX … libsql_vector_idx(...)` line yourself (see `0001`/`0016`);
+  (2) **FK-on-existing-column** recreates — eyeball the generated `__new_*` table-rebuild (the SQLite
+  differ occasionally recreates more than intended). Validate by running the suite (`freshDb` applies
+  every migration). If you ever DO hand-write, also add the `_journal.json` entry by hand.
 - **`pnpm exec tsx`**, not bare `tsx` (not always on PATH).
 
 ## libSQL / native vectors  (VERIFIED — corrected after an over-cautious earlier claim)
