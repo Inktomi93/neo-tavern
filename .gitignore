@@ -35,6 +35,9 @@ tools/cuda/.venv/
 # claude code local settings
 .claude/settings.local.json
 
+# serena (MCP coding toolkit) project cache + config — machine-local tooling, not the project
+.serena/
+
 # local domain reference clones (SillyTavern, Astra, Marinara) — not part of this
 # project; cloned for reference only. The README is tracked (documents how to
 # repopulate); the clones themselves are not.
