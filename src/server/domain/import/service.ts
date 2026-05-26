@@ -324,8 +324,20 @@ export function createImportService(db: Db, deps: ImportServiceDeps): ImportServ
         }
       }
 
-      log.debug(
-        { handle, characterCreated, versionBumped, chatsImported, chatsSkipped, branchesLinked },
+      // INFO so a `pnpm import:st` run shows per-character progress + counts at the default level
+      // (an import is a rare, watched batch job — metadata only, never card/chat content).
+      log.info(
+        {
+          handle,
+          characterCreated,
+          versionBumped,
+          chatsImported,
+          chatsSkipped,
+          messagesImported,
+          variantsImported,
+          worldEntriesImported,
+          branchesLinked,
+        },
         "imported character",
       );
       return {

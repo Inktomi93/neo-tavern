@@ -50,6 +50,16 @@ export const chatRouter = t.router({
         .catch(domainErrorToTrpc),
     ),
 
+  // Dry-run: the system prompt + routing the NEXT turn would use, WITHOUT generating. The
+  // "what will this send / why did this world-info fire" inspector. NOT_FOUND if unowned.
+  previewAssembly: publicProcedure
+    .input(z.object({ chatId: z.string().min(1) }))
+    .query(({ ctx, input }) =>
+      ctx.services.chat
+        .previewAssembly({ username: ctx.username, chatId: input.chatId })
+        .catch(domainErrorToTrpc),
+    ),
+
   send: publicProcedure
     .input(
       z.object({

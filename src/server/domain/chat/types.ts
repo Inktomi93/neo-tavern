@@ -94,6 +94,26 @@ export interface CreateChatParams {
   generateOpeningIfEmpty?: boolean | undefined;
 }
 
+// Dry-run prompt assembly for a chat — what the NEXT turn would send, WITHOUT spending a turn.
+// Owner-scoped (you preview your own chat); returns the assembled system prompt + the trace
+// (which world-info fired, section breakdown, cached-prefix size) + the resolved routing.
+export interface AssemblyPreview {
+  routing: { runner: string; api: ChatApi; source: ChatSource; model: string };
+  preset: "default" | "pinned";
+  /** The assembled system prompt halves (static = cached prefix, dynamic = per-turn suffix). */
+  systemPrompt: { static: string; dynamic: string };
+  trace: {
+    staticChars: number;
+    dynamicChars: number;
+    staticSections: string[];
+    dynamicSections: string[];
+    worldInfoAttached: number;
+    worldInfoIncluded: number;
+    matchedKeys: string[];
+    hasPersona: boolean;
+  };
+}
+
 export interface SendParams {
   username: string;
   chatId: string;
@@ -156,6 +176,8 @@ export interface ChatService {
   listChats(params: { username: string }): Promise<ChatSummary[]>;
   /** One owned chat's metadata (summary + pins/links). Throws ChatNotFoundError if unowned. */
   getChat(params: { username: string; chatId: string }): Promise<ChatDetail>;
+  /** Dry-run: what the next turn's prompt + routing would be, without generating. */
+  previewAssembly(params: { username: string; chatId: string }): Promise<AssemblyPreview>;
   listMessages(params: { username: string; chatId: string }): Promise<MessageView[]>;
   send(params: SendParams): Promise<SendResult>;
   /** Switch a chat's api/source/model in place (the generalized escape valve). Handles the session

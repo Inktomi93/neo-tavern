@@ -141,4 +141,31 @@ describe("chat read paths", () => {
     expect(msg?.provider).toBe("agent-sdk/max-pro-sub");
     expect(msg?.costUsd).toBeCloseTo(0.0007);
   });
+
+  test("previewAssembly dry-runs the prompt + routing without a model call", async () => {
+    const svc = createChatService(db);
+    const versionId = await seedCharacter();
+    await db.insert(chats).values({
+      id: "ch1",
+      ownerId: "u1",
+      title: "mine",
+      characterVersionId: versionId,
+      createdAt: 10,
+      updatedAt: 10,
+    });
+
+    const preview = await svc.previewAssembly({ username: "u1", chatId: "ch1" });
+
+    // Defaults: agent-sdk on the sub, the resolver's default model, the default preset.
+    expect(preview.routing).toMatchObject({
+      runner: "agent-sdk",
+      api: "agent-sdk",
+      source: "max-pro-sub",
+    });
+    expect(preview.preset).toBe("default");
+    // The character assembled into a non-empty static (cacheable) prefix; no persona attached.
+    expect(preview.systemPrompt.static.length).toBeGreaterThan(0);
+    expect(preview.trace.staticChars).toBe(preview.systemPrompt.static.length);
+    expect(preview.trace.hasPersona).toBe(false);
+  });
 });

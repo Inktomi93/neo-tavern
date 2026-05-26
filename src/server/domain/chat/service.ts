@@ -37,6 +37,7 @@ import { resolveTurnRouting } from "./routing";
 import { buildSeedFrames, GREETING_USER_STUB, type SeedTurn } from "./seed";
 import { DbSessionStore } from "./store";
 import {
+  type AssemblyPreview,
   type ChatDetail,
   ChatNotFoundError,
   ChatOperationError,
@@ -484,6 +485,42 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
     }));
   }
 
+  // Dry-run the prompt assembly + routing for a chat's NEXT turn — no model call. Reuses the exact
+  // same helpers send() does, so what you preview is what a turn would actually send.
+  async function previewAssembly(params: {
+    username: string;
+    chatId: string;
+  }): Promise<AssemblyPreview> {
+    const ownerId = await ensureUser(db, params.username);
+    const chat = await loadOwnedChat(ownerId, params.chatId);
+    const [assembleCtx, promptConfig] = await Promise.all([
+      buildAssembleContext(chat),
+      resolveConfig(chat),
+    ]);
+    const systemPrompt = assemblePrompt(promptConfig, assembleCtx);
+    const routing = resolveTurnRouting(chat, promptConfig);
+    return {
+      routing: {
+        runner: routing.runner,
+        api: routing.api,
+        source: routing.source,
+        model: routing.model,
+      },
+      preset: chat.presetVersionId === null ? "default" : "pinned",
+      systemPrompt: { static: systemPrompt.static, dynamic: systemPrompt.dynamic },
+      trace: {
+        staticChars: systemPrompt.static.length,
+        dynamicChars: systemPrompt.dynamic.length,
+        staticSections: systemPrompt.trace.staticSections,
+        dynamicSections: systemPrompt.trace.dynamicSections,
+        worldInfoAttached: assembleCtx.worldEntries.length,
+        worldInfoIncluded: systemPrompt.trace.worldInfoIncluded,
+        matchedKeys: systemPrompt.trace.matchedKeys,
+        hasPersona: assembleCtx.activePersona !== null,
+      },
+    };
+  }
+
   async function getChat(params: { username: string; chatId: string }): Promise<ChatDetail> {
     const ownerId = await ensureUser(db, params.username);
     const chat = await loadOwnedChat(ownerId, params.chatId); // throws ChatNotFoundError if unowned
@@ -695,13 +732,19 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
         .where(eq(chats.id, params.chatId));
 
       // chatId-scoped turn summary (the provider already logs each event at its own level;
-      // this adds the chat context + the context-fill signal the UI will show).
-      getLog().debug(
+      // this adds the chat context + the context-fill signal the UI will show). INFO (not debug) so
+      // cost-per-chat is correlatable at the default LOG_LEVEL — the provider-level "turn complete"
+      // carries cost but no chatId, so this is the one line that ties tokens/cost to a chat.
+      getLog().info(
         {
           chatId: params.chatId,
           seq: userSeq + 1,
+          model: turn.usage.model,
           tokensIn: turn.usage.tokensIn,
+          tokensOut: turn.usage.tokensOut,
+          costUsd: turn.usage.costUsd,
           contextWindow: turn.usage.contextWindow,
+          finishReason: turn.finishReason,
           compactions: turn.events.filter((event) => event.kind === "compaction").length,
           rateLimit: turn.rateLimit?.status,
         },
@@ -1260,6 +1303,7 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
     create,
     listChats,
     getChat,
+    previewAssembly,
     listMessages,
     send,
     setProvider,
