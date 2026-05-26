@@ -231,9 +231,19 @@ soft-delete trash bin. No tautological getById tests. Catch yourself building th
   raw rebuilds from canon. `MessageView` += `activeVariantIdx`/`variantCount`. Verified live over the curl harness
   (`scripts/swipe-edit-probe.sh`). · **sdk-mode generation defaults wired** in `buildClaudeSdkEnv` (thinking OFF,
   Opus capped 200k, ambient `CLAUDE_EFFORT` neutralized — verified via `scripts/env-knob-probe.ts`). ·
-  **Phase 5 remaining — see `docs/build-plan.md`:** chat UX (the surface rendering swipes/edits/branch — *the next
-  visible step*) · `{{memory}}` retrieval · managed compaction · streaming/SSE · preset CRUD+editor · error-variant
-  UI. (Deferred: alternate greetings → `message_variants` on import.) ·
+  **⚠️ ACTIVE RE-ARCHITECTURE (decided May 2026, owner-approved, NOT built — supersedes "raw = @openrouter/sdk
+  Responses" below): 4 PROVIDER MODES.** (1) **Claude Sub** = Agent SDK + `claude login` (Max sub, free) [built];
+  (2) **Claude API** = the SAME Agent SDK runner env-swapped to **OpenRouter's Anthropic skin**
+  (`ANTHROPIC_BASE_URL=https://openrouter.ai/api` + `ANTHROPIC_AUTH_TOKEN=<OPENROUTER_API_KEY>` + `ANTHROPIC_API_KEY=""`)
+  → paid Claude via OpenRouter, REUSES the whole pipeline (caching/thinking/events/seeding/swipes), only the env
+  differs; (3) **OpenRouter Chat Completions** = `@openrouter/sdk` `chat.send` + per-block `cache_control` (non-Claude);
+  (4) **OpenRouter Responses** = `@openrouter/sdk` `beta.responses.send` (current `runRawTurn`; OpenAI). **NEXT STEP:
+  run `pnpm exec tsx scripts/claude-or-probe.ts`** (validates mode 2 — does the Agent SDK run via OpenRouter's skin?
+  not yet run). Then: `buildClaudeSdkEnv` OpenRouter variant + 3-way `resolveTurnRouting` + send/swipe branch.
+  Full plan + verified findings in [[project-neo-tavern-4modes]] memory + `docs/sdk-notes.md`. ·
+  **Phase 5 remaining — see `docs/build-plan.md`:** the 4-mode build (above) · chat UX (the surface rendering
+  swipes/edits/branch) · `{{memory}}` retrieval · managed compaction · streaming/SSE · preset CRUD+editor ·
+  error-variant UI. (Deferred: alternate greetings → `message_variants` on import.) ·
   **Phase 6** analytics (one chart at a time, only when there's a real question).
 
 ## Start here — fast orientation (new session, read this section)
