@@ -409,9 +409,18 @@ wrong — measured, the minimal viable shape is much smaller** (`domain/chat/see
 | cache TTL | `FORCE_PROMPT_CACHING_5M` / `ENABLE_PROMPT_CACHING_1H` (env) | ✅ (caching section) |
 | system prompt + static/dynamic split | `systemPrompt` (string[]) + `SYSTEM_PROMPT_DYNAMIC_BOUNDARY` | ✅ |
 | model / resume / store | `model`, `resume`, `sessionStore` options | ✅ |
-| effective context size | `CLAUDE_CODE_MAX_CONTEXT_TOKENS` (env) | ⚠ candidate (finder, unverified) |
-| other compaction env | `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, `DISABLE_COMPACT`, `CLAUDE_CODE_DISABLE_1M_CONTEXT`, `USE_API_CONTEXT_MANAGEMENT`, `CLAUDE_CODE_COLD_COMPACT`, `CLAUDE_AFTER_LAST_COMPACT`, `CLAUDE_CODE_DISABLE_PRECOMPACT_SKIP` | ⚠ candidate |
+| **max output tokens** | `CLAUDE_CODE_MAX_OUTPUT_TOKENS` (env) | ✅ verified (`scripts/env-knob-probe.ts`) — caps the reply; **don't set absurdly low** (64 errored to empty; use a sane value) |
+| **1M context toggle (Opus)** | `CLAUDE_CODE_DISABLE_1M_CONTEXT=1` (env) | ✅ verified — Opus defaults to a **1,000,000** window; the flag drops it to 200k. (Haiku/Sonnet report 200k.) |
+| **thinking on/off** | `CLAUDE_CODE_DISABLE_THINKING=1` (env) | ✅ verified — Sonnet thinkingBlocks 1→0, output 763→255 tok. Related: `CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING`, `DISABLE_INTERLEAVED_THINKING` (candidate). |
+| **effort / reasoning level** | `CLAUDE_EFFORT` / `CLAUDE_CODE_EFFORT_LEVEL` (env) | ⚠ candidate — **NOTE: the host has `CLAUDE_EFFORT=xhigh` SET, and `buildClaudeSdkEnv()` spreads `process.env`, so every sdk chat currently inherits xhigh effort uncontrolled.** Control it explicitly. |
+| effective context size | `CLAUDE_CODE_MAX_CONTEXT_TOKENS` (env) | ✖ verified NO effect on the reported `contextWindow` (stayed 200k on haiku) — it is NOT the meter lever; the reported per-model window IS the denominator |
+| other compaction env | `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, `DISABLE_COMPACT`, `USE_API_CONTEXT_MANAGEMENT`, `CLAUDE_CODE_COLD_COMPACT`, `CLAUDE_AFTER_LAST_COMPACT`, `CLAUDE_CODE_DISABLE_PRECOMPACT_SKIP` | ⚠ candidate |
 | inline `settings.autoCompactEnabled` / `autoCompactWindow` | typed `Options.settings` | ✖ did NOT change behavior in test (window=2000 never fired) — **use the env vars instead** |
+
+**Knob discovery + verification probes:** `DISCOVER=1 pnpm sdk:play` dumps every env var the `claude`
+binary references (filter: `DISCOVER=cache|context|…`); `scripts/env-knob-probe.ts` runs a real turn per
+knob and observes the effect (output cap / reported window / thinking blocks) — that's what promoted the
+rows above from candidate to ✅/✖. Re-run after an SDK upgrade.
 
 **Read-only — reported back, capture for analytics/UX but can't dictate:**
 - `compact_metadata` (stream): `trigger`, `pre_tokens`, `post_tokens`, `duration_ms`.

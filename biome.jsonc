@@ -249,7 +249,8 @@
         "tests/integration/chat-session-store.test.ts",
         "src/server/domain/chat/seed.ts",
         "src/server/domain/chat/seed.test.ts",
-        "scripts/seed-probe.ts"
+        "scripts/seed-probe.ts",
+        "scripts/env-knob-probe.ts"
       ],
       "linter": { "rules": { "style": { "useNamingConvention": "off" } } }
     },
