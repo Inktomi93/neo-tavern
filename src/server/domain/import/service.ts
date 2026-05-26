@@ -51,6 +51,13 @@ export interface ImportCardInput {
   parsed: ParsedCard;
   importedFrom: string; // PNG filename
   importHash: string; // SHA-256 of the card bytes
+  // Raw PNG bytes (loader output). The composition root stores these as the card's avatar asset
+  // and sets `avatarAssetId`; the import service itself ignores `cardBytes`. (domain/import can't
+  // import domain/assets — cross-feature — so the store happens in the CLI that wires both.)
+  cardBytes?: Uint8Array;
+  // The stored avatar asset id (set by the composition root after storing cardBytes) → written onto
+  // character_versions.avatarAssetId. The card PNG is the avatar (one blob, both roles).
+  avatarAssetId?: string;
 }
 export interface ImportChatInput {
   parsed: ParsedChat;
@@ -154,6 +161,7 @@ export function createImportService(db: Db, deps: ImportServiceDeps): ImportServ
           postHistoryInstructions: card.postHistoryInstructions,
           tags: card.tags,
           creatorNotes: card.creatorNotes,
+          avatarAssetId: input.card.avatarAssetId ?? null, // set by the CLI after storing the card PNG
           raw: card.raw,
           createdAt: now,
         });

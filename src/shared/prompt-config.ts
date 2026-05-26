@@ -203,6 +203,17 @@ export const DEFAULT_PROMPT_CONFIG: PromptConfig = {
       enabled: true,
       scope: "keyword",
     },
+    // Retrieved chat-history memory (the ST `vectors` model). In the manager + enabled so it's
+    // placeable, but renders NOTHING unless the memory knob (GenerationParams.memory.enabled) is on
+    // — then domain/chat fills it with relevant older messages. Dynamic half = cache-safe.
+    {
+      type: "marker",
+      id: "memory",
+      name: "Memory",
+      marker: "memory",
+      role: "system",
+      enabled: true,
+    },
     // Post-history instructions ("jailbreak") — last, so it'd be the final system steer. Present
     // in the manager but OFF by default (~17% of cards author it; rarely wanted here).
     {

@@ -68,6 +68,7 @@ export async function collectBundlesFromDir(profileDir: string): Promise<Collect
       parsed,
       importedFrom: ent.name,
       importHash: sha256(bytes),
+      cardBytes: bytes, // carried for the composition root to store as the avatar asset
     };
   }
 

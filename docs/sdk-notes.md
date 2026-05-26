@@ -315,8 +315,9 @@ context window, not a token count). What actually happens on a long chat:
     `CLAUDE_CODE_DISABLE_1M_CONTEXT`, `USE_API_CONTEXT_MANAGEMENT`.
   - **The lever:** `DISABLE_AUTO_COMPACT=1` + we trigger manual `/compact <RP-tuned instructions>` when
     `contextWindow` (captured per turn) fills → RP-grade steered compaction on the free sub, a middle path
-    between accepting lossy auto-compaction and fully owned context (raw mode / custom `load()`). Not baked
-    into `buildClaudeSdkEnv()` — a build decision for the compaction-strategy work. (`pnpm sdk:compaction`)
+    between accepting lossy auto-compaction and fully owned context (raw mode / custom `load()`). **Now
+    BUILT** as the managed-compaction strategy (#41), driven by `GenerationParams.compaction` — the env
+    knobs below ARE now set in the runner's env builder. (`pnpm sdk:compaction`)
 
 That probe also confirmed **seeding a session from frames works** (raw→sdk / import) — but the
 resume `sessionId` must be a **valid UUID** (an arbitrary string is rejected) and the frame shape is
@@ -328,8 +329,8 @@ with `parentUuid` chains), not just user/assistant turns.
 
 **Deferred (no consumer yet):** token-delta streaming (`includePartialMessages` +
 `stream_event` parsing) — the `onEvent` sink is wired as the seam, but delta-forwarding
-lands with the SSE chat UI. A persisted `chat_events` table — the log ring + `events[]`
-return suffice until the UI needs history.
+lands with the SSE chat UI (#42). (The persisted `chat_events` table that was parked here is
+now **BUILT** — migration 0014, written after each turn, surfaced in `/api/_debug/db/chat`.)
 
 ## Observed shapes & the compaction control surface (measured — `pnpm sdk:compaction`)
 
@@ -441,9 +442,18 @@ Options + env `maxOutputTokens`/`disableThinking`), openrouter via `toReasoningE
 - SDK-stamped frame metadata: `uuid`, `parentUuid`, `logicalParentUuid`, `promptId`, `requestId`, `cwd`,
   `gitBranch`, `version` — we persist verbatim, never author.
 
-**The planned compaction strategy** (not built): `DISABLE_AUTO_COMPACT=1` + watch `contextWindow` per
-turn + trigger manual `/compact <RP-tuned instructions>` before the window fills → steered, RP-grade
-compaction on the free sub. Env knobs are NOT yet in `buildClaudeSdkEnv()` — that's the build step.
+**The managed compaction strategy — ✅ BUILT (#41).** Driven by `GenerationParams.compaction`
+(`src/shared/generation.ts`, in the preset `config.params`); agent-sdk only; opt-in:
+- **`auto`** (default — no behavior change): the SDK's auto-compaction stays on; `thresholdPct` →
+  `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`.
+- **`managed`**: `DISABLE_AUTO_COMPACT=1` + the domain auto-fires a steered `/compact` (default RP-tuned
+  instructions) after a send once context-fill crosses `thresholdPct` (default 0.85).
+- **`off`**: auto-compaction disabled; the owner triggers `chat.compact` manually.
+
+A compaction is recorded in the persisted `chat_events` table and — when a summary is captured — onto
+`chats.compactSummary`/`compactedAtSeq`, which the `{{compact_summary}}` marker renders for cross-mode
+continuation (the stateless openrouter runner picks up from the anchor). The env knobs above ARE now set
+in the runner's env builder.
 
 ## OpenRouter runner — `@openrouter/sdk` (Chat Completions + Responses)
 

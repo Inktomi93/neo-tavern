@@ -51,6 +51,15 @@ and is regenerable from `messages` (if they ever diverge, `messages` wins). `seq
 - Because the agent-sdk runner is **stateless** (a fresh `query({resume})` per message),
   `result.usage` is per-turn → `tokensIn/Out` + cache tokens + `costUsd` are a direct copy (no
   cumulative differencing). These feed analytics.
+- **Per-turn provenance columns record what ACTUALLY ran**, normalized so cross-mode
+  filtering/analytics stays honest. The "why did generation stop?" signal is **two columns**:
+  `finish_reason` (migration 0013) is the *normalized* cross-mode vocab (`stop|length|filter|tool|
+  other`, via `providers/turn.ts` `normalizeFinishReason` — the queryable one, e.g. a "truncated"
+  UI badge), while `stop_reason` keeps the raw provider string (`stop_reason`/`finish_reason`) as
+  provenance. `reasoning_effort` stores the resolved effort (analytics axis); `gen_started`/
+  `gen_finished` (migration 0012, epoch-ms UTC) hold generation timing — populated by the ST
+  importer from a message's top-level fields; live turns carry per-gen timing on `message_variants`.
+  All nullable (null for imports / not-provided).
 - `session_entries.subpath` stores **`""`** (not NULL) for the main transcript: the uuid-dedup
   unique index `(session_id, subpath, uuid) WHERE uuid IS NOT NULL` is defeated by a NULL
   `subpath` (SQLite treats every NULL as distinct), so `""` keeps idempotency honest. The store
@@ -73,6 +82,17 @@ trade-offs are the table in `CLAUDE.md` (RP philosophy → Provider modes). `set
 in place; `forkChat` branches into a new chat (`parentChatId`/`forkedAt`); both are one-way the
 canon survives. raw-mode provider-routing prefs ride in `chats.metadata` → the request `provider`
 field (slop guard — promote to a column if earned).
+
+## Compaction — durable events + a cross-mode summary artifact
+Two additive pieces. **`chat_events`** (migration 0014) is a durable per-chat event log: the
+`TurnEvent[]` a turn returns (compaction / api_retry / rate_limit / status / auth), persisted so the
+record survives a restart (the in-memory log ring doesn't); metadata only, never RP content; surfaced in
+`/api/_debug/db/chat`. **`chats.compactSummary` + `compactedAtSeq`** (migration 0015) make a compaction
+*portable*: a `/compact` captures the SDK's summary text + the canon `seq` it covers, and the
+`{{compact_summary}}` prompt marker renders it so the STATELESS openrouter runner can "pick up from the
+compaction point" (history rebuilt from `seq > anchor`); the artifact crosses `forkChat`. **Canon
+(`messages`) is never touched** — pre-compaction history stays fully viewable; only what's sent to the
+model changes. (agent-sdk carries compaction natively in its session, so the marker stays null there.)
 
 ## Concurrency & live sync (multi-device, one user on phone + desktop)
 - **✅ BUILT — optimistic `seq` guard + per-chat lock.** A send/swipe carries the client's
@@ -100,14 +120,23 @@ field (slop guard — promote to a column if earned).
 `1024` matches BGE-M3; the `model` column + the column dimension are the only things that change
 on a model swap. `hubScore` (CSLS, migration 0005) + `sourceText` (for the reranker, 0006) ride
 along. Search: `vector_top_k('embeddings_ann', vector32(?), k)` → exact cosine re-rank → CSLS
-adjust → optional cross-encoder rerank. See `docs/corpus-import.md`.
+adjust → optional cross-encoder rerank. See `docs/corpus-import.md`. Entity types: `character` +
+`chat_segment` (the corpus, batch-embedded) and **`chat_message`** (live chat-history memory — the
+`{{memory}}` marker, #40: entityId `<chatId>:<messageId>:<chunkIdx>`, embedded lazily, retrieved by
+**exact in-process cosine scoped to one chat**, NOT the global ANN — see `domain/chat/memory.ts`).
 
-## Assets are content-addressed
-`hash` is unique; binaries (avatars, imported card PNGs) live on the mounted volume and are
-referenced by hash; the DB row is metadata only. Image **bytes never go in the DB.** Image
-*analysis* (vision tags, themes, visual embeddings) is a batch/import job, not a hot path — the
-derived signal lands in the DB, the bytes don't. **`assets` are global — NO `ownerId`** (dedup by
-hash, refcounted).
+## Assets are content-addressed (CAS — migration 0016)
+`hash` (sha-256, unique) IS the locator: binaries (card PNGs, persona avatars) live on the mounted
+volume in a sharded CAS tree (`src/server/storage/cas.ts`, `<h0:2>/<h2:4>/<hash>`), the DB row is
+metadata only. **No `path` column** (the hash → `cas.blobPath` resolves it; a re-rooted volume needs
+no DB rewrite). Image **bytes never go in the DB.** **`assets` are global — NO `ownerId`** (dedup by
+hash — identical art across users is one blob). **NO refcount column** (refcounts drift) — GC is
+**mark-sweep** over the avatar refs (`character_versions`/`personas.avatarAssetId` → `assets.id` ON
+DELETE SET NULL, the FKs 0007 skipped), with a grace window so it can't race an in-flight import.
+A card blob's hash equals `characters.importHash` (same whole-file sha-256) → a built-in integrity
+check on the forward-import + backfill paths. Image *analysis* (visual embeddings) is a batch job —
+the derived vector lands in `image_embeddings` (a SEPARATE 1152-dim SigLIP space, NOT the 1024-dim
+text `embeddings`), the bytes don't. Full design + the caddy serving contract: **`docs/assets.md`**.
 
 ## Multi-user: designed, single-user implemented
 Every top-level *owned* entity carries `ownerId → users.id` (personas, characters, chats,

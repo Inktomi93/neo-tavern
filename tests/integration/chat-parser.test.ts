@@ -11,8 +11,10 @@ const opts = { fileName: "Cheese - 2026-01-08@11h12m17s008ms.jsonl", charDirName
 
 test("date parser handles ISO, ST @-format, human, epoch number, and epoch string", () => {
   expect(parseStDate("2025-12-15T06:39:01.664Z")).toBe(Date.parse("2025-12-15T06:39:01.664Z"));
-  expect(parseStDate("2025-07-03@14h56m48s989ms")).toBe(new Date(2025, 6, 3, 14, 56, 48).getTime());
-  expect(parseStDate("August 27, 2025 6:36pm")).toBe(new Date(2025, 7, 27, 18, 36).getTime());
+  // parseStDate is host-tz-INDEPENDENT (every encoding → one canonical UTC instant), so the
+  // expectations use Date.UTC — NOT the local-tz `new Date(y,mo,d,…)` (which fails off-UTC).
+  expect(parseStDate("2025-07-03@14h56m48s989ms")).toBe(Date.UTC(2025, 6, 3, 14, 56, 48));
+  expect(parseStDate("August 27, 2025 6:36pm")).toBe(Date.UTC(2025, 7, 27, 18, 36));
   expect(parseStDate(1776108861642)).toBe(1776108861642); // epoch ms (number)
   expect(parseStDate("1776108861642")).toBe(1776108861642); // epoch ms (string) — st-bridge fix
   expect(parseStDate("")).toBeNull();

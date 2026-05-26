@@ -62,6 +62,9 @@ export interface AssembleContext {
   /** The chat's compaction summary, when in a mode that injects it (the stateless openrouter path).
    *  Rendered by the {{compact_summary}} marker; null/absent → nothing rendered. */
   compactSummary?: string | null;
+  /** Retrieved chat-history memory (the {{memory}} marker) — relevant OLDER messages, pre-formatted
+   *  by domain/chat's RAG (the ST `vectors` model). The marker wraps it; null/absent → nothing. */
+  memory?: string | null;
 }
 
 // Metadata about what assembly did — for debug visibility (NOT the prompt text). The caller
@@ -77,6 +80,8 @@ export interface AssembleTrace {
   /** True when the {{compact_summary}} marker rendered the chat's summary — the signal the caller
    *  uses to "pick up from the compaction point" (rebuild history from seq > compactedAtSeq). */
   compactSummaryIncluded: boolean;
+  /** True when the {{memory}} marker rendered retrieved chat-history memory. */
+  memoryIncluded: boolean;
 }
 
 export interface AssembledPrompt {
@@ -204,10 +209,20 @@ function renderMarker(section: MarkerSection, ctx: AssembleContext, trace: Assem
       trace.compactSummaryIncluded = true;
       return `Summary of the conversation so far:\n${summary}`;
     }
-    // sdk-mode: history lives in the resumed session; memory retrieval is deferred. Both
-    // render empty here (raw mode / a later retrieval pass will fill them).
+    // Retrieved chat-history memory (the ST `vectors` model) — relevant OLDER messages the caller
+    // (domain/chat) fetched + formatted. Placeable anywhere; lives in the dynamic half by default
+    // (cache-safe). Empty when memory is off / nothing retrieved.
+    case "memory": {
+      const mem = ctx.memory?.trim();
+      if (!mem) {
+        return "";
+      }
+      trace.memoryIncluded = true;
+      return `Past events:\n${mem}`;
+    }
+    // sdk-mode: live history lives in the resumed session, so chat_history renders empty here
+    // (raw mode rebuilds it from canon outside assembly).
     case "chat_history":
-    case "memory":
       return "";
   }
 }
@@ -238,6 +253,7 @@ export function assemblePrompt(config: PromptConfig, ctx: AssembleContext): Asse
     worldInfoIncluded: 0,
     matchedKeys: [],
     compactSummaryIncluded: false,
+    memoryIncluded: false,
   };
   let bucket = staticParts;
   let bucketSections = trace.staticSections;

@@ -30,9 +30,15 @@ only ✅-tracking in the repo; keep it one line.
 - **Phase 3 — embeddings foundation (BGE-M3 + libSQL vectors):** ✅
 - **Phase 4 — ST importer + RAG search (CSLS + rerank + `discover` + `/corpus` UI) + enforced
   FKs (migration 0007):** ✅ **The corpus product is end-to-end usable.**
-- **Phase 5 — chat-first frontend + the 4 provider modes:** **CURRENT.** Backend done
-  (prompt assembly, the 4 modes incl. mode-2 OpenRouter skin, swipes/edits/fork/seeding,
-  setProvider). **The chat frontend that renders it is the main thing left** — see backlog.
+- **Phase 5 — chat-first frontend + the 4 provider modes:** **CURRENT.** Chat backend is
+  effectively complete: prompt assembly + the 4 modes (incl. mode-2 OpenRouter skin),
+  swipes/edits/fork/seeding, `setProvider`, the read API (`chat.list`/`get`/`messages` with
+  provenance), `chat.previewAssembly` (dry-run "what will this send" without spending a turn),
+  one unified `GenerationParams` vocab, canonical epoch-ms-UTC time, managed compaction +
+  cross-mode `{{compact_summary}}`, persisted `chat_events`, the preset CRUD service (#43,
+  `preset.*` router), the content-addressed asset store (#47 infra), and the `/api/_debug` read
+  surface, `chats.pinnedPersonaId` (#44), the `{{memory}}` marker (#40). **The chat backend is
+  now complete** — the chat frontend that renders all of it is what's left. See backlog.
 - **Phase 6 — analytics:** not started (one chart at a time, only for a real question).
 
 ## Deferred backlog (what's parked + where it belongs)
@@ -49,21 +55,29 @@ only ✅-tracking in the repo; keep it one line.
   the `models`/`rawModels` queries), the context-fill meter (`contextWindow` is captured per
   turn), list virtualization (`@tanstack/react-virtual`) for long chats / the 400+ char library.
   Also the app shell: the `Chat | Corpus | Characters` nav rail (`docs/ui-direction.md`).
-- **#43 — preset CRUD service + prompt-manager editor**: `domain/preset` copy-on-write over the
-  `presets`/`preset_versions` triad (edit unpinned in place; edit a pinned version → fork
-  `v=max+1` + repoint), then the UI (drag-reorder `PromptConfig` sections, per-section toggles,
-  edit literal/marker content, the cache boundary as a draggable section). Marinara's
-  `PresetEditor` = reference.
+- **#43 — preset CRUD service ✅ DONE; prompt-manager editor (frontend) remaining**: `domain/preset`
+  copy-on-write over the `presets`/`preset_versions` triad is BUILT — create/list/get/update/delete +
+  the tRPC `preset.*` router; editing config mutates an unpinned version in place, forks `v=max+1` +
+  repoints when the current version is pinned by a chat/message (immutable provenance), owner-scoped.
+  **Left (frontend):** the editor UI (drag-reorder `PromptConfig` sections, per-section toggles, edit
+  literal/marker content, the cache boundary as a draggable section — Marinara's `PresetEditor` =
+  reference) AND the **chat↔preset picker** that sets `chats.presetVersionId` (today chats use
+  `DEFAULT_PROMPT_CONFIG`; the service + read path are ready for it).
 
 **Runtime / engine:**
 - **#42 — streaming → SSE** (token deltas over a tRPC v11 subscription): sdk-mode
   `includePartialMessages` → `stream_event` deltas (the `onEvent` seam exists); raw-mode Responses
   stream events. Also enables **live-push / multi-device sync** (the auto-refresh half — today it
   converges on refresh). Caddy: disable proxy buffering for `text/event-stream` + keepalives.
-- **#40 — `{{memory}}` marker** (vector retrieval over chat history — the corpus-RAG superpower
-  applied to live chat): embed chat-message chunks (new entityType, owner+chat scoped), knn scoped
-  to this chat, protect recent N, threshold + optional rerank, inject into the dynamic
-  (cache-safe) system-prompt half. Reuses the embedding stack. Complements #41.
+- **#40 — `{{memory}}` marker:** ✅ **DONE** (the SillyTavern `vectors` model — see that extension).
+  First-class `GenerationParams.memory` knob (`enabled` + `queryMessages`/`insert`/`protect`/`minScore`/
+  `chunkChars`/`rerank`, ST defaults 2/3/5/0.25/400). `domain/chat/memory.ts` embeds this chat's
+  messages lazily (entityType `chat_message`, per-message ≤chunkChars), then each turn queries with the
+  recent N and retrieves the top `insert` relevant OLDER messages (exact in-process cosine over just
+  this chat's vectors — not the global ANN; excludes the recent `protect`; ≥`minScore`; optional
+  cross-encoder rerank). The block fills the **placeable `{{memory}}` marker** in the dynamic
+  (cache-safe) half — runner-agnostic, `assemblePrompt` stays pure (`ctx.memory`, like `compactSummary`).
+  Opt-in; the marker's in the default config (renders nothing until the knob is on).
 - **#41 — managed compaction:** ✅ **DONE.** `GenerationParams.compaction` (`shared/generation.ts`):
   mode `auto` (SDK default; `thresholdPct` → `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`) · `managed`
   (`DISABLE_AUTO_COMPACT` + the domain auto-fires a steered `/compact` after a turn once context-fill
@@ -74,10 +88,11 @@ only ✅-tracking in the repo; keep it one line.
   marker injects it and the stateless openrouter runner "picks up from the compaction point" (history
   from seq > anchor), carried across `forkChat`. Canon (`messages`) is never touched — pre-compaction
   stays fully viewable. (Owned-context `load()` still optional/deferred.)
-- **#44 — `chats.pinnedPersonaId`** (true persona-switch divergence): today one `personaId` serves
-  both the pinned (card `{{user}}`) and active (user-field `{{user}}`) roles — `assemblePrompt`
-  already resolves them separately. Add an immutable `pinnedPersonaId` (captured at chat open) so
-  they diverge. Small migration + wire `buildAssembleContext`.
+- **#44 — `chats.pinnedPersonaId`** ✅ **DONE** (migration 0017): the card's `{{user}}` resolves
+  against the pinned persona, the persona marker / literal sections against the active `personaId`,
+  so switching who you play mid-chat never rewrites the card's references. `buildAssembleContext`
+  loads them distinctly (pinned null → falls back to active); `forkChat` preserves the pin. The
+  active-persona-switch *API* is still frontend (today both are null/equal at create).
 - **#48 — raw-mode refinements:** (1) granular raw caching — `cache_control` breakpoints at the
   static/dynamic split / history depth (à la ST), beyond the current static-block 5m directive — still
   deferred (low priority). (2) ✅ **DONE — the persisted `chat_events` table** (migration 0014):
@@ -88,9 +103,12 @@ only ✅-tracking in the repo; keep it one line.
 - **#46 — Docker/compose image + Playwright E2E**: one image into the authentik+caddy stack, port
   8788 (don't expose to untrusted nets — the header-trust invariant). One happy-path E2E per
   critical flow (chat turn, corpus search); no screenshot diffs.
-- **#47 — corpus extras** (deferred by choice): (1) find-similar / find-duplicates (cosine ≥ 0.92
-  `vector_top_k` self-join); (2) CLIP image embeddings for visual card similarity (separate vector
-  dim; a re-index away).
+- **#47 — corpus extras**: (1) find-similar / find-duplicates (cosine ≥ 0.92 `vector_top_k`
+  self-join) — deferred. (2) Image embeddings for visual card similarity — **landing built**: the
+  content-addressed asset store (`storage/cas.ts` + `domain/assets`: store/backfill/GC/fsck; avatars
+  wired on import + `pnpm assets:backfill`) and the `image_embeddings` table (migration 0016,
+  SigLIP-2 so400m **1152-dim**, its own `libsql_vector_idx` — NOT the 1024-dim text space). The
+  visual **embed pass** (embed FROM the blob by hash) is the remaining follow-up. See `docs/assets.md`.
 
 **Untracked sub-items (fold into the issues above when they land):**
 - Character library + a FOCUSED editor (name/description/personality/scenario/greetings/

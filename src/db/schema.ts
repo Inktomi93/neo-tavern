@@ -67,7 +67,11 @@ export const personas = sqliteTable("personas", {
     .references(() => users.id),
   name: text("name").notNull(),
   description: text("description").notNull(),
-  avatarAssetId: text("avatar_asset_id"),
+  // FK added once assets were in use (skipped in 0007). SET NULL: a deleted/GC'd avatar
+  // leaves the persona intact, just avatar-less.
+  avatarAssetId: text("avatar_asset_id").references((): AnySQLiteColumn => assets.id, {
+    onDelete: "set null",
+  }),
   metadata: text("metadata", { mode: "json" }),
   createdAt: integer("created_at").notNull(),
 });
@@ -117,7 +121,11 @@ export const characterVersions = sqliteTable(
     postHistoryInstructions: text("post_history_instructions"),
     tags: text("tags", { mode: "json" }),
     creatorNotes: text("creator_notes"),
-    avatarAssetId: text("avatar_asset_id"),
+    // The card PNG is the avatar (one blob, both roles). FK added once assets were in use
+    // (skipped in 0007). SET NULL: a GC'd/deleted asset leaves the version, just avatar-less.
+    avatarAssetId: text("avatar_asset_id").references((): AnySQLiteColumn => assets.id, {
+      onDelete: "set null",
+    }),
     raw: text("raw", { mode: "json" }), // archival original card — never versioned/migrated
     refineryScore: real("refinery_score"),
     refineryAnalysis: text("refinery_analysis", { mode: "json" }),
@@ -140,6 +148,13 @@ export const chats = sqliteTable(
       .notNull()
       .references(() => characterVersions.id, { onDelete: "restrict" }),
     personaId: text("persona_id").references(() => personas.id, { onDelete: "set null" }),
+    // The persona pinned at chat open — what the CARD's {{user}} references resolve against. It
+    // diverges from the (active) personaId once persona-switching lands, so switching who you play
+    // mid-chat never retroactively rewrites the card's {{user}}. Null → falls back to personaId
+    // (chats opened before this column / no persona chosen at open). SET NULL, like personaId.
+    pinnedPersonaId: text("pinned_persona_id").references(() => personas.id, {
+      onDelete: "set null",
+    }),
     // The chat's default preset config for its next turn. RESTRICT preserves provenance.
     presetVersionId: text("preset_version_id").references(
       (): AnySQLiteColumn => presetVersions.id,
@@ -411,15 +426,19 @@ export const settings = sqliteTable("settings", {
   updatedAt: integer("updated_at").notNull(),
 });
 
-// Global + content-addressed + refcounted — NO ownerId (binaries dedup by hash).
+// Global + content-addressed — NO ownerId (binaries dedup by hash). The blob lives on the
+// mounted volume in a sharded CAS tree keyed by `hash` (src/server/storage/cas.ts); the row is
+// metadata only. There is NO `path` column — the locator IS the hash (cas.blobPath(hash)), so a
+// moved/re-rooted volume needs no DB rewrite. Bytes NEVER go in the DB. GC is mark-sweep over the
+// avatar refs below (no refcount column — refcounts drift). See docs/data-model.md / docs/assets.md.
 export const assets = sqliteTable("assets", {
   id: text("id").primaryKey(),
-  kind: text("kind").notNull(),
-  path: text("path").notNull(),
+  kind: text("kind", { enum: ["card", "avatar", "export"] }).notNull(),
   mime: text("mime").notNull(),
   size: integer("size").notNull(),
+  // sha-256 hex of the bytes == the CAS key (== characters.importHash for a card PNG — same file hash).
   hash: text("hash").notNull().unique(),
-  uploadedAt: integer("uploaded_at").notNull(),
+  uploadedAt: integer("uploaded_at").notNull(), // asset creation time (epoch-ms UTC)
 });
 
 // Polymorphic. `embedding` is the libSQL native vector (BGE-M3, 1024-dim); the ANN
@@ -452,6 +471,29 @@ export const embeddings = sqliteTable(
   // (The libsql_vector_idx ANN index is hand-added in migration 0001 — drizzle-kit
   // can't emit it, so it lives only in SQL and is left untouched here.)
   (t) => [uniqueIndex("embeddings_entity_model_unq").on(t.entityType, t.entityId, t.model)],
+);
+
+// Image vectors — a SEPARATE dimension AND vector space from the 1024-dim BGE-M3 text
+// `embeddings` (do NOT reuse that column/index — mixing dims/spaces is meaningless). SigLIP-2
+// so400m → 1152-dim. Keyed to a CAS asset (card PNG / avatar) and embedded FROM the blob by
+// hash, never the original file. The ANN index (libsql_vector_idx) is hand-added in the
+// migration (drizzle-kit can't emit it). This is the LANDING TABLE only — running the embed
+// pass is a follow-up. Footgun (CLAUDE.md hard-won facts): bulk `DELETE FROM` empties the table
+// and poisons the shadow index → next insert fails → `REINDEX image_embeddings_ann`.
+export const imageEmbeddings = sqliteTable(
+  "image_embeddings",
+  {
+    id: text("id").primaryKey(),
+    assetId: text("asset_id")
+      .notNull()
+      .references(() => assets.id, { onDelete: "cascade" }), // the vector dies with its asset
+    model: text("model").notNull(), // e.g. onnx-community/siglip2-so400m — tags the space (a swap = re-index)
+    embedding: vector32("embedding", { dim: 1152 }),
+    createdAt: integer("created_at").notNull(),
+  },
+  // One vector per (asset, model) — makes the (future) embed pass idempotent + upsertable.
+  // (The libsql_vector_idx ANN index is hand-added in the migration — left out here.)
+  (t) => [uniqueIndex("image_embeddings_asset_model_unq").on(t.assetId, t.model)],
 );
 
 export const tags = sqliteTable("tags", {

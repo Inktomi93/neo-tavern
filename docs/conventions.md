@@ -56,9 +56,21 @@ transformers.js `session_options`, OS env vars) trip `useNamingConvention`. Two 
 - **`tsx -e '<code with top-level await>'` FAILS** ("Top-level await not supported with the cjs
   output format"). Write a temp `.ts` file and run `pnpm exec tsx file.ts` instead (then `rm`).
 - **drizzle-kit can't emit `libsql_vector_idx`** — hand-add the ANN `CREATE INDEX` to the
-  generated migration SQL (see `0001`). Migrations are **additive**: never regenerate `0000–N`;
+  generated migration SQL (see `0001`/`0016`). Migrations are **additive**: never regenerate `0000–N`;
   hand-read the generated SQL (the SQLite differ sometimes recreates more than intended — confirm
   it doesn't drop columns/indexes from earlier migrations).
+- **`drizzle-kit generate` WORKS — the snapshot baseline was repaired** (it was frozen at `0010`
+  while `0011–0016` were hand-written, so generate used to diff against stale state — phantom
+  `mode`/`provider` renames — and prompt interactively). Fix: a single accurate **`meta/0016_snapshot.json`**
+  (rebaselined from the current schema; `prevId` → 0010, the `0011–0015` snapshots are intentionally
+  absent — generate loads the highest snapshot as baseline, so the gap is invisible). Snapshots are
+  dev-tooling only (never applied to a DB), so this changed no database. **Going forward: just
+  `pnpm exec drizzle-kit generate --name <x>`** (verified: a no-op diff reports "No schema changes").
+  TWO things still need a hand-edit after generate: (1) **the ANN index** — drizzle can't emit
+  `libsql_vector_idx`, so add the `CREATE INDEX … libsql_vector_idx(...)` line yourself (see `0001`/`0016`);
+  (2) **FK-on-existing-column** recreates — eyeball the generated `__new_*` table-rebuild (the SQLite
+  differ occasionally recreates more than intended). Validate by running the suite (`freshDb` applies
+  every migration). If you ever DO hand-write, also add the `_journal.json` entry by hand.
 - **`pnpm exec tsx`**, not bare `tsx` (not always on PATH).
 
 ## libSQL / native vectors  (VERIFIED — corrected after an over-cautious earlier claim)

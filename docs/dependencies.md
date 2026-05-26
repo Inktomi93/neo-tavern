@@ -21,6 +21,9 @@ local key wins over a stale shell export — see `src/server/env.ts`),
 `luxon` (+ `@types/luxon` dev) — the canonical time layer: all timestamps are epoch-ms UTC, parsed
 deterministically as UTC at every provider/import boundary (`src/shared/time.ts`); the client renders
 in the viewer's tz via `Intl` when the UI lands.
+`atomically` — durable atomic file writes for the content-addressed asset store (`src/server/storage/cas.ts`):
+temp-under-root → fsync → rename, so a crashed write never leaves a corrupt blob at its hash. The ONE
+CAS dep (the two CAS npm libs are unmaintained/untyped; the rest is ~80 lines of our own). See `docs/assets.md`.
 Tooling: biome, typescript, vite, tsx, vitest, dependency-cruiser, knip, husky,
 tailwindcss (v4), concurrently.
 

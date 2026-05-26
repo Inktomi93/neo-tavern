@@ -66,15 +66,27 @@ export interface DbInspector {
 }
 
 /**
+ * Asset-store health port — same structural-injection trick as DbInspector (observability can't
+ * import `domain/assets`). The composition root passes `domain/assets`'s `fsck`, which walks the
+ * CAS tree + re-hashes blobs to report dangling/corrupt/orphan. `object` return so no domain type
+ * crosses the boundary. The CLI `pnpm assets:fsck` is the same check off the box; this is its
+ * curl-able, live-server twin.
+ */
+export interface AssetInspector {
+  fsck(): Promise<object>;
+}
+
+/**
  * In-process introspection — curl it instead of tailing files. Single gate:
  * DEBUG_TOKEN must be set AND presented (header `x-debug-token` or `?token=`).
  * No localhost branch: behind Caddy the client IP is Caddy's, so IP checks lie.
  *
  * `db` (optional) adds the /api/_debug/db/* surface (counts, FK/integrity, a chat inspector that
  * dumps messages WITH full provenance + variants) — the "did it land in the DB?" check the
- * log/error/request rings can't answer.
+ * log/error/request rings can't answer. `assets` (optional) adds /api/_debug/db/assets — the CAS
+ * blob-store health check (dangling/corrupt/orphan), the disk-side counterpart to the DB inspector.
  */
-export function registerDebugRoutes(app: Hono, db?: DbInspector): void {
+export function registerDebugRoutes(app: Hono, db?: DbInspector, assets?: AssetInspector): void {
   app.use("/api/_debug/*", async (c, next) => {
     if (env.DEBUG_TOKEN === undefined) {
       return c.json({ error: "debug API disabled — set DEBUG_TOKEN to enable" }, 404);
@@ -163,5 +175,8 @@ export function registerDebugRoutes(app: Hono, db?: DbInspector): void {
     app.get("/api/_debug/db/chat/:id", async (c) =>
       c.json(await db.inspectChat(c.req.param("id"))),
     );
+  }
+  if (assets !== undefined) {
+    app.get("/api/_debug/db/assets", async (c) => c.json(await assets.fsck()));
   }
 }

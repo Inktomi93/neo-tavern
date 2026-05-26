@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { CHAT_MODELS, DEFAULT_CHAT_MODEL_ID } from "../../shared/models";
 import { chatRouter } from "./routers/chat";
+import { presetRouter } from "./routers/preset";
 import { corpusRouter, searchRouter } from "./routers/search";
 import { publicProcedure, t } from "./trpc";
 
@@ -27,6 +28,7 @@ export const appRouter = t.router({
     .input(z.object({ id: z.string().min(1) }))
     .query(({ ctx, input }) => ctx.services.models.generationCost(input.id)),
   chat: chatRouter,
+  preset: presetRouter,
   corpus: corpusRouter,
   search: searchRouter,
 });
