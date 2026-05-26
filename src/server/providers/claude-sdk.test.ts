@@ -239,15 +239,16 @@ describe("consumeTurnStream — maps the SDK message stream to a turn result", (
     expect(compaction?.kind === "compaction" && compaction.preserved).toBe(true);
   });
 
-  test("a rejected rate-limit + failed result → typed rate_limit error carrying resetsAt", async () => {
-    const resetsAt = Date.now() + 60_000;
+  test("a rejected rate-limit + failed result → typed rate_limit error carrying resetsAt (s→ms)", async () => {
+    // The SDK reports resetsAt in epoch SECONDS; the runner normalizes to our canonical epoch-ms.
+    const resetsAtSeconds = Math.floor((Date.now() + 60_000) / 1000);
     const error = await expectTurnError(
-      streamOf(rateLimitEvent("rejected", resetsAt), resultError("error_during_execution")),
+      streamOf(rateLimitEvent("rejected", resetsAtSeconds), resultError("error_during_execution")),
     );
 
     expect(error.kind).toBe("rate_limit");
     expect(error.retryable).toBe(true);
-    expect(error.resetsAt).toBe(resetsAt);
+    expect(error.resetsAt).toBe(resetsAtSeconds * 1000);
   });
 
   test("an auth_failed api_retry that then fails → non-retryable auth_failed (the ban canary)", async () => {

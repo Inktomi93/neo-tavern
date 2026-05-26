@@ -12,6 +12,7 @@ import {
 } from "@anthropic-ai/claude-agent-sdk";
 import { type GenerationParams, isThinkingOn } from "../../shared/generation";
 import { type ChatModelId, DEFAULT_CHAT_MODEL_ID } from "../../shared/models";
+import { secondsToMs } from "../../shared/time";
 import {
   buildClaudeOpenRouterEnv,
   buildClaudeSdkEnv,
@@ -423,10 +424,13 @@ export async function consumeTurnStream(
 
         case "rate_limit_event": {
           const info = message.rate_limit_info;
+          // The SDK reports resetsAt in epoch SECONDS — normalize to our canonical epoch-ms at the
+          // boundary so everything downstream (UI countdown, TurnError) is one unit (shared/time.ts).
+          const resetsAtMs = secondsToMs(info.resetsAt);
           rateLimit = {
             status: info.status,
             rateLimitType: info.rateLimitType,
-            resetsAt: info.resetsAt,
+            resetsAt: resetsAtMs,
             utilization: info.utilization,
           };
           emit({
@@ -434,7 +438,7 @@ export async function consumeTurnStream(
             at: Date.now(),
             status: info.status,
             rateLimitType: info.rateLimitType,
-            resetsAt: info.resetsAt,
+            resetsAt: resetsAtMs,
             utilization: info.utilization,
           });
           // WARN when we're being throttled/rejected; debug when merely "allowed".
@@ -448,7 +452,7 @@ export async function consumeTurnStream(
               {
                 status: info.status,
                 rateLimitType: info.rateLimitType,
-                resetsAt: info.resetsAt,
+                resetsAt: resetsAtMs,
                 utilization: info.utilization,
               },
               "claude: rate-limited",
