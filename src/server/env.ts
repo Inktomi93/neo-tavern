@@ -1,3 +1,6 @@
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import process from "node:process";
 import dotenv from "dotenv";
 import { z } from "zod";
@@ -91,9 +94,85 @@ export function buildClaudeSdkEnv(): Record<string, string | undefined> {
   return {
     ...process.env,
     ANTHROPIC_API_KEY: undefined,
+    // Explicitly null the OpenRouter-skin trio so a stale ambient export (or a future
+    // mode-2 bug) can NEVER repoint the FREE Max-sub subprocess at a paid base URL +
+    // alien auth token — which would route the sub's OAuth token off to a third party
+    // (the st-claude-proxy ban shape). Sub mode authenticates via the host `claude
+    // login` ONLY; these three must not leak in. (Mirrors the CLAUDE_EFFORT discipline.)
+    ANTHROPIC_BASE_URL: undefined,
+    ANTHROPIC_AUTH_TOKEN: undefined,
     CLAUDE_CODE_DISABLE_CLAUDE_MDS: "true",
     CLAUDE_CODE_DISABLE_THINKING: "1",
     CLAUDE_CODE_DISABLE_1M_CONTEXT: "1",
     CLAUDE_EFFORT: undefined,
+  };
+}
+
+// Mode-2 ("Claude API") credential isolation. The Agent SDK resolves its config/credential
+// dir from CLAUDE_CONFIG_DIR (and, separately, ANTHROPIC_CONFIG_DIR), each defaulting to
+// ~/.claude where the host `claude login` token lives (file-based: ~/.claude/.credentials.json,
+// verified). Pointing BOTH at a fresh empty dir makes that token physically unreachable by the
+// spawn — so a mode-2 subprocess, which DOES set a paid base URL, can never send the Max-sub
+// OAuth token to OpenRouter. Memoized: one ephemeral dir per process (the SDK only writes its
+// transient session JSONL there; our DB-backed SessionStore is canon, so emptiness is fine).
+let isolatedConfigDir: string | undefined;
+function ephemeralClaudeConfigDir(): string {
+  if (isolatedConfigDir === undefined) {
+    isolatedConfigDir = mkdtempSync(join(tmpdir(), "neo-tavern-claude-or-"));
+  }
+  return isolatedConfigDir;
+}
+
+/**
+ * Environment for "Claude API" mode (mode 2 of the 4-mode architecture): the SAME Agent SDK
+ * runner, env-swapped to route through OpenRouter's Anthropic-compatible skin — paid Claude
+ * that REUSES our entire sdk-mode pipeline (caching/thinking/events/seeding/swipes), only the
+ * subprocess auth target differs. The skin recipe (per OpenRouter's Claude Code integration):
+ * `ANTHROPIC_BASE_URL` → OpenRouter, `ANTHROPIC_AUTH_TOKEN` → the OpenRouter key, and
+ * `ANTHROPIC_API_KEY` set to the EMPTY STRING (not unset — an unset key lets the runtime fall
+ * through to other credential sources).
+ *
+ * SECURITY (the ban-risk firewall): this spawn sets a paid base URL, so the host `claude login`
+ * token MUST NOT be reachable from it. We (1) isolate CLAUDE_CONFIG_DIR + ANTHROPIC_CONFIG_DIR to
+ * an empty ephemeral dir (hides ~/.claude/.credentials.json) and (2) null every OTHER credential
+ * source the runtime reads (OAuth token, identity tokens, service account). The ONLY credential in
+ * scope becomes the OpenRouter auth token — making it structurally impossible to leak the sub
+ * token to OpenRouter, regardless of the runtime's internal credential precedence.
+ *
+ * Takes the key as an argument (required, non-empty) rather than reading it here, so the function
+ * is pure + unit-testable and the "key required" invariant is explicit at the call site.
+ */
+export function buildClaudeOpenRouterEnv(
+  openRouterApiKey: string,
+): Record<string, string | undefined> {
+  if (!openRouterApiKey) {
+    throw new Error(
+      "buildClaudeOpenRouterEnv: an OpenRouter API key is required for Claude-API mode (the Anthropic skin).",
+    );
+  }
+  const configDir = ephemeralClaudeConfigDir();
+  return {
+    ...process.env,
+    // Same leak-discipline + RP generation defaults as sub mode, so the ONLY difference between
+    // mode 1 and mode 2 is the auth target (keeps both turns byte-comparable for caching).
+    CLAUDE_CODE_DISABLE_CLAUDE_MDS: "true",
+    CLAUDE_CODE_DISABLE_THINKING: "1",
+    CLAUDE_CODE_DISABLE_1M_CONTEXT: "1",
+    CLAUDE_EFFORT: undefined,
+    // The OpenRouter Anthropic-skin trio.
+    ANTHROPIC_API_KEY: "",
+    ANTHROPIC_BASE_URL: "https://openrouter.ai/api",
+    ANTHROPIC_AUTH_TOKEN: openRouterApiKey,
+    // Tier → OpenRouter Claude id mapping (the runtime asks for opus/sonnet/haiku tiers).
+    ANTHROPIC_DEFAULT_OPUS_MODEL: "anthropic/claude-opus-4.7",
+    ANTHROPIC_DEFAULT_SONNET_MODEL: "anthropic/claude-sonnet-4.6",
+    ANTHROPIC_DEFAULT_HAIKU_MODEL: "anthropic/claude-haiku-4.5",
+    // Credential isolation — the firewall (see the SECURITY note above).
+    CLAUDE_CONFIG_DIR: configDir,
+    ANTHROPIC_CONFIG_DIR: configDir,
+    CLAUDE_CODE_OAUTH_TOKEN: undefined,
+    ANTHROPIC_IDENTITY_TOKEN: undefined,
+    ANTHROPIC_IDENTITY_TOKEN_FILE: undefined,
+    ANTHROPIC_SERVICE_ACCOUNT_ID: undefined,
   };
 }
