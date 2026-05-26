@@ -113,7 +113,8 @@ empty** — 100% rails, 0% product.
    integration + UX remain.
    - **SDK-runtime hardening ✅** — `consumeTurnStream` classifies the full Agent SDK message
      union (compaction/retry/rate-limit/auth/errors) into `events[]` + a provider-agnostic
-     `ClaudeTurnError`; atomic send (rollback → `SendResult{status:"error"}`); migration 0008
+     `TurnError` (the shared contract, later extracted to `providers/turn.ts`); atomic send
+     (rollback → `SendResult{status:"error"}`); migration 0008
      turn-metadata columns. Compaction measured empirically (`pnpm sdk:compaction`). See `sdk-notes.md`.
    - **Prompt assembly ✅ (keystone)** — `shared/prompt-config.ts` (`PromptConfig` Zod: reorderable
      sections + markers + cache `boundary`, lives in the preset `config` blob) + `shared/prompt-assemble.ts`
@@ -188,8 +189,11 @@ empty** — 100% rails, 0% product.
 - **Persisted `chat_events` table** — compaction/retry/rate-limit history (log ring + `events[]` suffice now).
 
 **Cleanups (do alongside the above):**
-- **`ClaudeTurnError` → `TurnError`** + extract the shared contract to `providers/turn.ts` — OpenRouter
-  currently throws a "Claude"-named error; the boundary is provider-agnostic. Mechanical rename.
+- ✅ **`ClaudeTurnError` → `TurnError`** + extracted the shared contract to `providers/turn.ts` — the
+  provider-agnostic turn contract (`TurnError`/`TurnErrorKind`/`TurnEvent`/`ChatTurnUsage`/`ChatTurnResult`/
+  `RateLimitSnapshot`) now lives in `turn.ts`; both `claude-sdk.ts` and `openrouter.ts` import it, so OpenRouter
+  no longer imports the Claude module or throws a Claude-named error. (sdk-specific `ChatTurnParams`/runtime
+  stay in `claude-sdk.ts`; `RawTurnParams` in `openrouter.ts`.)
 - **Error-variant UI** — the client only handles `status:"stale"`; the `status:"error"` send result (with
   `code`/`retryable`/`resetsAt`) has no UI yet. ~20-min win, independent of everything.
 

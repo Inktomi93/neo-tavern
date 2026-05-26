@@ -252,14 +252,14 @@ raw-mode is where they're cache-cheap.
 than scrape the reply. `runChatTurn` spawns + resumes, then delegates the whole
 stream to **`consumeTurnStream(stream, ctx)`** (exported, in `providers/claude-sdk.ts`)
 — split out so the mapping is unit-testable with a hand-built stream (no subprocess;
-see `claude-sdk.test.ts`). It returns a `ChatTurnResult` and **throws `ClaudeTurnError`
+see `claude-sdk.test.ts`). It returns a `ChatTurnResult` and **throws `TurnError`
 on any failure result.**
 
 | SDK message | What we do | Surfaced as |
 |---|---|---|
 | `assistant` (text blocks) | accumulate the reply, capture `stop_reason` | `result.reply` |
 | `result` success | sum `modelUsage` (tokens/cost/**contextWindow**/maxOutputTokens), read `usage.cache_creation` 5m/1h split, `ttft_ms`, `terminal_reason`, `api_error_status` | `result.usage` + columns |
-| `result` error (`error_during_execution`/`max_turns`/`max_budget_usd`/`max_structured_output_retries`) | classify → **throw `ClaudeTurnError`** | typed error |
+| `result` error (`error_during_execution`/`max_turns`/`max_budget_usd`/`max_structured_output_retries`) | classify → **throw `TurnError`** | typed error |
 | `system`/`compact_boundary` | record trigger/pre·post-tokens; **INFO log** (stream event — the persisted frame is separate, see below) | `events[].compaction` |
 | `system`/`api_retry` | record attempt/delay/code; **WARN** (or **ERROR** if the code is an auth failure — the ban canary) | `events[].api_retry` |
 | `system`/`status` | record `SDKStatus` + `compact_result` | `events[].status` |
@@ -269,7 +269,7 @@ on any failure result.**
 | `stream_event` | no-op (we don't set `includePartialMessages` yet — see below) | — |
 | tool / task / hook / memory / permission / plugin / mirror_error / … | can't fire with our locked config (`tools:[]`, no MCP, no subagents); **logged at debug, never crash** | (debug) |
 
-**`ClaudeTurnError` is provider-agnostic on purpose.** Its `kind`
+**`TurnError` is provider-agnostic on purpose.** Its `kind`
 (`rate_limit | auth_failed | billing | invalid | model_unavailable | server | max_output
 | aborted | unknown`) + `retryable` + `resetsAt` are the **single vocabulary the transport
 and UI key off** — the raw-mode (OpenRouter/direct) adapter in Phase 5 maps its own
@@ -414,7 +414,7 @@ card-curator (its chat is a local llama-server). Working reference: `/home/inkto
   `assemblePrompt` static/dynamic: static → `instructions` (cached via `promptCacheKey`), conversation → `input`
   items (user/assistant; never start with assistant — pad a user stub). Params (`temperature`/`topP`/penalties/
   `maxOutputTokens`/`reasoning.effort`) flow from the preset config.
-- **Typed errors → our `ClaudeTurnError` kinds** by `statusCode` (the base `OpenRouterError` carries it):
+- **Typed errors → our `TurnError` kinds** by `statusCode` (the base `OpenRouterError` carries it):
   401/403→auth_failed, 402→billing, 404→model_unavailable, 429→rate_limit, 400/413/422→invalid, 5xx→server,
   connection/timeout→server, abort→aborted. So raw + sdk turns share ONE provider-agnostic boundary + the
   same `ChatTurnResult`.

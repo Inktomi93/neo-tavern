@@ -3,12 +3,7 @@ import { OpenRouter } from "@openrouter/sdk";
 import { z } from "zod";
 import { env } from "../env";
 import { getLog } from "../observability/logger";
-import {
-  type ChatTurnResult,
-  type ChatTurnUsage,
-  ClaudeTurnError,
-  type TurnErrorKind,
-} from "./claude-sdk";
+import { type ChatTurnResult, type ChatTurnUsage, TurnError, type TurnErrorKind } from "./turn";
 
 // Raw-mode + non-Claude chats route through OpenRouter's OFFICIAL SDK (@openrouter/sdk) +
 // the Responses API (beta.responses.send) — validated live against /home/inktomi/discovery/
@@ -111,10 +106,9 @@ export async function listOpenRouterModels(force = false): Promise<RawModel[]> {
 }
 
 // ── Raw turn (Responses API) ─────────────────────────────────────────────────
-// The provider-agnostic mirror of the sdk-mode runChatTurn: takes the assembled system
-// prompt + the full canon history, calls beta.responses.send, returns the SAME ChatTurnResult
-// and throws the SAME ClaudeTurnError kinds. (The "Claude" name is a holdover — it's the shared
-// provider-agnostic boundary; rename to TurnError is a pending cleanup.)
+// The provider-agnostic mirror of the sdk-mode runChatTurn: takes the assembled system prompt +
+// the full canon history, calls beta.responses.send, returns the SAME ChatTurnResult and throws the
+// SAME TurnError kinds (the shared contract in ./turn — neither provider owns it).
 
 export interface RawTurnParams {
   /** OpenRouter "provider/model" id. */
@@ -166,7 +160,7 @@ function buildInput(history: RawTurnParams["history"]): Array<{ role: string; co
 
 // Map @openrouter/sdk errors → our provider-agnostic kinds. All response errors extend
 // OpenRouterError (numeric `statusCode`); transport errors (connection/timeout/abort) carry a name.
-function mapOpenRouterError(error: unknown, model: string): ClaudeTurnError {
+function mapOpenRouterError(error: unknown, model: string): TurnError {
   const status =
     error !== null &&
     typeof error === "object" &&
@@ -207,7 +201,7 @@ function mapOpenRouterError(error: unknown, model: string): ClaudeTurnError {
     kind = "unknown";
     retryable = false;
   }
-  return new ClaudeTurnError({
+  return new TurnError({
     kind,
     retryable,
     message: `openrouter (${model}): ${message}`,
@@ -227,7 +221,7 @@ function extractReply(view: ResponsesView): string {
 
 /**
  * One raw-mode turn over OpenRouter's Responses API. Provider-agnostic out the top: returns a
- * {@link ChatTurnResult}, throws a {@link ClaudeTurnError} (mapped from the SDK's typed errors).
+ * {@link ChatTurnResult}, throws a {@link TurnError} (mapped from the SDK's typed errors).
  * Injected into `domain/chat` as a seam so it's testable with a fake (no network in `pnpm check`).
  */
 export async function runRawTurn(params: RawTurnParams): Promise<ChatTurnResult> {

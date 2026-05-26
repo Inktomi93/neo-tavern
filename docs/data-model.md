@@ -338,7 +338,7 @@ export const taggables = sqliteTable('taggables', {
     in-process mutex (`_shared/lock.ts` `withChatLock`) — one in-flight generation per chat,
     so two concurrent `resume`s can't corrupt `session_entries`. (Tested:
     `tests/integration/chat.test.ts` stale-seq case proves the model isn't called.)
-  - **✅ BUILT: atomic send on failure.** A failed generation (typed `ClaudeTurnError` from
+  - **✅ BUILT: atomic send on failure.** A failed generation (typed `TurnError` from
     the provider — `kind` ∈ rate_limit/auth_failed/billing/…) **rolls the user message back
     out** and returns `status:"error" + {code, retryable, resetsAt?}`, so the chat stays at
     its prior coherent tip and the client can surface a typed reason + re-send. `code` is the

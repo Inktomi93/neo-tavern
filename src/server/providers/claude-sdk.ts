@@ -3,9 +3,7 @@ import {
   query,
   type SDKAssistantMessageError,
   type SDKMessage,
-  type SDKRateLimitInfo,
   type SDKResultError,
-  type SDKStatus,
   type SessionStore,
   SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
   type TerminalReason,
@@ -13,6 +11,14 @@ import {
 import { type ChatModelId, DEFAULT_CHAT_MODEL_ID } from "../../shared/models";
 import { buildClaudeSdkEnv, env } from "../env";
 import { getLog } from "../observability/logger";
+import {
+  type ChatTurnResult,
+  type ChatTurnUsage,
+  type RateLimitSnapshot,
+  TurnError,
+  type TurnErrorKind,
+  type TurnEvent,
+} from "./turn";
 
 // sdk-mode (YGWYG) chats run through the Claude Agent SDK, which spawns the
 // official Claude Code runtime and authenticates with the host's `claude login`
@@ -119,52 +125,9 @@ export async function verifyClaudeAuth(
   return { ok, apiKeySource, model, reply: reply.trim(), costUsd };
 }
 
-// ── Typed failure boundary ───────────────────────────────────────────────────
-// The error a turn surfaces, in PROVIDER-AGNOSTIC terms. `kind` is the public
-// surface every provider (sdk-mode now; raw-mode/OpenRouter in Phase 5) maps its
-// failures onto, so the transport + UI key off ONE vocabulary and never re-derive
-// the mapping per provider. The raw SDK code rides along as a side detail.
-export type TurnErrorKind =
-  | "rate_limit" // sub allowance exhausted — retryable once it resets
-  | "auth_failed" // credential rejected — the ban-risk canary; NOT retryable, alert loudly
-  | "billing" // out of budget / billing problem
-  | "invalid" // malformed request — a bug on our side
-  | "model_unavailable" // unknown/unsupported model
-  | "server" // upstream 5xx / execution error — transient, retryable
-  | "max_output" // hit the output-token ceiling mid-reply — retry can continue
-  | "aborted" // turn-limit / abort
-  | "unknown";
-
-export interface ClaudeTurnErrorInit {
-  kind: TurnErrorKind;
-  retryable: boolean;
-  message: string;
-  /** Raw SDK assistant-error code, when the failure came from one (Phase-5 bridge keeps it). */
-  sdkError?: SDKAssistantMessageError;
-  /** Raw SDK result error subtype, when the failure was an error result. */
-  resultSubtype?: SDKResultError["subtype"];
-  /** For rate_limit: epoch ms when the window resets (from a rate_limit_event seen this turn). */
-  resetsAt?: number;
-  cause?: unknown;
-}
-
-export class ClaudeTurnError extends Error {
-  readonly kind: TurnErrorKind;
-  readonly retryable: boolean;
-  readonly sdkError: SDKAssistantMessageError | undefined;
-  readonly resultSubtype: SDKResultError["subtype"] | undefined;
-  readonly resetsAt: number | undefined;
-
-  constructor(init: ClaudeTurnErrorInit) {
-    super(init.message, init.cause === undefined ? undefined : { cause: init.cause });
-    this.name = "ClaudeTurnError";
-    this.kind = init.kind;
-    this.retryable = init.retryable;
-    this.sdkError = init.sdkError;
-    this.resultSubtype = init.resultSubtype;
-    this.resetsAt = init.resetsAt;
-  }
-}
+// The provider-agnostic turn contract (TurnError/TurnErrorKind/TurnEvent/ChatTurnResult/…) lives
+// in ./turn so raw-mode can throw + return the same shapes without importing this Claude module.
+// The classification below maps the Agent SDK's own error codes onto that shared TurnErrorKind.
 
 // Exhaustive over SDKAssistantMessageError (no default → tsc flags a new SDK code).
 function classifyAssistantError(code: SDKAssistantMessageError): {
@@ -209,86 +172,6 @@ function classifyResultSubtype(subtype: SDKResultError["subtype"]): {
   }
 }
 
-// ── Per-turn structured events ───────────────────────────────────────────────
-// Everything the stream tells us BESIDES the reply text + final usage. Metadata
-// only (never RP content). Returned on ChatTurnResult.events AND logged live, so
-// a long chat's auto-compaction, transient retries, and rate-limit warnings are
-// observable via /api/_debug without scanning the model's output.
-export interface RateLimitSnapshot {
-  status: SDKRateLimitInfo["status"];
-  rateLimitType: SDKRateLimitInfo["rateLimitType"];
-  resetsAt: number | undefined;
-  utilization: number | undefined;
-}
-
-export type TurnEvent =
-  | {
-      kind: "compaction";
-      at: number;
-      trigger: "manual" | "auto";
-      preTokens: number;
-      postTokens: number | undefined;
-      durationMs: number | undefined;
-      preserved: boolean;
-    }
-  | {
-      kind: "api_retry";
-      at: number;
-      attempt: number;
-      maxRetries: number;
-      retryDelayMs: number;
-      errorStatus: number | null;
-      sdkError: SDKAssistantMessageError;
-    }
-  | {
-      kind: "rate_limit";
-      at: number;
-      status: SDKRateLimitInfo["status"];
-      rateLimitType: SDKRateLimitInfo["rateLimitType"];
-      resetsAt: number | undefined;
-      utilization: number | undefined;
-    }
-  | {
-      kind: "status";
-      at: number;
-      status: SDKStatus;
-      compactResult: "success" | "failed" | undefined;
-    }
-  | { kind: "auth_status"; at: number; isAuthenticating: boolean; error: string | undefined };
-
-export interface ChatTurnUsage {
-  model: string;
-  tokensIn: number;
-  tokensOut: number;
-  cacheReadTokens: number;
-  cacheWriteTokens: number;
-  /** Split of cache-creation tokens by TTL bucket (usage.cache_creation) — sub-mode defaults 1h. */
-  cacheCreation5mTokens: number;
-  cacheCreation1hTokens: number;
-  /** Model context window + output ceiling (from modelUsage) — drives the context-fill meter. */
-  contextWindow: number;
-  maxOutputTokens: number;
-  costUsd: number;
-}
-
-export interface ChatTurnResult {
-  reply: string;
-  /** result.session_id — persist on the chat row so the next turn resumes it. */
-  sessionId: string;
-  stopReason: string | null;
-  terminalReason: TerminalReason | null;
-  /** Time-to-first-token (ms), when the SDK reported it. */
-  ttftMs: number | null;
-  /** Non-null when transient API errors occurred but retries recovered the turn. */
-  apiErrorStatus: number | null;
-  numTurns: number;
-  usage: ChatTurnUsage;
-  /** Compaction / retry / rate-limit / status / auth events seen this turn (metadata). */
-  events: TurnEvent[];
-  /** Latest rate-limit snapshot seen this turn, if any. */
-  rateLimit: RateLimitSnapshot | null;
-}
-
 export interface ChatTurnParams {
   prompt: string;
   model: ChatModelId;
@@ -312,7 +195,7 @@ export interface ChatTurnParams {
  * resumes from our store, consumes the FULL SDK message stream — classifying
  * compaction, retries, rate-limits, auth, and error results, not just the reply —
  * and returns the text + session id + per-turn usage + the structured events.
- * Throws {@link ClaudeTurnError} on any failure result so the caller can surface a
+ * Throws {@link TurnError} on any failure result so the caller can surface a
  * typed, provider-agnostic reason. Injected into `domain/chat` as a seam so the
  * turn logic is testable with a fake (no sub queries in `pnpm check`).
  */
@@ -349,7 +232,7 @@ export interface TurnStreamContext {
  * The SDK-message-stream → {@link ChatTurnResult} mapping, isolated from the subprocess
  * spawn so it is unit-testable with a hand-built stream (this is the "pure request/response
  * mapping" the provider layer is supposed to cover, per tests/AGENTS.md — the real spawn +
- * auth are exercised by `pnpm verify:claude`). Throws {@link ClaudeTurnError} on any failure
+ * auth are exercised by `pnpm verify:claude`). Throws {@link TurnError} on any failure
  * result; classifies compaction / retries / rate-limits / auth into `events` along the way.
  */
 export async function consumeTurnStream(
@@ -559,7 +442,7 @@ export async function consumeTurnStream(
             apiErrorStatus = message.api_error_status ?? null;
             if (message.is_error) {
               // Defensive: a "success" subtype flagged is_error — treat as a server error.
-              throw new ClaudeTurnError({
+              throw new TurnError({
                 kind: "server",
                 retryable: true,
                 message: "claude: result success-subtype flagged is_error",
@@ -577,7 +460,7 @@ export async function consumeTurnStream(
               specific !== undefined
                 ? classifyAssistantError(specific)
                 : classifyResultSubtype(message.subtype);
-            throw new ClaudeTurnError({
+            throw new TurnError({
               kind: classified.kind,
               retryable: classified.retryable,
               message: `claude: turn failed (${message.subtype})${message.errors.length > 0 ? `: ${message.errors.join("; ")}` : ""}`,
@@ -603,7 +486,7 @@ export async function consumeTurnStream(
       }
     }
   } catch (error) {
-    if (error instanceof ClaudeTurnError) {
+    if (error instanceof TurnError) {
       getLog().error(
         {
           model: ctx.model,
@@ -619,7 +502,7 @@ export async function consumeTurnStream(
     }
     // Unexpected thrown exception (spawn/network/subprocess) — wrap as a transient
     // server error so the caller has the same typed surface. Likely retryable.
-    const wrapped = new ClaudeTurnError({
+    const wrapped = new TurnError({
       kind: "server",
       retryable: true,
       message: error instanceof Error ? error.message : String(error),

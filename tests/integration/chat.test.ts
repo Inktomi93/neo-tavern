@@ -6,12 +6,9 @@ import {
   ChatOperationError,
   createChatService,
 } from "../../src/server/domain/chat";
-import {
-  type ChatTurnParams,
-  type ChatTurnResult,
-  ClaudeTurnError,
-} from "../../src/server/providers/claude-sdk";
+import type { ChatTurnParams } from "../../src/server/providers/claude-sdk";
 import type { RawTurnParams } from "../../src/server/providers/openrouter";
+import { type ChatTurnResult, TurnError } from "../../src/server/providers/turn";
 import { freshDb } from "../support/db";
 
 function cannedTurn(reply: string): ChatTurnResult {
@@ -52,7 +49,7 @@ function fakeRunner(reply: string) {
 }
 
 // A fake runner that fails the turn with a typed provider error.
-function failingRunner(error: ClaudeTurnError) {
+function failingRunner(error: TurnError) {
   const calls: ChatTurnParams[] = [];
   const run = (params: ChatTurnParams): Promise<ChatTurnResult> => {
     calls.push(params);
@@ -75,7 +72,7 @@ function fakeRawRunner(reply: string) {
   return { run, calls };
 }
 
-function failingRawRunner(error: ClaudeTurnError) {
+function failingRawRunner(error: TurnError) {
   const calls: RawTurnParams[] = [];
   const run = (params: RawTurnParams): Promise<ChatTurnResult> => {
     calls.push(params);
@@ -165,7 +162,7 @@ test("a failed turn rolls the user message back out and returns a typed error", 
   const db = await freshDb();
   const resetsAt = Date.now() + 60_000;
   const { run } = failingRunner(
-    new ClaudeTurnError({
+    new TurnError({
       kind: "rate_limit",
       retryable: true,
       message: "rate limited",
@@ -225,7 +222,7 @@ test("a raw-mode chat generates through runRaw with provider=openrouter and no s
 test("a failed raw turn rolls back identically to sdk (shared error path)", async () => {
   const db = await freshDb();
   const raw = failingRawRunner(
-    new ClaudeTurnError({ kind: "billing", retryable: false, message: "out of credits" }),
+    new TurnError({ kind: "billing", retryable: false, message: "out of credits" }),
   );
   const chat = createChatService(db, { runRaw: raw.run });
 

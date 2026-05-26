@@ -24,8 +24,9 @@ import {
   type WorldInfoScope,
 } from "../../../shared/prompt-config";
 import { getLog } from "../../observability/logger";
-import { type ChatTurnResult, ClaudeTurnError, runChatTurn } from "../../providers/claude-sdk";
+import { runChatTurn } from "../../providers/claude-sdk";
 import { type RawTurnParams, runRawTurn } from "../../providers/openrouter";
+import { type ChatTurnResult, TurnError } from "../../providers/turn";
 import { newId } from "../_shared/ids";
 import { withChatLock } from "../_shared/lock";
 import { ensureUser } from "../_shared/users";
@@ -396,7 +397,7 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
           });
         }
       } catch (error) {
-        if (error instanceof ClaudeTurnError) {
+        if (error instanceof TurnError) {
           // Atomic send: the generation failed, so roll the user message back out (no
           // :memory:-safe transaction; the per-chat lock guarantees no racer) — the chat
           // returns to its prior coherent tip and the client surfaces a typed error.

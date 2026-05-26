@@ -1,4 +1,4 @@
-import type { TurnErrorKind } from "../../providers/claude-sdk";
+import type { TurnErrorKind } from "../../providers/turn";
 
 // Shaped, client-safe view of a message row (we don't leak every column).
 export interface MessageView {

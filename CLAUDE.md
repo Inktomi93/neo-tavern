@@ -175,7 +175,7 @@ soft-delete trash bin. No tautological getById tests. Catch yourself building th
   **Phase 5 prepwork ✅ (SDK runtime hardening):** the chat turn now consumes the FULL Agent
   SDK message stream — `consumeTurnStream` (split from `runChatTurn` for unit-testing)
   classifies compaction / api_retry / rate_limit / auth_status / error-results into a
-  structured `events[]` + a **provider-agnostic `ClaudeTurnError`** (`kind` = rate_limit |
+  structured `events[]` + a **provider-agnostic `TurnError`** (`kind` = rate_limit |
   auth_failed | billing | … — the vocabulary raw-mode reuses), with per-event logging (auth
   failure → ERROR, the ban canary). `domain/chat` does an **atomic send** (rolls the user
   message back on failure → `SendResult{status:"error"}`). Migration **0008** persists turn
@@ -222,7 +222,7 @@ soft-delete trash bin. No tautological getById tests. Catch yourself building th
   **Phase 5 remaining — see `docs/build-plan.md` (detailed) + the deferred backlog:** **5E** swipes/edits
   *(immediate next)* · then greeting seeding (+ the seeding primitive → also unblocks raw→sdk fork),
   `{{memory}}` retrieval, managed compaction, streaming/SSE, preset CRUD+editor, the
-  `ClaudeTurnError`→`TurnError` rename. ·
+  `TurnError`→`TurnError` rename. ·
   **Phase 6** analytics (one chart at a time, only when there's a real question).
 
 ## Start here — fast orientation (new session, read this section)

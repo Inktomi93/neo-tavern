@@ -9,12 +9,8 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk";
 import { describe, expect, test } from "vitest";
 import { DEFAULT_CHAT_MODEL_ID } from "../../shared/models";
-import {
-  ClaudeTurnError,
-  consumeTurnStream,
-  disciplineOptions,
-  type TurnEvent,
-} from "./claude-sdk";
+import { consumeTurnStream, disciplineOptions } from "./claude-sdk";
+import { TurnError, type TurnEvent } from "./turn";
 
 // The proxy's worst leak: a host plugin's SessionStart hook (superpowers) injected
 // ~3.4k tokens into every request. These lock the config that prevents that class
@@ -184,15 +180,15 @@ function authStatus(): SDKMessage {
 
 const ctx = { model: DEFAULT_CHAT_MODEL_ID, resumed: false };
 
-async function expectTurnError(stream: AsyncIterable<SDKMessage>): Promise<ClaudeTurnError> {
+async function expectTurnError(stream: AsyncIterable<SDKMessage>): Promise<TurnError> {
   let caught: unknown;
   try {
     await consumeTurnStream(stream, ctx);
   } catch (error) {
     caught = error;
   }
-  expect(caught).toBeInstanceOf(ClaudeTurnError);
-  return caught as ClaudeTurnError;
+  expect(caught).toBeInstanceOf(TurnError);
+  return caught as TurnError;
 }
 
 describe("consumeTurnStream — maps the SDK message stream to a turn result", () => {
