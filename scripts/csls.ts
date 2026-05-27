@@ -2,8 +2,8 @@ import process from "node:process";
 import { createDb, runMigrations } from "../src/db/client";
 import {
   CSLS_K,
+  computeCharacterHubScores,
   computeDigestHubScores,
-  computeHubScores,
   computeSegmentHubScores,
 } from "../src/server/domain/corpus";
 import { env } from "../src/server/env";
@@ -21,7 +21,7 @@ async function main(): Promise<void> {
   await runMigrations(db);
 
   const t0 = Date.now();
-  const stats = await computeHubScores(db);
+  const stats = await computeCharacterHubScores(db);
   const secs = ((Date.now() - t0) / 1000).toFixed(1);
 
   for (const [type, s] of Object.entries(stats.byType)) {

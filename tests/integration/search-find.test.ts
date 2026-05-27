@@ -54,8 +54,9 @@ test("find enriches knn hits — character hits carry name+tags, segment hits ca
 
   const corpus = createCorpusService(db, { embedder });
   await corpus.embedAndStore({
-    entityType: "character",
-    entityId: "A",
+    characterId: "A",
+    ownerId: "uA",
+    characterVersionId: "cvA",
     text: "ranger king of the north",
   });
   // Phase B: the segment lives in chat_segments (block-bounded), not the polymorphic embeddings.

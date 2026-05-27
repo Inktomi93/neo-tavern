@@ -3,7 +3,7 @@ import { createCorpusService } from "../../src/server/domain/corpus";
 import { createSearchService } from "../../src/server/domain/search";
 import type { Embedder } from "../../src/server/embeddings/embedder";
 import type { RerankDoc, Reranker } from "../../src/server/embeddings/reranker";
-import { freshDb } from "../support/db";
+import { freshDb, seedCharacter } from "../support/db";
 
 // Crafted vectors so the query is nearest to "alpha", then "beta", then "gamma" (the vector
 // stage's order). The fake reranker then prefers the REVERSE — proving stage 2 reorders.
@@ -45,12 +45,23 @@ function makeReranker(): { reranker: Reranker; calls: { query: string; docs: Rer
   return { reranker, calls };
 }
 
+// Seed three character cards (a/b/c) with the crafted vectors, via the real character_embeddings
+// FK chain. knn returns entityId = character_id, so the cards' ids drive the assertions.
+async function seedCards(db: Awaited<ReturnType<typeof freshDb>>): Promise<void> {
+  const corpus = createCorpusService(db, { embedder });
+  for (const [id, text] of [
+    ["a", "alpha"],
+    ["b", "beta"],
+    ["c", "gamma"],
+  ] as const) {
+    const { characterVersionId } = await seedCharacter(db, { id, ownerId: "u1" });
+    await corpus.embedAndStore({ characterId: id, ownerId: "u1", characterVersionId, text });
+  }
+}
+
 test("knn stores source_text and stage-1 orders by vector distance", async () => {
   const db = await freshDb();
-  const corpus = createCorpusService(db, { embedder });
-  await corpus.embedAndStore({ entityType: "character", entityId: "a", text: "alpha" });
-  await corpus.embedAndStore({ entityType: "character", entityId: "b", text: "beta" });
-  await corpus.embedAndStore({ entityType: "character", entityId: "c", text: "gamma" });
+  await seedCards(db);
 
   const { reranker } = makeReranker();
   const hits = await createSearchService(db, { embedder, reranker }).knn({
@@ -63,10 +74,7 @@ test("knn stores source_text and stage-1 orders by vector distance", async () =>
 
 test("two-stage rerank reorders the pool by cross-encoder score over the stored source_text", async () => {
   const db = await freshDb();
-  const corpus = createCorpusService(db, { embedder });
-  await corpus.embedAndStore({ entityType: "character", entityId: "a", text: "alpha" });
-  await corpus.embedAndStore({ entityType: "character", entityId: "b", text: "beta" });
-  await corpus.embedAndStore({ entityType: "character", entityId: "c", text: "gamma" });
+  await seedCards(db);
 
   const { reranker, calls } = makeReranker();
   const reranked = await createSearchService(db, { embedder, reranker }).knn({

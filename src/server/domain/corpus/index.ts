@@ -11,17 +11,12 @@ export {
 } from "./embed-text";
 export {
   CSLS_K,
+  computeCharacterHubScores,
   computeDigestHubScores,
-  computeHubScores,
   computeSegmentHubScores,
   type HubStats,
   type HubTypeStat,
 } from "./hubness";
 export { type Segment, type SegmentMessage, segmentChat } from "./segment";
-export {
-  type CorpusService,
-  createCorpusService,
-  type EmbedItem,
-  embeddingKey,
-} from "./service";
+export { type CorpusService, createCorpusService, type EmbedItem } from "./service";
 export { collectEmbedTargets } from "./targets";

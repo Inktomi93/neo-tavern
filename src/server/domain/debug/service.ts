@@ -8,11 +8,11 @@ import type { SQLiteTable } from "drizzle-orm/sqlite-core";
 import type { Db } from "../../../db/client";
 import {
   assets,
+  characterEmbeddings,
   characters,
   characterVersions,
   chatEvents,
   chats,
-  embeddings,
   imageEmbeddings,
   messages,
   messageVariants,
@@ -79,7 +79,7 @@ const COUNTED_TABLES: SQLiteTable[] = [
   presetVersions,
   sessionEntries,
   chatEvents,
-  embeddings,
+  characterEmbeddings,
   imageEmbeddings,
   assets,
   tags,

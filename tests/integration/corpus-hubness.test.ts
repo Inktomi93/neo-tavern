@@ -1,11 +1,11 @@
 import { eq } from "drizzle-orm";
 import { expect, test } from "vitest";
 import type { Db } from "../../src/db/client";
-import { embeddings } from "../../src/db/schema";
-import { computeHubScores } from "../../src/server/domain/corpus";
+import { characterEmbeddings } from "../../src/db/schema";
+import { computeCharacterHubScores } from "../../src/server/domain/corpus";
 import { createSearchService } from "../../src/server/domain/search";
 import type { Embedder } from "../../src/server/embeddings/embedder";
-import { freshDb } from "../support/db";
+import { freshDb, seedCharacter } from "../support/db";
 
 // Crafted unit vectors in a 3-active-dim subspace (rest zero), normalized — so cosine
 // distance is exact and controllable. Geometry:
@@ -29,7 +29,7 @@ const C3 = vec({ 0: 1, 2: 0.1 });
 const S = vec({ 1: 1 });
 const Q = vec({ 0: 0.8, 1: 0.6 });
 
-// Query embedder always returns Q (knn embeds the query text only; computeHubScores reads
+// Query embedder always returns Q (knn embeds the query text only; computeCharacterHubScores reads
 // stored vectors and never touches the embedder).
 const queryEmbedder: Embedder = {
   model: "fake",
@@ -37,48 +37,44 @@ const queryEmbedder: Embedder = {
   embedBatch: (texts) => Promise.resolve(texts.map(() => Q)),
 };
 
-interface Seed {
-  entityType: string;
-  entityId: string;
-  vec: Float32Array;
-}
-async function seed(db: Db, rows: Seed[]): Promise<void> {
+// Seed the cluster as four character cards (real FK chain), each with a crafted vector. The
+// character_embeddings row id == characterId so hubOf/knn assertions key on the same id.
+async function seedCluster(db: Db): Promise<void> {
   const now = Date.now();
-  await db.insert(embeddings).values(
-    rows.map((r) => ({
-      id: r.entityId,
-      entityType: r.entityType,
-      entityId: r.entityId,
+  for (const r of [
+    { id: "c1", vec: C1 },
+    { id: "c2", vec: C2 },
+    { id: "c3", vec: C3 },
+    { id: "specific", vec: S },
+  ]) {
+    const { characterVersionId } = await seedCharacter(db, { id: r.id, ownerId: "u1" });
+    await db.insert(characterEmbeddings).values({
+      id: r.id,
+      characterId: r.id,
+      ownerId: "u1",
+      characterVersionId,
       model: "fake",
       embedding: r.vec,
       createdAt: now,
-    })),
-  );
+    });
+  }
 }
-const CLUSTER: Seed[] = [
-  { entityType: "character", entityId: "c1", vec: C1 },
-  { entityType: "character", entityId: "c2", vec: C2 },
-  { entityType: "character", entityId: "c3", vec: C3 },
-  { entityType: "character", entityId: "specific", vec: S },
-];
 
 async function hubOf(db: Db, id: string): Promise<number | null> {
   const row = (
-    await db.select({ h: embeddings.hubScore }).from(embeddings).where(eq(embeddings.id, id))
+    await db
+      .select({ h: characterEmbeddings.hubScore })
+      .from(characterEmbeddings)
+      .where(eq(characterEmbeddings.characterId, id))
   )[0];
   return row?.h ?? null;
 }
 
-test("computeHubScores: dense-cluster rows score high, the isolated row low; sparse type zeroed", async () => {
+test("computeCharacterHubScores: dense-cluster rows score high, the isolated row low", async () => {
   const db = await freshDb();
-  await seed(db, [
-    ...CLUSTER,
-    // a second entity_type with < K+1 members → zeroed (mirrors card-curator len<K+1 → 0)
-    { entityType: "chat_segment", entityId: "seg0", vec: vec({ 5: 1 }) },
-    { entityType: "chat_segment", entityId: "seg1", vec: vec({ 6: 1 }) },
-  ]);
+  await seedCluster(db);
 
-  const stats = await computeHubScores(db, { k: 2 });
+  const stats = await computeCharacterHubScores(db, { k: 2 });
 
   const hubC2 = (await hubOf(db, "c2")) ?? 0;
   const hubSpecific = (await hubOf(db, "specific")) ?? 0;
@@ -86,21 +82,15 @@ test("computeHubScores: dense-cluster rows score high, the isolated row low; spa
   expect(hubSpecific).toBeLessThan(0.2); // S's nearest are the distant cluster
   expect(hubC2).toBeGreaterThan(hubSpecific);
 
-  // sparse type: both zeroed, none computed. (Variable keys: byType is an index-signature
-  // Record, so dot access trips tsc's noPropertyAccessFromIndexSignature; a literal bracket
-  // key would trip biome's useLiteralKeys — a non-literal key satisfies both.)
+  // byType is an index-signature Record; a non-literal key satisfies both tsc's
+  // noPropertyAccessFromIndexSignature and biome's useLiteralKeys.
   const Char = "character";
-  const Seg = "chat_segment";
-  expect(await hubOf(db, "seg0")).toBe(0);
-  expect(await hubOf(db, "seg1")).toBe(0);
   expect(stats.byType[Char]?.computed).toBe(4);
-  expect(stats.byType[Seg]?.skipped).toBe(2);
-  expect(stats.byType[Seg]?.computed).toBe(0);
 });
 
 test("knn without hub scores ranks by raw distance — the closer hub (c2) first", async () => {
   const db = await freshDb();
-  await seed(db, CLUSTER); // hub_score left null (no computeHubScores call)
+  await seedCluster(db); // hub_score left null (no computeCharacterHubScores call)
 
   const hits = await createSearchService(db, { embedder: queryEmbedder }).knn({
     queryText: "q",
@@ -110,11 +100,11 @@ test("knn without hub scores ranks by raw distance — the closer hub (c2) first
   expect(hits[0]?.entityId).toBe("c2"); // raw-nearest to Q
 });
 
-test("knn after computeHubScores demotes the hub — the specific match (S) ranks first", async () => {
+test("knn after computeCharacterHubScores demotes the hub — the specific match (S) ranks first", async () => {
   const db = await freshDb();
-  await seed(db, CLUSTER);
+  await seedCluster(db);
 
-  await computeHubScores(db, { k: 2 });
+  await computeCharacterHubScores(db, { k: 2 });
   const hits = await createSearchService(db, { embedder: queryEmbedder }).knn({
     queryText: "q",
     k: 4,

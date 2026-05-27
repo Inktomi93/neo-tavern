@@ -46,10 +46,10 @@ export async function collectEmbedTargets(db: Db): Promise<EmbedItem[]> {
       tags: strArray(v.tags),
     });
     targets.push({
-      entityType: "character",
-      entityId: c.id,
+      characterId: c.id,
+      ownerId: c.ownerId,
+      characterVersionId: v.id,
       text: cap(text),
-      metadata: { name: v.name },
     });
   }
 

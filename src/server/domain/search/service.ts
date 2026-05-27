@@ -1,6 +1,6 @@
 import { and, eq, inArray, sql } from "drizzle-orm";
 import type { Db } from "../../../db/client";
-import { characters, characterVersions, chatSegments, chats } from "../../../db/schema";
+import { characters, characterVersions, chatSegments } from "../../../db/schema";
 import { createEmbedder, type Embedder } from "../../embeddings/embedder";
 import { createReranker, type Reranker } from "../../embeddings/reranker";
 import { getLog } from "../../observability/logger";
@@ -216,42 +216,6 @@ export function createSearchService(db: Db, deps: SearchServiceDeps = {}): Searc
 
   // Keep only candidates whose backing entity is owned by ownerId (character → characters,
   // chat_segment → chats). Generic so it can scope the candidate pool (carrying source_text).
-  async function scopeToOwner<T extends { entityType: string; entityId: string }>(
-    rows: T[],
-    ownerId: string,
-  ): Promise<T[]> {
-    const charIds = rows.filter((r) => r.entityType === "character").map((r) => r.entityId);
-    const chatIds = rows
-      .filter((r) => r.entityType === "chat_segment")
-      .map((r) => chatIdOf(r.entityId));
-    const ownedChars =
-      charIds.length > 0
-        ? new Set(
-            (
-              await db
-                .select({ id: characters.id })
-                .from(characters)
-                .where(and(eq(characters.ownerId, ownerId), inArray(characters.id, charIds)))
-            ).map((r) => r.id),
-          )
-        : new Set<string>();
-    const ownedChats =
-      chatIds.length > 0
-        ? new Set(
-            (
-              await db
-                .select({ id: chats.id })
-                .from(chats)
-                .where(and(eq(chats.ownerId, ownerId), inArray(chats.id, chatIds)))
-            ).map((r) => r.id),
-          )
-        : new Set<string>();
-    return rows.filter((r) => {
-      if (r.entityType === "character") return ownedChars.has(r.entityId);
-      if (r.entityType === "chat_segment") return ownedChats.has(chatIdOf(r.entityId));
-      return false; // unknown entity type → not owner-resolvable, drop under scoping
-    });
-  }
 
   // Stage 2: cross-encoder rerank. Reorders the (owner-scoped, CSLS-ranked) pool by joint
   // (query, source_text) relevance. Candidates without source_text can't be scored — they're
@@ -370,20 +334,23 @@ export function createSearchService(db: Db, deps: SearchServiceDeps = {}): Searc
     const query = JSON.stringify(Array.from(embedding));
     // Pool ≥ k for the CSLS re-rank + the rerank candidate set; unioned with owner over-fetch.
     const poolK = Math.max(k * CSLS_POOL_FACTOR, ownerId ? k * OWNER_OVERFETCH : k);
-    // Two ANN queries unioned into one CSLS-ranked pool: characters from the polymorphic embeddings
-    // table, segments from the first-class chat_segments table (Phase B — segments left embeddings).
+    // Two ANN queries unioned into one CSLS-ranked pool: characters from character_embeddings,
+    // segments from chat_segments. BOTH carry a denormalized owner_id, so scope is a direct WHERE
+    // on the joined row (the old polymorphic over-fetch + scopeToOwner join-back is retired).
+    const ownerFilter = (col: string) =>
+      ownerId ? sql`WHERE ${sql.raw(col)} = ${ownerId}` : sql``;
     const charRows = await db.all<{
       entityId: string;
       dist: number;
       hubScore: number | null;
       sourceText: string | null;
     }>(sql`
-      SELECT e.entity_id AS entityId,
-             vector_distance_cos(e.embedding, vector32(${query})) AS dist,
-             e.hub_score AS hubScore, e.source_text AS sourceText
-      FROM vector_top_k('embeddings_ann', vector32(${query}), ${poolK}) AS v
-      JOIN embeddings e ON e.rowid = v.id
-      WHERE e.entity_type = 'character'
+      SELECT ce.character_id AS entityId,
+             vector_distance_cos(ce.embedding, vector32(${query})) AS dist,
+             ce.hub_score AS hubScore, ce.source_text AS sourceText
+      FROM vector_top_k('character_embeddings_ann', vector32(${query}), ${poolK}) AS v
+      JOIN character_embeddings ce ON ce.rowid = v.id
+      ${ownerFilter("ce.owner_id")}
       ORDER BY dist ASC
     `);
     const segRows = await db.all<{
@@ -398,6 +365,7 @@ export function createSearchService(db: Db, deps: SearchServiceDeps = {}): Searc
              cs.hub_score AS hubScore, cs.text AS text
       FROM vector_top_k('chat_segments_ann', vector32(${query}), ${poolK}) AS v
       JOIN chat_segments cs ON cs.rowid = v.id
+      ${ownerFilter("cs.owner_id")}
       ORDER BY dist ASC
     `);
     // CSLS hubness correction: adjusted = max(0, dist - 1 + hub_score), demoting near-everything
@@ -426,8 +394,8 @@ export function createSearchService(db: Db, deps: SearchServiceDeps = {}): Searc
     ];
     scored.sort((a, b) => a.rank - b.rank);
     const pool = scored.map((a) => a.cand);
-    const scoped = ownerId ? await scopeToOwner(pool, ownerId) : pool;
-    const ranked = rerank ? await applyRerank(queryText, scoped) : scoped;
+    // Owner scoping now lives in the SQL (direct owner_id WHERE), so the pool is already scoped.
+    const ranked = rerank ? await applyRerank(queryText, pool) : pool;
     const hits: SearchHit[] = ranked
       .slice(0, k)
       .map((c) => ({ entityType: c.entityType, entityId: c.entityId, distance: c.distance }));

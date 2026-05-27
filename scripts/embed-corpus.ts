@@ -4,7 +4,6 @@ import {
   collectEmbedTargets,
   createCorpusService,
   type EmbedItem,
-  embeddingKey,
   MIN_SEARCH_TEXT_TOKENS,
 } from "../src/server/domain/corpus";
 import { createBgeTokenizer } from "../src/server/embeddings/tokenizer";
@@ -36,7 +35,7 @@ async function main(): Promise<void> {
 
   // Build every target ONE way (shared with the source_text backfill), then skip the done.
   const all = await collectEmbedTargets(db);
-  const targets = all.filter((t) => !done.has(embeddingKey(t.entityType, t.entityId)));
+  const targets = all.filter((t) => !done.has(t.characterId));
   const skipped = all.length - targets.length;
   console.log(
     `[embed] ${all.length} targets · ${skipped} already embedded · ${targets.length} to embed`,
@@ -51,11 +50,9 @@ async function main(): Promise<void> {
   const withToks = targets
     .map((t, idx) => ({ item: t, tokens: toks[idx] ?? 0 }))
     // degenerate filter: tiny CARDS match everything (still directly retrievable). config.py:76
-    .filter((x) => x.item.entityType !== "character" || x.tokens >= MIN_SEARCH_TEXT_TOKENS)
+    .filter((x) => x.tokens >= MIN_SEARCH_TEXT_TOKENS)
     .sort((a, b) => a.tokens - b.tokens); // length-sort → tight padded batches
-  const cardsSkippedSmall =
-    targets.filter((t) => t.entityType === "character").length -
-    withToks.filter((x) => x.item.entityType === "character").length;
+  const cardsSkippedSmall = targets.length - withToks.length;
 
   let embedded = 0;
   let batch: EmbedItem[] = [];

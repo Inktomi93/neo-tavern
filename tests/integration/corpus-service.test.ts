@@ -1,14 +1,12 @@
 import { expect, test } from "vitest";
-import { characters, users } from "../../src/db/schema";
-import { createCorpusService, embeddingKey } from "../../src/server/domain/corpus";
+import { createCorpusService } from "../../src/server/domain/corpus";
 import { createSearchService } from "../../src/server/domain/search";
 import type { Embedder } from "../../src/server/embeddings/embedder";
-import { freshDb } from "../support/db";
+import { freshDb, seedCharacter } from "../support/db";
 
 // Deterministic fake embedder: each distinct text → a distinct one-hot basis vector, so
 // an identical query text round-trips to cosine-distance 0. Exercises embedAndStore +
-// knn against the real libsql_vector_idx ANN index (freshDb runs the migrations) — which
-// is exactly where the ON CONFLICT upsert failed ("insert shadow row").
+// knn against the real libsql_vector_idx ANN index (freshDb runs the migrations).
 const dimOf = new Map<string, number>();
 function basisVec(text: string): Float32Array {
   let d = dimOf.get(text);
@@ -29,18 +27,17 @@ const fakeEmbedder: Embedder = {
 test("embedAndStore inserts retrievable vectors; existingKeys tracks them; knn round-trips", async () => {
   const db = await freshDb();
   const corpus = createCorpusService(db, { embedder: fakeEmbedder });
-  await corpus.embedAndStore({ entityType: "character", entityId: "c1", text: "alpha dragon" });
+  const c1 = await seedCharacter(db, { id: "c1", ownerId: "u1" });
   await corpus.embedAndStore({
-    entityType: "chat_segment",
-    entityId: "ch1:0",
-    text: "beta castle",
-    metadata: { chatId: "ch1" },
+    characterId: "c1",
+    ownerId: "u1",
+    characterVersionId: c1.characterVersionId,
+    text: "alpha dragon",
   });
 
   const keys = await corpus.existingKeys();
-  expect(keys.has(embeddingKey("character", "c1"))).toBe(true);
-  expect(keys.has(embeddingKey("chat_segment", "ch1:0"))).toBe(true);
-  expect(keys.size).toBe(2);
+  expect(keys.has("c1")).toBe(true); // existingKeys tracks characterIds for the resumable pass
+  expect(keys.size).toBe(1);
 
   const search = createSearchService(db, { embedder: fakeEmbedder });
   const hits = await search.knn({ queryText: "alpha dragon", k: 2 });
@@ -50,34 +47,38 @@ test("embedAndStore inserts retrievable vectors; existingKeys tracks them; knn r
 test("embedAndStoreMany batch-inserts retrievable vectors in one pass", async () => {
   const db = await freshDb();
   const corpus = createCorpusService(db, { embedder: fakeEmbedder });
+  const b1 = await seedCharacter(db, { id: "b1", ownerId: "u1" });
+  const b2 = await seedCharacter(db, { id: "b2", ownerId: "u1" });
   const n = await corpus.embedAndStoreMany([
-    { entityType: "character", entityId: "b1", text: "gamma" },
-    { entityType: "character", entityId: "b2", text: "delta" },
-    { entityType: "chat_segment", entityId: "b3:0", text: "epsilon" },
+    { characterId: "b1", ownerId: "u1", characterVersionId: b1.characterVersionId, text: "gamma" },
+    { characterId: "b2", ownerId: "u1", characterVersionId: b2.characterVersionId, text: "delta" },
   ]);
-  expect(n).toBe(3);
-  expect((await corpus.existingKeys()).size).toBe(3);
+  expect(n).toBe(2);
+  expect((await corpus.existingKeys()).size).toBe(2);
 
   const search = createSearchService(db, { embedder: fakeEmbedder });
   const hits = await search.knn({ queryText: "delta", k: 3 });
   expect(hits[0]?.entityId).toBe("b2");
 });
 
-test("owner-scoped knn returns only the requesting owner's entities", async () => {
+test("owner-scoped knn returns only the requesting owner's characters", async () => {
   const db = await freshDb();
-  const now = Date.now();
-  await db.insert(users).values([
-    { id: "uA", handle: "owner-a", createdAt: now },
-    { id: "uB", handle: "owner-b", createdAt: now },
-  ]);
-  await db.insert(characters).values([
-    { id: "cA", ownerId: "uA", handle: "char-a", createdAt: now },
-    { id: "cB", ownerId: "uB", handle: "char-b", createdAt: now },
-  ]);
+  const cA = await seedCharacter(db, { id: "cA", ownerId: "uA" });
+  const cB = await seedCharacter(db, { id: "cB", ownerId: "uB" });
   const corpus = createCorpusService(db, { embedder: fakeEmbedder });
   // same text → same vector → both are equally near the query
-  await corpus.embedAndStore({ entityType: "character", entityId: "cA", text: "alpha" });
-  await corpus.embedAndStore({ entityType: "character", entityId: "cB", text: "alpha" });
+  await corpus.embedAndStore({
+    characterId: "cA",
+    ownerId: "uA",
+    characterVersionId: cA.characterVersionId,
+    text: "alpha",
+  });
+  await corpus.embedAndStore({
+    characterId: "cB",
+    ownerId: "uB",
+    characterVersionId: cB.characterVersionId,
+    text: "alpha",
+  });
 
   const search = createSearchService(db, { embedder: fakeEmbedder });
   expect((await search.knn({ queryText: "alpha", k: 10 })).length).toBe(2); // unscoped: both
@@ -85,11 +86,22 @@ test("owner-scoped knn returns only the requesting owner's entities", async () =
   expect(scoped.map((h) => h.entityId)).toEqual(["cA"]); // scoped: only owner A's
 });
 
-test("a duplicate (entity, model) insert errors loudly (no silent second vector)", async () => {
+test("a duplicate (character, model) insert errors loudly (no silent second vector)", async () => {
   const db = await freshDb();
   const corpus = createCorpusService(db, { embedder: fakeEmbedder });
-  await corpus.embedAndStore({ entityType: "character", entityId: "dup", text: "x" });
+  const dup = await seedCharacter(db, { id: "dup", ownerId: "u1" });
+  await corpus.embedAndStore({
+    characterId: "dup",
+    ownerId: "u1",
+    characterVersionId: dup.characterVersionId,
+    text: "x",
+  });
   await expect(
-    corpus.embedAndStore({ entityType: "character", entityId: "dup", text: "y" }),
+    corpus.embedAndStore({
+      characterId: "dup",
+      ownerId: "u1",
+      characterVersionId: dup.characterVersionId,
+      text: "y",
+    }),
   ).rejects.toThrow();
 });

@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
 import type { Db } from "../../../db/client";
-import { chatDigests, chatSegments, embeddings } from "../../../db/schema";
+import { characterEmbeddings, chatDigests, chatSegments } from "../../../db/schema";
 import { getLog } from "../../observability/logger";
 
 // ── CSLS hubness precompute (index-time) ─────────────────────────────────────
@@ -120,57 +120,56 @@ function computeGroupHubs(ids: string[], vecs: Float32Array[], k: number): Map<s
  * corpus changes. Groups with < K+1 members are zeroed (no meaningful hubs — mirrors
  * card-curator's `len(ids) < _CSLS_K + 1 → 0.0`).
  */
-export async function computeHubScores(db: Db, opts: { k?: number } = {}): Promise<HubStats> {
+export async function computeCharacterHubScores(
+  db: Db,
+  opts: { k?: number } = {},
+): Promise<HubStats> {
   const log = getLog();
   const k = opts.k ?? CSLS_K;
 
   const all = await db
     .select({
-      id: embeddings.id,
-      entityType: embeddings.entityType,
-      model: embeddings.model,
-      embedding: embeddings.embedding,
+      id: characterEmbeddings.id,
+      model: characterEmbeddings.model,
+      embedding: characterEmbeddings.embedding,
     })
-    .from(embeddings);
+    .from(characterEmbeddings);
 
-  // Group by (type, model): exact dot products are only meaningful within one vector space.
-  const groups = new Map<string, { etype: string; ids: string[]; vecs: Float32Array[] }>();
+  // Group by model: exact dot products are only meaningful within one vector space. Character cards
+  // are the only entity here (segments/digests have their own hub functions below), so the old
+  // (entity_type, model) grouping collapses to per-model.
+  const groups = new Map<string, { ids: string[]; vecs: Float32Array[] }>();
   for (const row of all) {
     if (!row.embedding) continue; // null vector can't be hub-scored (shouldn't exist post-embed)
-    const key = `${row.entityType} ${row.model}`;
-    const g = groups.get(key) ?? { etype: row.entityType, ids: [], vecs: [] };
+    const g = groups.get(row.model) ?? { ids: [], vecs: [] };
     g.ids.push(row.id);
     g.vecs.push(row.embedding);
-    groups.set(key, g);
+    groups.set(row.model, g);
   }
 
   const hubById = new Map<string, number>();
-  const byType: Record<string, HubTypeStat> = {};
-  const statFor = (etype: string): HubTypeStat => {
-    const s = byType[etype] ?? { count: 0, computed: 0, skipped: 0 };
-    byType[etype] = s;
-    return s;
-  };
-
-  for (const { etype, ids, vecs } of groups.values()) {
+  const stat: HubTypeStat = { count: 0, computed: 0, skipped: 0 };
+  for (const { ids, vecs } of groups.values()) {
     const n = ids.length;
-    const stat = statFor(etype);
     stat.count += n;
-    if (n < k + 1) stat.skipped += n;
+    if (n < k + 1)
+      stat.skipped += n; // no meaningful hubs in a tiny group
     else stat.computed += n;
     for (const [id, hub] of computeGroupHubs(ids, vecs, k)) hubById.set(id, hub);
   }
 
-  // Sequential auto-commit updates (NOT a transaction): drizzle's libSQL `transaction()`
-  // switches to a fresh connection, which on `:memory:` is an empty DB — and this is a
-  // one-time index pass where per-row commits are fine. hub_score is a non-vector column,
-  // so writing it never touches the ANN shadow index.
+  // Sequential auto-commit updates (NOT a transaction): drizzle's libSQL `transaction()` switches to
+  // a fresh connection, empty on `:memory:`. hub_score is non-vector, so writing it never touches the
+  // ANN shadow index.
   for (const [id, hub] of hubById) {
-    await db.update(embeddings).set({ hubScore: hub }).where(eq(embeddings.id, id));
+    await db
+      .update(characterEmbeddings)
+      .set({ hubScore: hub })
+      .where(eq(characterEmbeddings.id, id));
   }
 
-  const stats: HubStats = { k, total: all.length, byType };
-  log.info(stats, "corpus: hub scores computed");
+  const stats: HubStats = { k, total: all.length, byType: { character: stat } };
+  log.info(stats, "corpus: character hub scores computed");
   return stats;
 }
 

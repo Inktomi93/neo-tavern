@@ -78,8 +78,9 @@ export const corpusRouter = t.router({
   embed: publicProcedure
     .input(
       z.object({
-        entityType: z.string().min(1),
-        entityId: z.string().min(1),
+        characterId: z.string().min(1),
+        ownerId: z.string().min(1),
+        characterVersionId: z.string().min(1),
         text: z.string().min(1),
       }),
     )

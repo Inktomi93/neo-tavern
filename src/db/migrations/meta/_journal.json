@@ -141,6 +141,13 @@
       "when": 1779897952277,
       "tag": "0019_chat_segments",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "6",
+      "when": 1779908511079,
+      "tag": "0020_retire_embeddings_add_character_embeddings",
+      "breakpoints": true
     }
   ]
 }

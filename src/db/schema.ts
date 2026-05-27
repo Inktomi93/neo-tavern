@@ -444,33 +444,39 @@ export const assets = sqliteTable("assets", {
 // Polymorphic. `embedding` is the libSQL native vector (BGE-M3, 1024-dim); the ANN
 // index (libsql_vector_idx) is hand-added in migration 0001 since drizzle-kit can't
 // emit it. Query via vector_top_k('embeddings_ann', vector32(?), k).
-export const embeddings = sqliteTable(
-  "embeddings",
+// Character-card vectors — the owner-keyed dedicated table that REPLACES the legacy polymorphic
+// `embeddings` (migration 0020). Mirrors chat_segments/chat_digests: a denormalized `ownerId` column
+// gives cross-character corpus search a direct WHERE filter, retiring the old over-fetch + join-back
+// owner scoping. One row per (character, model) — idempotent upsert. CSLS `hubScore` per model
+// (precomputed by `pnpm csls`; query-time re-rank adjusted_dist = max(0, dist - 1 + hub_score)).
+// `sourceText` = the card identity text that was embedded (the two-stage reranker scores it). The
+// libsql_vector_idx ANN index `character_embeddings_ann` is hand-added in the migration (drizzle-kit
+// can't emit it). Footgun: never bulk `DELETE FROM` (poisons the shadow index) — targeted deletes only.
+export const characterEmbeddings = sqliteTable(
+  "character_embeddings",
   {
     id: text("id").primaryKey(),
-    entityType: text("entity_type").notNull(),
-    entityId: text("entity_id").notNull(),
-    model: text("model").notNull(),
+    characterId: text("character_id")
+      .notNull()
+      .references(() => characters.id, { onDelete: "cascade" }),
+    ownerId: text("owner_id")
+      .notNull()
+      .references(() => users.id),
+    // The version whose card was embedded — provenance; a re-embed after a version bump updates the row.
+    characterVersionId: text("character_version_id")
+      .notNull()
+      .references(() => characterVersions.id, { onDelete: "restrict" }),
+    model: text("model").notNull(), // embedder model — tags the vector space (a swap = re-index)
     embedding: vector32("embedding", { dim: 1024 }),
-    // CSLS hubness (migration 0005): mean cosine-sim to the K=10 nearest SAME-(type,model)
-    // neighbours, precomputed at index time by `pnpm csls` (domain/corpus/hubness). null
-    // until computed. Query-time re-rank: adjusted_dist = max(0, dist - 1 + hub_score),
-    // demoting "matches-everything" hubs. The value bakes in K=10 (CSLS_K) — changing K
-    // requires a full `pnpm csls` re-run. Per entity_type because segment vs character
-    // distributions differ (a mixed hub score skews both).
     hubScore: real("hub_score"),
-    // The literal text that was embedded (card identity text / chat segment). Needed by the
-    // two-stage reranker (4.6.3b), which scores (query, doc-text) pairs — reconstructing
-    // segment text at query time would mean re-segmenting whole chats. null on rows embedded
-    // before 4.6.3b; populated going forward by the embed pass + `pnpm corpus:backfill-source-text`.
     sourceText: text("source_text"),
-    metadata: text("metadata", { mode: "json" }),
+    tokens: integer("tokens"),
     createdAt: integer("created_at").notNull(),
   },
-  // One vector per (entity, model) — makes the embed pass idempotent + upsertable.
-  // (The libsql_vector_idx ANN index is hand-added in migration 0001 — drizzle-kit
-  // can't emit it, so it lives only in SQL and is left untouched here.)
-  (t) => [uniqueIndex("embeddings_entity_model_unq").on(t.entityType, t.entityId, t.model)],
+  (t) => [
+    uniqueIndex("character_embeddings_character_model_unq").on(t.characterId, t.model),
+    index("character_embeddings_owner_idx").on(t.ownerId),
+  ],
 );
 
 // Image vectors — a SEPARATE dimension AND vector space from the 1024-dim BGE-M3 text

@@ -39,7 +39,6 @@
     "csls": "tsx scripts/csls.ts",
     "rerank:probe": "tsx scripts/rerank-probe.ts",
     "discover:probe": "tsx scripts/discover-probe.ts",
-    "corpus:backfill-source-text": "tsx scripts/backfill-source-text.ts",
     "cuda:setup": "uv sync --project tools/cuda",
     "prepare": "husky"
   },
