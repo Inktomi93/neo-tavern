@@ -1,6 +1,11 @@
 import process from "node:process";
 import { createDb, runMigrations } from "../src/db/client";
-import { CSLS_K, computeHubScores } from "../src/server/domain/corpus";
+import {
+  CSLS_K,
+  computeDigestHubScores,
+  computeHubScores,
+  computeSegmentHubScores,
+} from "../src/server/domain/corpus";
 import { env } from "../src/server/env";
 
 /**
@@ -25,6 +30,11 @@ async function main(): Promise<void> {
     );
   }
   console.log(`[csls] ✅ ${stats.total} rows in ${secs}s (exact same-type top-K)`);
+
+  // The first-class memory substrates (their own tables, not the polymorphic embeddings).
+  const digests = await computeDigestHubScores(db);
+  const segments = await computeSegmentHubScores(db);
+  console.log(`[csls]   chat_digests: ${digests} · chat_segments: ${segments} hub scores written`);
 }
 
 await main().catch((error: unknown) => {

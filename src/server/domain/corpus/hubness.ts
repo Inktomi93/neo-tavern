@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
 import type { Db } from "../../../db/client";
-import { embeddings } from "../../../db/schema";
+import { chatDigests, chatSegments, embeddings } from "../../../db/schema";
 import { getLog } from "../../observability/logger";
 
 // ── CSLS hubness precompute (index-time) ─────────────────────────────────────
@@ -67,6 +67,53 @@ function offer(top: number[], s: number, k: number): void {
   }
 }
 
+// Per-group exact pairwise-cosine top-K mean → each id's hub_score. A group with < k+1 members
+// gets all-0 (no meaningful hubs). This is the vector-space math, factored out so every vector
+// table shares it: the polymorphic `embeddings` AND the first-class chat_digests/chat_segments.
+function computeGroupHubs(ids: string[], vecs: Float32Array[], k: number): Map<string, number> {
+  const out = new Map<string, number>();
+  const n = ids.length;
+  if (n < k + 1) {
+    for (const id of ids) out.set(id, 0);
+    return out;
+  }
+  // Flatten + L2-normalize into one contiguous buffer (cache-friendly hot loop; normalizing
+  // defensively removes any cpu-fp32 ↔ cuda-fp16 norm drift, so dot = cosine). `as number`: index
+  // is provably in-bounds; the cast is a compile-time no-op (avoids noUncheckedIndexedAccess's
+  // `?? 0`, which would add a runtime branch to the hot loop).
+  const flat = new Float32Array(n * DIM);
+  for (let i = 0; i < n; i += 1) {
+    const v = vecs[i] ?? new Float32Array(DIM);
+    let norm = 0;
+    for (let d = 0; d < DIM; d += 1) {
+      const x = v[d] as number;
+      norm += x * x;
+    }
+    norm = Math.sqrt(norm) || 1;
+    const base = i * DIM;
+    for (let d = 0; d < DIM; d += 1) flat[base + d] = (v[d] as number) / norm;
+  }
+  // Exact pairwise cosine, bounded top-K per row (symmetric → each pair offered to both).
+  const top: number[][] = Array.from({ length: n }, () => []);
+  for (let i = 0; i < n; i += 1) {
+    const bi = i * DIM;
+    const ti = top[i] ?? [];
+    for (let j = i + 1; j < n; j += 1) {
+      const bj = j * DIM;
+      let s = 0;
+      for (let d = 0; d < DIM; d += 1) s += (flat[bi + d] as number) * (flat[bj + d] as number);
+      offer(ti, s, k);
+      offer(top[j] ?? [], s, k);
+    }
+  }
+  for (let i = 0; i < n; i += 1) {
+    const t = top[i] ?? [];
+    const mean = t.length > 0 ? t.reduce((a, b) => a + b, 0) / t.length : 0;
+    out.set(ids[i] ?? "", mean);
+  }
+  return out;
+}
+
 /**
  * Precompute `embeddings.hub_score` for every row, per (entity_type, model). Idempotent
  * (a plain re-run overwrites). Run after the embed pass (`pnpm csls`); re-run when the
@@ -109,49 +156,9 @@ export async function computeHubScores(db: Db, opts: { k?: number } = {}): Promi
     const n = ids.length;
     const stat = statFor(etype);
     stat.count += n;
-    if (n < k + 1) {
-      for (const id of ids) hubById.set(id, 0);
-      stat.skipped += n;
-      continue;
-    }
-
-    // Flatten + L2-normalize into one contiguous buffer (cache-friendly hot loop;
-    // normalizing defensively removes any cpu-fp32 ↔ cuda-fp16 norm drift, so dot = cosine).
-    // `as number`: index is provably in-bounds; the cast is a compile-time no-op (avoids
-    // noUncheckedIndexedAccess's `?? 0`, which would add a runtime branch to the hot loop).
-    const flat = new Float32Array(n * DIM);
-    for (let i = 0; i < n; i += 1) {
-      const v = vecs[i] ?? new Float32Array(DIM);
-      let norm = 0;
-      for (let d = 0; d < DIM; d += 1) {
-        const x = v[d] as number;
-        norm += x * x;
-      }
-      norm = Math.sqrt(norm) || 1;
-      const base = i * DIM;
-      for (let d = 0; d < DIM; d += 1) flat[base + d] = (v[d] as number) / norm;
-    }
-
-    // Exact pairwise cosine, bounded top-K per row (symmetric → each pair offered to both).
-    const top: number[][] = Array.from({ length: n }, () => []);
-    for (let i = 0; i < n; i += 1) {
-      const bi = i * DIM;
-      const ti = top[i] ?? [];
-      for (let j = i + 1; j < n; j += 1) {
-        const bj = j * DIM;
-        let s = 0;
-        for (let d = 0; d < DIM; d += 1) s += (flat[bi + d] as number) * (flat[bj + d] as number);
-        offer(ti, s, k);
-        offer(top[j] ?? [], s, k);
-      }
-    }
-
-    for (let i = 0; i < n; i += 1) {
-      const t = top[i] ?? [];
-      const mean = t.length > 0 ? t.reduce((a, b) => a + b, 0) / t.length : 0;
-      hubById.set(ids[i] ?? "", mean);
-      stat.computed += 1;
-    }
+    if (n < k + 1) stat.skipped += n;
+    else stat.computed += n;
+    for (const [id, hub] of computeGroupHubs(ids, vecs, k)) hubById.set(id, hub);
   }
 
   // Sequential auto-commit updates (NOT a transaction): drizzle's libSQL `transaction()`
@@ -165,4 +172,71 @@ export async function computeHubScores(db: Db, opts: { k?: number } = {}): Promi
   const stats: HubStats = { k, total: all.length, byType };
   log.info(stats, "corpus: hub scores computed");
   return stats;
+}
+
+/**
+ * Precompute `chat_digests.hub_score` per (tier, model) — the digest substrate's CSLS. Same exact
+ * pairwise-cosine top-K mean as the corpus pass, grouped by tier so coarse consolidations aren't
+ * scored against fine tier-0 digests. Idempotent; run by `pnpm csls`. Returns rows written.
+ */
+export async function computeDigestHubScores(db: Db, opts: { k?: number } = {}): Promise<number> {
+  const k = opts.k ?? CSLS_K;
+  const rows = await db
+    .select({
+      id: chatDigests.id,
+      tier: chatDigests.tier,
+      model: chatDigests.model,
+      embedding: chatDigests.embedding,
+    })
+    .from(chatDigests);
+  const groups = new Map<string, { ids: string[]; vecs: Float32Array[] }>();
+  for (const r of rows) {
+    if (!r.embedding) continue;
+    const key = `${r.tier} ${r.model}`;
+    const g = groups.get(key) ?? { ids: [], vecs: [] };
+    g.ids.push(r.id);
+    g.vecs.push(r.embedding);
+    groups.set(key, g);
+  }
+  let written = 0;
+  for (const { ids, vecs } of groups.values()) {
+    for (const [id, hub] of computeGroupHubs(ids, vecs, k)) {
+      await db.update(chatDigests).set({ hubScore: hub }).where(eq(chatDigests.id, id));
+      written += 1;
+    }
+  }
+  getLog().info({ total: rows.length, written }, "memory: digest hub scores computed");
+  return written;
+}
+
+/**
+ * Precompute `chat_segments.hub_score` per model — the verbatim substrate's CSLS. Idempotent;
+ * run by `pnpm csls`. Returns rows written.
+ */
+export async function computeSegmentHubScores(db: Db, opts: { k?: number } = {}): Promise<number> {
+  const k = opts.k ?? CSLS_K;
+  const rows = await db
+    .select({
+      id: chatSegments.id,
+      model: chatSegments.model,
+      embedding: chatSegments.embedding,
+    })
+    .from(chatSegments);
+  const groups = new Map<string, { ids: string[]; vecs: Float32Array[] }>();
+  for (const r of rows) {
+    if (!r.embedding) continue;
+    const g = groups.get(r.model) ?? { ids: [], vecs: [] };
+    g.ids.push(r.id);
+    g.vecs.push(r.embedding);
+    groups.set(r.model, g);
+  }
+  let written = 0;
+  for (const { ids, vecs } of groups.values()) {
+    for (const [id, hub] of computeGroupHubs(ids, vecs, k)) {
+      await db.update(chatSegments).set({ hubScore: hub }).where(eq(chatSegments.id, id));
+      written += 1;
+    }
+  }
+  getLog().info({ total: rows.length, written }, "memory: segment hub scores computed");
+  return written;
 }
