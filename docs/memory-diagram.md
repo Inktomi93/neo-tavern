@@ -9,7 +9,7 @@
 | Colour | Means |
 |---|---|
 | 🟦 **Canon** | The append-only message log — the source of truth, kept forever |
-| 🟩 **Segment** | A *verbatim* 16-message block (raw transcript, embedded) |
+| 🟩 **Segment** | A *verbatim* 8-message block (raw transcript, embedded) |
 | 🟪 **Digest** | A *distilled* structured summary of a block (anchor + facts + keywords, embedded, tiered) |
 | 🟧 **Model** | A local/hosted model doing work (embedder, reranker, summarizer) |
 | 🟥 **Read path** | Retrieval + what the user/model ultimately receives |
@@ -48,12 +48,12 @@ OpenRouter chat-completions / responses modes that have no compaction at all.
 
 ## 2. The substrate — one boundary, two lenses
 
-Every chat is sliced into fixed **16-message blocks**. Each completed block is captured through
+Every chat is sliced into fixed **8-message blocks**. Each completed block is captured through
 **two complementary lenses**, stored as two first-class, foreign-keyed, vector-indexed tables:
 
 ```mermaid
 flowchart TD
-    MSG["📜 Canon: messages 0…15<br/>(one 16-message block)"]:::canon
+    MSG["📜 Canon: messages 0…7<br/>(one 8-message block)"]:::canon
 
     MSG --> SEG["🟩 SEGMENT — verbatim lens<br/>the raw transcript of the block"]:::segment
     MSG --> DIG["🟪 DIGEST — distilled lens<br/>topic anchor + key facts + keywords"]:::digest
@@ -70,7 +70,7 @@ flowchart TD
     classDef infra fill:#f1f5f9,stroke:#475569,color:#0f172a;
 ```
 
-**Why two?** A raw 16-message chunk embeds *noisily* — every chunk looks vaguely similar, so
+**Why two?** A raw 8-message chunk embeds *noisily* — every chunk looks vaguely similar, so
 similarity search returns mush. The digest distills the **load-bearing signal**, so it retrieves
 cleanly. We keep **both, permanently, linked** by the same `(chatId, blockIdx, seq-span)`: the
 digest is the sharp search key; the segment is the verbatim ground truth it points back to.
@@ -84,10 +84,10 @@ three parts, produced under a strict prompt:
 
 ```mermaid
 flowchart LR
-    BLK["🟦 16-message block"]:::canon --> SUM["🟧 Summarizer<br/>(structured prompt)"]:::model
+    BLK["🟦 8-message block"]:::canon --> SUM["🟧 Summarizer<br/>(structured prompt)"]:::model
     SUM --> ANCH["📌 Topic anchor<br/><i>[entities — scene]</i><br/>mandatory first line"]:::digest
     SUM --> FACT["🔑 Significance-filtered facts<br/>litmus: <i>“will this matter later?”</i>"]:::digest
-    SUM --> KW["🏷️ 15–30 concrete keywords<br/>distinctive retrieval anchors"]:::digest
+    SUM --> KW["🏷️ 8–20 concrete keywords<br/>distinctive retrieval anchors"]:::digest
 
     classDef canon fill:#e0f2fe,stroke:#0284c7,color:#0c4a6e;
     classDef model fill:#fef3c7,stroke:#d97706,color:#78350f;
@@ -123,15 +123,15 @@ flowchart TD
     TRIG --> SEGGEN["generateSegments()"]:::segment
     TRIG --> DIGGEN["generateDigests()"]:::digest
 
-    subgraph SEGPATH["🟩 Segment path — verbatim, every complete block, all chats"]
-        SEGGEN --> SBLK["chunk whole chat into complete 16-msg blocks<br/>(skip the still-forming trailing block)"]:::segment
+    subgraph SEGPATH["🟩 Segment path — verbatim, EVERY block, all chats → 100% coverage"]
+        SEGGEN --> SBLK["chunk whole chat into ALL 8-msg blocks<br/>(incl. the trailing partial / a whole short chat)"]:::segment
         SBLK --> SEMB["🟧 BGE-M3 embed (GPU, token-budget batched)"]:::model
         SEMB --> SUP["upsert chat_segments"]:::segment
     end
 
     subgraph DIGPATH["🟪 Digest path — distilled, only the aged-out past"]
-        DIGGEN --> CUT["cutoff = maxSeq − verbatimWindow(30)<br/>keep only messages that have aged out"]:::digest
-        CUT --> ELIG{"≥ 1 full 16-msg block<br/>below the window?"}:::infra
+        DIGGEN --> CUT["cutoff = maxSeq − verbatimWindow(8)<br/>keep only messages that have aged out"]:::digest
+        CUT --> ELIG{"≥ 1 full 8-msg block<br/>below the window?"}:::infra
         ELIG -->|no| SKIP["do nothing<br/>(short chat = fully visible)"]:::infra
         ELIG -->|yes| T0["per block → 🟧 Summarizer → structured digest"]:::digest
         T0 --> DEMB["🟧 BGE-M3 embed"]:::model
@@ -154,7 +154,7 @@ runner. The embedder/reranker run in-process on the homelab GPUs (onnxruntime CU
 
 **It self-heals.** A block is only re-digested if it's **missing or stale** — its seq-span changed,
 or a message in it was edited *after* the digest was written. Swipes/edits at the live tip never
-touch settled digests (that's what the 30-message verbatim window protects), and a fork lazily
+touch settled digests (that's what the 8-message verbatim window protects), and a fork lazily
 rebuilds only what diverged.
 
 ---
@@ -162,34 +162,35 @@ rebuilds only what diverged.
 ## 5. The tiering — keeping "the story so far" bounded
 
 If we injected *every* tier-0 digest, a 1000-message chat would inject 60+ of them. Instead, blocks
-**consolidate upward**: every `fanOut = 8` lower-tier digests merge into one coarser digest, with a
+**consolidate upward**: every `fanOut = 4` lower-tier digests merge into one coarser digest, with a
 delta prompt (*"here are prior consolidations — do NOT repeat them"*). The arc stays compact as the
 chat grows.
 
 ```mermaid
 flowchart BT
-    subgraph T0["🟪 Tier 0 — one digest per 16-msg block (fine-grained)"]
+    subgraph T0["🟪 Tier 0 — one digest per 8-msg block (fine-grained)"]
         b0["b0"]:::digest --- b1["b1"]:::digest --- b2["b2"]:::digest --- b3["b3"]:::digest
-        b4["b4"]:::digest --- b5["b5"]:::digest --- b6["b6"]:::digest --- b7["b7"]:::digest
-        b8["b8"]:::digest --- b9["b9 …"]:::digest
+        b4["b4"]:::digest --- b5["b5"]:::digest --- b6["b6"]:::digest --- b7["b7 …"]:::digest
     end
-    subgraph T1["🟪 Tier 1 — 8 blocks merged (coarse arc)"]
-        c0["consolidation 0<br/>covers blocks 0–7"]:::digest
+    subgraph T1["🟪 Tier 1 — every 4 blocks merged (coarse arc)"]
+        c0["consolidation 0<br/>covers blocks 0–3"]:::digest
+        c1["consolidation 1<br/>covers blocks 4–7"]:::digest
     end
     b0 --> c0
     b1 --> c0
     b2 --> c0
     b3 --> c0
-    b4 --> c0
-    b5 --> c0
-    b6 --> c0
-    b7 --> c0
-    c0 --> T2["🟪 Tier 2 — 8 tier-1s merged<br/>(only for very long chats)"]:::digest
+    b4 --> c1
+    b5 --> c1
+    b6 --> c1
+    b7 --> c1
+    c0 --> T2["🟪 Tier 2 — every 4 tier-1s merged<br/>(only your longest chats — tier-3 unused at ≤222 msgs)"]:::digest
+    c1 --> T2
 
     classDef digest fill:#f3e8ff,stroke:#9333ea,color:#581c87;
 ```
 
-The tier-1 anchor for blocks 0–7 of that same chat read:
+The tier-1 anchor for blocks 0–3 of that same chat read:
 *"[Wyatt & Bess — Twelve Years Later: a Reunion, a Gundam Build, and Old Family History]"* — a
 genuine cross-block synthesis, not a concatenation.
 
@@ -203,6 +204,13 @@ digests for the distant past + fine tier-0 digests for the recent past — so th
 
 The **same substrate** serves two very different questions. This is the heart of the system.
 
+The within-chat path is **flat query-driven RAG**, modeled on SillyTavern's native Vector Storage:
+the **last 2 messages** form the query, the most relevant tier-0 digests are retrieved (+ reranked),
+and injected. **`mixC` is the default**; `mixA` (inject every tier-0) and `tiered` (the consolidation
+bridge) are opt-in "give me the whole arc" modes. The injected set is tiny (~3 digests ≈ 1k tokens),
+so it's window-independent — the 32k/200k context size only bounds how much *raw* history the runner
+sends, not memory.
+
 ```mermaid
 flowchart TD
     Q["a query"]:::infra --> SCOPE{"which scope?"}:::infra
@@ -210,7 +218,7 @@ flowchart TD
     %% ---------- within-chat ----------
     subgraph IN["🟥 WITHIN-CHAT memory injection — “what happened earlier in THIS chat?”"]
         direction TB
-        RQ["query = the recent messages"]:::infra --> MODE{"mode"}:::infra
+        RQ["query = the last 2 messages"]:::infra --> MODE{"mode (default mixC)"}:::infra
         MODE -->|mixA| A0["all tier-0 digests of this chat"]:::digest
         MODE -->|tiered| AT["coarse-old + fine-recent<br/>(digests not covered by a higher tier)"]:::digest
         MODE -->|mixB / mixC| AV["🟧 embed query → <b>exact cosine</b> over<br/>THIS chat's tier-0 digests + keyword match"]:::model
@@ -254,14 +262,15 @@ flowchart TD
 | Scope | one chat | the whole owner corpus |
 | Match | **exact in-process cosine** (small, this chat) | **global ANN** (`vector_top_k`) + **CSLS** |
 | Sources | tier-0 digests | **all digests *and* all segments** (hybrid) |
-| Reranks | optional (mixC) | yes — one joint list |
+| Reranks | yes — mixC is the default | yes — one joint list |
 | Output | text that fills `{{memory}}` | ranked hits → `seq` spans back to canon |
 
 > **CSLS** corrects "hub" vectors — a few generic digests that sit suspiciously close to
 > *everything* — by penalising them with a per-group hubness score, so true relevance wins.
 
-**Retrieval in action** — real queries run against that chat's 13 digests (the within-chat path:
-embed the query, cosine over tier-0):
+**Retrieval in action** — an illustrative run (the discrimination mechanism is what matters, and is
+unchanged by block size): the within-chat path embeds the query and cosines over this chat's tier-0
+digests:
 
 | Query | Top digest surfaced | sim |
 |---|---|---|
@@ -352,8 +361,10 @@ truth — they're just additional lenses over the same append-only log.
 
 ### Knobs (all per-preset, surfaced in the UI later)
 
-`blockSize` (16) · `verbatimWindow` (30) · `mode` (off / mixA / mixB / mixC / tiered) ·
-`fanOut` (8) · `maxTier` (2) · `retrieveK` · `rerankTo` · `minScore` · `keywordMatch` ·
-`summarizer` (local-or-hosted, maxTokens, temperature).
+`blockSize` (8) · `verbatimWindow` (8) · `queryWindow` (2) · `mode` (default **mixC**; off / mixA /
+mixB / mixC / tiered) · `fanOut` (4) · `maxTier` (3) · `retrieveK` (4) · `rerankTo` (3) ·
+`minScore` (0.25) · `keywordMatch` · `summarizer` (local-first Qwen-4B → hosted Haiku fallback).
 
-*Authoritative prose + rationale: `docs/memory.md`. Schema: `src/db/schema.ts`.*
+*Defaults re-derived from the real corpus for the 32k window (`docs/memory.md` §9). All three vector
+tables — `character_embeddings`, `chat_digests`, `chat_segments` — are owner-keyed + FK'd. Schema:
+`src/db/schema.ts`.*
