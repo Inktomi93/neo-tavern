@@ -549,6 +549,49 @@ export const chatDigests = sqliteTable(
   ],
 );
 
+// Chat-history SEGMENT layer — the raw-verbatim half of the hybrid corpus search (docs/memory.md
+// §4). First-class sibling of `chat_digests`, sharing the SAME per-block boundary (blockIdx /
+// seqStart..seqEnd) so a block's digest (structured) and segment (raw) link 1:1. Where digests are
+// the precision/theme substrate, segments preserve the exact phrasing — "find the moment X said Y".
+// Replaces the old import-only polymorphic `chat_segment` (no FKs, stale for live chats): this is
+// FK'd, owner-scoped, and refreshed incrementally as chats proceed (embed-only — no summarizer).
+// Indexed across the WHOLE chat (not just the aged-out window — the search tool wants everything
+// findable, unlike in-chat memory injection which scopes to one chat's aged digests). No tiers —
+// raw text isn't consolidated (that's what digests are for).
+export const chatSegments = sqliteTable(
+  "chat_segments",
+  {
+    id: text("id").primaryKey(),
+    chatId: text("chat_id")
+      .notNull()
+      .references(() => chats.id, { onDelete: "cascade" }),
+    // Denormalized (stable per chat) — cross-chat corpus search filters by owner as a WHERE.
+    ownerId: text("owner_id")
+      .notNull()
+      .references(() => users.id),
+    // The chat's pinned character version — "by character" corpus scoping (resolve characterId via
+    // the join). RESTRICT mirrors chats/chat_digests; a segment cascades away with its chat first.
+    characterVersionId: text("character_version_id")
+      .notNull()
+      .references(() => characterVersions.id, { onDelete: "restrict" }),
+    blockIdx: integer("block_idx").notNull(), // same blockSize boundary as the block's digest
+    seqStart: integer("seq_start").notNull(), // canon span — verbatim click-through + staleness key
+    seqEnd: integer("seq_end").notNull(),
+    text: text("text").notNull(), // the block's raw messages, verbatim ("Speaker: text" joined)
+    model: text("model").notNull(), // embedder model — tags the vector space (a swap = re-index)
+    embedding: vector32("embedding", { dim: 1024 }),
+    hubScore: real("hub_score"), // CSLS hubness per (entity, model) — null until computed
+    tokens: integer("tokens"),
+    createdAt: integer("created_at").notNull(),
+  },
+  // One segment per (chat, block) — idempotent upsert + targeted regeneration. (The libsql_vector_idx
+  // ANN index `chat_segments_ann` is hand-added in the migration — drizzle-kit can't emit it.)
+  (t) => [
+    uniqueIndex("chat_segments_chat_block_unq").on(t.chatId, t.blockIdx),
+    index("chat_segments_owner_idx").on(t.ownerId),
+  ],
+);
+
 export const tags = sqliteTable("tags", {
   id: text("id").primaryKey(),
   ownerId: text("owner_id")
