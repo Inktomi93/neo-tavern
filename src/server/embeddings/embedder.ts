@@ -20,6 +20,13 @@ const MODEL_ID = "Xenova/bge-m3";
 export const EMBEDDING_MODEL = "bge-m3";
 export const EMBEDDING_DIM = 1024;
 
+// Padded-token budget per forward pass. transformers.js pads a batch to its LONGEST member, and
+// self-attention cost scales with (batch × paddedLen²); a few long texts (BGE-M3 truncates at
+// 8192 tok) in one batch can demand tens of GB and OOM the GPU. Packing length-sorted batches
+// under `paddedLen × size ≤ MAX_BATCH_TOKENS` bounds attention to ≈ budget × heads × maxLen × 2
+// (≈8.6 GB at the 8192 cap) — the same budget the corpus embed pass (embed-corpus.ts) runs at.
+const MAX_BATCH_TOKENS = 32768;
+
 export interface Embedder {
   /** Stored on the embeddings row (the `model` column). */
   readonly model: string;
@@ -80,8 +87,39 @@ export function createEmbedder(): Embedder {
       if (texts.length === 0) return [];
       return warm.use(async (extract) => {
         // [N, dim] tensor; tolist() splits it into N plain arrays in input order.
-        const output = await extract(texts, { pooling: "cls", normalize: true });
-        return (output.tolist() as number[][]).map((row) => Float32Array.from(row));
+        const run = async (batch: string[]): Promise<Float32Array[]> => {
+          const output = await extract(batch, { pooling: "cls", normalize: true });
+          return (output.tolist() as number[][]).map((row) => Float32Array.from(row));
+        };
+        if (texts.length === 1) return run(texts);
+
+        // Length-sort, then pack batches under MAX_BATCH_TOKENS so a few long texts can't blow up
+        // the padded tensor (see the constant). Lengths come from the pipeline's own tokenizer
+        // (no second model load); input order is restored via the original indices.
+        const lens = texts.map((t) => extract.tokenizer.encode(t).length);
+        const order = texts.map((_, i) => i).sort((a, b) => (lens[a] ?? 0) - (lens[b] ?? 0));
+        const out = new Array<Float32Array>(texts.length);
+        let group: number[] = [];
+        let groupMax = 0;
+        const flush = async (): Promise<void> => {
+          if (group.length === 0) return;
+          const vecs = await run(group.map((i) => texts[i] as string));
+          for (const [k, idx] of group.entries()) out[idx] = vecs[k] as Float32Array;
+          group = [];
+          groupMax = 0;
+        };
+        for (const i of order) {
+          const len = Math.max(1, lens[i] ?? 0);
+          // Guard `group.length > 0` so a single over-budget text still gets its own pass
+          // (the pipeline truncates it to the model's 8192-token max).
+          if (group.length > 0 && Math.max(groupMax, len) * (group.length + 1) > MAX_BATCH_TOKENS) {
+            await flush();
+          }
+          group.push(i);
+          groupMax = Math.max(groupMax, len);
+        }
+        await flush();
+        return out;
       });
     },
   };
