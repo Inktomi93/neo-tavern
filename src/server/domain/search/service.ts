@@ -4,6 +4,7 @@ import { characters, characterVersions, chats } from "../../../db/schema";
 import { createEmbedder, type Embedder } from "../../embeddings/embedder";
 import { createReranker, type Reranker } from "../../embeddings/reranker";
 import { getLog } from "../../observability/logger";
+import { ensureUser } from "../_shared/users";
 
 export interface SearchHit {
   entityType: string;
@@ -53,6 +54,22 @@ export type FindResult =
       snippet: string;
     };
 
+/** A cross-chat corpus hit over the DIGEST substrate. Ordered by CSLS-adjusted distance (or by
+ *  cross-encoder score when reranked) — keep the returned order. The seq span is the click-through. */
+export interface DigestSearchHit {
+  chatId: string;
+  characterVersionId: string;
+  tier: number;
+  blockIdx: number;
+  seqStart: number;
+  seqEnd: number;
+  topicAnchor: string | null;
+  /** Leading slice of the digest text (the supporting evidence). */
+  snippet: string;
+  /** Raw cosine distance (ordering is CSLS/rerank — do not re-sort by this). */
+  distance: number;
+}
+
 export interface SearchService {
   /** Lean primitive: nearest entities as (entityType, entityId, distance). */
   knn(params: {
@@ -83,6 +100,19 @@ export interface SearchService {
     ownerId?: string | undefined;
     rerank?: boolean | undefined;
   }): Promise<DiscoverCharacter[]>;
+
+  /**
+   * Cross-chat corpus search over the structured DIGEST substrate (docs/memory.md §4): the same
+   * within-chat memory digests, queried GLOBALLY but SCOPED to the owner. A USER-facing search tool
+   * — distinct from in-character memory injection, which never crosses chats. Hits carry the canon
+   * seq span for verbatim click-through.
+   */
+  digests(params: {
+    queryText: string;
+    username: string;
+    k?: number | undefined;
+    rerank?: boolean | undefined;
+  }): Promise<DigestSearchHit[]>;
 }
 
 export interface SearchServiceDeps {
@@ -483,5 +513,80 @@ export function createSearchService(db: Db, deps: SearchServiceDeps = {}): Searc
     return result;
   }
 
-  return { knn, find, discover };
+  // Cross-chat corpus search over the DIGEST substrate. chat_digests HAS owner_id, so scoping is a
+  // WHERE (no post-fetch ownership resolve like the polymorphic embeddings path). Digest hub scores
+  // aren't computed yet, so CSLS is null-safe / raw distance today; the rerank still sharpens order.
+  async function digests(params: {
+    queryText: string;
+    username: string;
+    k?: number | undefined;
+    rerank?: boolean | undefined;
+  }): Promise<DigestSearchHit[]> {
+    const { queryText, k = 10, rerank = false } = params;
+    const ownerId = await ensureUser(db, params.username);
+    const embedding = await embedder.embed(queryText);
+    const query = JSON.stringify(Array.from(embedding));
+    const poolK = Math.max(k * CSLS_POOL_FACTOR, k * OWNER_OVERFETCH);
+    const rows = await db.all<{
+      chatId: string;
+      characterVersionId: string;
+      tier: number;
+      blockIdx: number;
+      seqStart: number;
+      seqEnd: number;
+      topicAnchor: string | null;
+      text: string;
+      dist: number;
+      hubScore: number | null;
+    }>(sql`
+      SELECT cd.chat_id AS chatId, cd.character_version_id AS characterVersionId,
+             cd.tier AS tier, cd.block_idx AS blockIdx,
+             cd.seq_start AS seqStart, cd.seq_end AS seqEnd,
+             cd.topic_anchor AS topicAnchor, cd.text AS text,
+             vector_distance_cos(cd.embedding, vector32(${query})) AS dist,
+             cd.hub_score AS hubScore
+      FROM vector_top_k('chat_digests_ann', vector32(${query}), ${poolK}) AS v
+      JOIN chat_digests cd ON cd.rowid = v.id
+      WHERE cd.owner_id = ${ownerId}
+      ORDER BY dist ASC
+    `);
+    // CSLS hubness correction (same formula as knn; null hub_score → raw distance).
+    const adjusted = rows.map((row) => ({
+      row,
+      rank: row.hubScore === null ? row.dist : Math.max(0, row.dist - 1 + row.hubScore),
+    }));
+    adjusted.sort((a, b) => a.rank - b.rank);
+    let pool = adjusted.map((a) => a.row);
+    const idOf = (r: (typeof pool)[number]): string => `${r.chatId}:${r.tier}:${r.blockIdx}`;
+    if (rerank && pool.length > 0) {
+      const scores = await reranker.rerank(
+        queryText,
+        pool.map((r) => ({ id: idOf(r), text: r.text })),
+      );
+      const order = new Map(scores.map((s, i) => [s.id, i]));
+      pool = [...pool].sort(
+        (a, b) =>
+          (order.get(idOf(a)) ?? Number.POSITIVE_INFINITY) -
+          (order.get(idOf(b)) ?? Number.POSITIVE_INFINITY),
+      );
+    }
+    const hits: DigestSearchHit[] = pool.slice(0, k).map((r) => ({
+      chatId: r.chatId,
+      characterVersionId: r.characterVersionId,
+      tier: r.tier,
+      blockIdx: r.blockIdx,
+      seqStart: r.seqStart,
+      seqEnd: r.seqEnd,
+      topicAnchor: r.topicAnchor,
+      snippet: r.text.slice(0, SNIPPET_CHARS),
+      distance: r.dist,
+    }));
+    getLog().debug(
+      { k, reranked: rerank, fetched: pool.length, hits: hits.length },
+      "search: digests",
+    );
+    return hits;
+  }
+
+  return { knn, find, discover, digests };
 }
