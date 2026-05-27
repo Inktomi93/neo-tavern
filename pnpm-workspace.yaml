@@ -5,6 +5,9 @@ allowBuilds:
   # beta.responses.send works without it), so skip the build + silence the prompt.
   '@openrouter/sdk': false
   esbuild: true
+  # Prebuilt CUDA binary ships via @node-llama-cpp/linux-x64-cuda; the postinstall isn't
+  # needed (verified: `inspect gpu` + embed probe run without it), so skip + silence.
+  node-llama-cpp: false
   # native ONNX runtime for @huggingface/transformers (BGE-M3 local embeddings, Phase 3)
   onnxruntime-node: true
   protobufjs: true # onnxruntime model loading

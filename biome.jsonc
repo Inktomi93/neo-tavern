@@ -274,6 +274,19 @@
       }
     },
     {
+      // Dev/throwaway scripts (probes, one-off DB/embed ops, the memory demo) read process.env
+      // via bracket access — tsc's noPropertyAccessFromIndexSignature requires it, which biome's
+      // useLiteralKeys then flags — and synthesize arbitrary/wire-shape object keys. Same rationale
+      // as the import + seed-probe overrides; scripts are dev tooling, not shipped app code.
+      "includes": ["scripts/**"],
+      "linter": {
+        "rules": {
+          "style": { "useNamingConvention": "off" },
+          "complexity": { "useLiteralKeys": "off" }
+        }
+      }
+    },
+    {
       // The ONLY sanctioned barrels: a feature's public API (server domain
       // features + client features). The dependency-cruiser front-door rules
       // force callers to enter a feature via its index, so these index files
