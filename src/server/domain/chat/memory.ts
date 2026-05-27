@@ -39,10 +39,11 @@ const DEFAULTS = {
   mode: "mixC" as NonNullable<MemoryConfig["mode"]>, // flat query-driven RAG (ST model) is the default
   fanOut: 4,
   maxTier: 3,
-  retrieveK: 4,
+  retrieveK: 8, // over-fetch for rerank (reviewer #6: top-4 too tight on long chats; rerank cost negligible)
   rerankTo: 3,
   minScore: 0.25, // ST `score_threshold`
   keywordMatch: true,
+  recencyBias: 0, // mild boost toward recent digests in mixB/mixC (reviewer #2); 0 = off, wired for ablation
 } as const;
 
 // Retrieval needs the embedder (query vector, mixB/C) + reranker (mixC); generation needs the
@@ -97,6 +98,7 @@ function resolveCfg(p: MemoryConfig) {
     rerankTo: p.rerankTo ?? DEFAULTS.rerankTo,
     minScore: p.minScore ?? DEFAULTS.minScore,
     keywordMatch: p.keywordMatch ?? DEFAULTS.keywordMatch,
+    recencyBias: p.recencyBias ?? DEFAULTS.recencyBias,
     summarizerSource: p.summarizer?.source,
     summarizerMaxTokens: p.summarizer?.maxTokens,
     summarizerTemperature: p.summarizer?.temperature,
@@ -108,27 +110,35 @@ function resolveCfg(p: MemoryConfig) {
 // Tier-0: structured, INDEPENDENT (no prior-digest chain). Topic anchor (CharMemory's precision
 // step-change) + significance-filtered facts ("mentioned later?" litmus) + concrete keywords
 // (MemoryBooks). The structure is the retrieval signal.
-const TIER0_SYSTEM = `You are a memory keeper for a roleplay. Read the conversation block and write a structured digest of ONLY what is durable — events, revelations, decisions, relationship shifts, concrete facts (names, places, objects). Skip play-by-play and in-the-moment chatter (the litmus: would someone bring this up unprompted weeks later?).
+// JSON schema for grammar-constrained digests. On the LOCAL path this is compiled to a GBNF grammar
+// so the sampler CANNOT malform the shape (the b21/b24 keyword-dump-in-the-anchor failure becomes
+// impossible); the hosted path asks for the same JSON in the prompt. parseDigest reads it (free-text
+// fallback for safety / the fake test summarizer).
+const DIGEST_SCHEMA = {
+  type: "object",
+  properties: {
+    topicAnchor: { type: "string" },
+    facts: { type: "array", items: { type: "string" } },
+    keywords: { type: "array", items: { type: "string" } },
+  },
+  required: ["topicAnchor", "facts", "keywords"],
+};
 
-Output EXACTLY this shape and nothing else:
-[<key names/entities> — <specific scene label>]
-- <durable fact>
-- <durable fact>
-KEYWORDS: <8-20 concrete, scene-specific terms: locations, objects, proper nouns, unique actions — NOT abstract themes or character names>
+const TIER0_SYSTEM = `You are a memory keeper for a roleplay. Read the conversation block and capture ONLY what is durable — events, revelations, decisions, relationship shifts, concrete facts (names, places, objects). Skip play-by-play and in-the-moment chatter (litmus: would someone bring this up unprompted weeks later?).
 
-2-5 bullets. Third person, past tense. No preamble, no commentary, no <think>.`;
+Respond with ONLY a JSON object of this exact shape:
+{"topicAnchor": "[<key entities> — <specific scene label>]", "facts": ["<durable fact>", "..."], "keywords": ["<concrete term>", "..."]}
+
+2-5 facts. 8-20 keywords: concrete scene-specific tokens (locations, objects, proper nouns, unique actions) — NOT abstract themes or character names. Third person, past tense. No prose outside the JSON, no <think>.`;
 
 // Tier 1+: consolidate several lower-tier digests into one coarser digest. Context-aware (sees the
 // prior consolidations at this tier) so it emits a non-redundant higher-level recap.
-const CONSOLIDATE_SYSTEM = `You are a memory keeper for a roleplay. You are given several sequential digests of earlier scenes and (optionally) the consolidated digests that already precede them. Merge the new digests into ONE coarser digest that preserves the durable arc — major events, turning points, lasting changes — and drops fine detail already implied. Do NOT repeat anything in the prior consolidated digests.
+const CONSOLIDATE_SYSTEM = `You are a memory keeper for a roleplay. You are given several sequential digests of earlier scenes and (optionally) the consolidated digests that already precede them. Merge the new digests into ONE coarser digest that preserves the durable arc — major events, turning points, lasting changes — dropping fine detail already implied. Do NOT repeat anything in the prior consolidated digests.
 
-Output EXACTLY this shape and nothing else:
-[<key names/entities> — <arc label>]
-- <durable beat>
-- <durable beat>
-KEYWORDS: <8-20 concrete, scene-specific terms>
+Respond with ONLY a JSON object of this exact shape:
+{"topicAnchor": "[<key entities> — <arc label>]", "facts": ["<durable beat>", "..."], "keywords": ["<concrete term>", "..."]}
 
-3-6 bullets. Third person, past tense. No preamble, no <think>.`;
+3-6 facts. 8-20 keywords. Third person, past tense. No prose outside the JSON, no <think>.`;
 
 function renderTranscript(block: MsgRow[], charName: string, userName: string): string {
   return block
@@ -143,7 +153,40 @@ function parseDigest(raw: string): {
   topicAnchor: string | null;
   keywords: string[];
 } {
-  const lines = raw.trim().split("\n");
+  const trimmed = raw.trim();
+  // JSON-first: the local path is grammar-constrained to DIGEST_SCHEMA, the hosted path is prompted
+  // for the same JSON. Slice the outermost {...} so stray prose around it is tolerated.
+  const js = trimmed.indexOf("{");
+  const je = trimmed.lastIndexOf("}");
+  if (js !== -1 && je > js) {
+    try {
+      const o = JSON.parse(trimmed.slice(js, je + 1)) as {
+        topicAnchor?: unknown;
+        facts?: unknown;
+        keywords?: unknown;
+      };
+      const anchor = typeof o.topicAnchor === "string" ? o.topicAnchor.trim() : null;
+      const facts = Array.isArray(o.facts)
+        ? o.facts.filter((f): f is string => typeof f === "string")
+        : [];
+      const keywords = Array.isArray(o.keywords)
+        ? o.keywords
+            .filter((k): k is string => typeof k === "string")
+            .map((k) => k.trim())
+            .filter(Boolean)
+        : [];
+      if (anchor || facts.length > 0) {
+        // Reconstruct the stored/embedded text from the structured fields (anchor + bullet facts).
+        const text = [anchor, ...facts.map((f) => `- ${f}`)].filter(Boolean).join("\n");
+        return { text, topicAnchor: anchor, keywords };
+      }
+    } catch {
+      // malformed JSON → fall through to the free-text parser
+    }
+  }
+  // Free-text fallback (the legacy "[anchor]\n- fact\nKEYWORDS: …" shape) — hosted output that
+  // ignored the JSON ask, or the deterministic fake summarizer in tests.
+  const lines = trimmed.split("\n");
   const kwIdx = lines.findIndex((l) => /^\s*keywords\s*:/i.test(l));
   let keywords: string[] = [];
   if (kwIdx !== -1) {
@@ -362,6 +405,7 @@ export async function generateDigests(
     source: cfg.summarizerSource,
     maxTokens: cfg.summarizerMaxTokens,
     temperature: cfg.summarizerTemperature,
+    jsonSchema: DIGEST_SCHEMA, // grammar-constrain the local path; the hosted path is prompted for it
   };
   let totalWritten = 0;
   let pending: PendingDigest[] = [];
@@ -588,24 +632,28 @@ export async function retrieveMemory(
   const query = await recentQueryText(db, opts.chatId, cfg.queryWindow);
   if (query.length === 0) return formatBlock(tier0);
   const qv = await deps.embedder.embed(query);
+  // Recency nudge (reviewer #2): a mild boost toward more-recent digests, scaled by recencyBias
+  // (0 = off). Inclusion stays on raw cosine vs minScore; recency only reorders the kept set.
+  const maxSeqStart = Math.max(1, ...tier0.map((d) => d.seqStart));
+  const recency = (d: DigestRow): number => cfg.recencyBias * (d.seqStart / maxSeqStart);
   const scored: { d: DigestRow; score: number }[] = [];
   for (const d of tier0) {
     if (d.embedding === null) continue;
     const score = cosineSim(qv, d.embedding);
-    if (score >= cfg.minScore) scored.push({ d, score });
+    if (score >= cfg.minScore) scored.push({ d, score: score + recency(d) });
   }
   if (cfg.keywordMatch) {
     const qWords = new Set(query.toLowerCase().match(/[a-z0-9]+/g) ?? []);
-    // A keyword is often a multi-word phrase ("Unleashed RX-78-2"); it matches when ALL of its
-    // alphanumeric tokens appear in the recent query. (The old `qWords.has(wholePhrase)` could never
-    // match a multi-word keyword — reviewer #4.)
+    // Match on any DISTINCTIVE token (≥4 chars) the keyword shares with the query — so a query
+    // saying just "Gundam" hits the "Hi-Nu Gundam" keyword (rare-term recall, the gundam miss),
+    // while short words ("the", "of") can't cause false positives (reviewer #3, #4).
     const kwMatches = (kw: string): boolean => {
       const words = kw.toLowerCase().match(/[a-z0-9]+/g) ?? [];
-      return words.length > 0 && words.every((w) => qWords.has(w));
+      return words.some((w) => w.length >= 4 && qWords.has(w));
     };
     for (const d of tier0) {
       if (scored.some((s) => s.d === d)) continue;
-      if (d.keywords.some(kwMatches)) scored.push({ d, score: cfg.minScore });
+      if (d.keywords.some(kwMatches)) scored.push({ d, score: cfg.minScore + recency(d) });
     }
   }
   scored.sort((a, b) => b.score - a.score);

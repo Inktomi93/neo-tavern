@@ -104,7 +104,7 @@ export const generationParamsSchema = z.object({
         .int()
         .positive()
         .optional()
-        .describe("Vector candidate pool size for mixB/mixC (default 4)."),
+        .describe("Vector candidate pool size for mixB/mixC (default 8)."),
       rerankTo: z
         .number()
         .int()
@@ -121,6 +121,11 @@ export const generationParamsSchema = z.object({
         .boolean()
         .optional()
         .describe("Also match digest keywords whole-word against recent messages (default true)."),
+      recencyBias: z
+        .number()
+        .min(0)
+        .optional()
+        .describe("Mild score boost toward recent digests in mixB/mixC (default 0 = off)."),
       summarizer: z
         .object({
           source: z

@@ -1,4 +1,11 @@
-import type { ChatHistoryItem, LlamaChatSession, LlamaContext, LlamaModel } from "node-llama-cpp";
+import type {
+  ChatHistoryItem,
+  Llama,
+  LlamaChatSession,
+  LlamaContext,
+  LlamaGrammar,
+  LlamaModel,
+} from "node-llama-cpp";
 import { env } from "../env";
 import { runChatCompletionTurn } from "../providers/openrouter";
 import { WarmModel } from "./warm-model";
@@ -38,6 +45,10 @@ export interface Summarizer {
       maxTokens?: number | undefined;
       temperature?: number | undefined;
       source?: "local" | "hosted" | undefined;
+      // When set, the LOCAL path constrains output to this JSON schema via a GBNF grammar (the
+      // sampler can't emit a non-conforming token). The hosted path relies on the prompt asking
+      // for JSON. Either way the returned `text` is the JSON string for the caller to parse.
+      jsonSchema?: object | undefined;
     },
   ): Promise<SummarizeResult>;
 }
@@ -48,9 +59,11 @@ export function isSummarizerConfigured(): boolean {
 }
 
 interface Loaded {
+  llama: Llama;
   model: LlamaModel;
   context: LlamaContext;
   session: LlamaChatSession;
+  grammars: Map<string, LlamaGrammar>; // JSON-schema grammars, compiled once per (schema, load)
 }
 
 // Drop any <think>…</think> the model emits anyway, as a backstop to budgets.thoughtTokens=0.
@@ -78,7 +91,7 @@ const warm = new WarmModel<Loaded>({
     });
     const context = await model.createContext({ contextSize: 16384, batchSize: 2048 });
     const session = new ChatSession({ contextSequence: context.getSequence() });
-    return { model, context, session };
+    return { llama, model, context, session, grammars: new Map() };
   },
   unload: async ({ model, context }) => {
     await context.dispose();
@@ -101,16 +114,32 @@ export function createSummarizer(): Summarizer {
     async summarize(systemPrompt, userPrompt, opts) {
       // Local-first: the GGUF unless hosted is explicitly requested or no GGUF is configured.
       if (opts?.source !== "hosted" && isSummarizerConfigured()) {
-        const text = await warm.use(async ({ session }) => {
-          // Set the system prompt for this call, dropping any prior turn (independent summaries).
-          session.setChatHistory([{ type: "system", text: systemPrompt } as ChatHistoryItem]);
-          const out = await session.prompt(userPrompt, {
+        const text = await warm.use(async (loaded) => {
+          // Fresh system prompt per call — independent summaries, no prior-turn bleed.
+          loaded.session.setChatHistory([
+            { type: "system", text: systemPrompt } as ChatHistoryItem,
+          ]);
+          // JSON-schema grammar (compiled once per schema) → the sampler is CONSTRAINED to the shape,
+          // so a small model literally cannot malform the digest (e.g. dump keywords into the anchor).
+          let grammar: LlamaGrammar | undefined;
+          if (opts?.jsonSchema) {
+            const key = JSON.stringify(opts.jsonSchema);
+            grammar = loaded.grammars.get(key);
+            if (!grammar) {
+              // The method's const-generic param is stricter than a runtime object literal; the
+              // value IS a valid GbnfJsonSchema (DIGEST_SCHEMA), so cast through.
+              grammar = await loaded.llama.createGrammarForJsonSchema(opts.jsonSchema as never);
+              loaded.grammars.set(key, grammar);
+            }
+          }
+          const out = await loaded.session.prompt(userPrompt, {
             budgets: { thoughtTokens: 0 }, // disable Qwen3 thinking (no-op on instruct models)
             temperature: opts?.temperature ?? 0.7,
             topP: 0.8,
             topK: 20,
             minP: 0,
             maxTokens: opts?.maxTokens ?? 512,
+            ...(grammar ? { grammar } : {}),
           });
           return stripThink(out);
         });
