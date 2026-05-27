@@ -118,27 +118,38 @@ const DIGEST_SCHEMA = {
   type: "object",
   properties: {
     topicAnchor: { type: "string" },
-    facts: { type: "array", items: { type: "string" } },
-    keywords: { type: "array", items: { type: "string" } },
+    // maxItems is enforced by the grammar (GbnfJsonArraySchema) — it BOUNDS the output so a verbose
+    // small model can't produce 40+ keywords and overflow maxTokens (→ truncated, unparseable JSON).
+    facts: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 6 },
+    keywords: { type: "array", items: { type: "string" }, minItems: 4, maxItems: 20 },
   },
   required: ["topicAnchor", "facts", "keywords"],
 };
 
-const TIER0_SYSTEM = `You are a memory keeper for a roleplay. Read the conversation block and capture ONLY what is durable — events, revelations, decisions, relationship shifts, concrete facts (names, places, objects). Skip play-by-play and in-the-moment chatter (litmus: would someone bring this up unprompted weeks later?).
+const TIER0_SYSTEM = `You are the memory-keeper for a long roleplay. Distill ONE block of conversation into a compact, searchable digest that will be retrieved later (turns or weeks on) to remind the writer what happened here. Capture only what is DURABLE — things that would be referenced unprompted later.
 
-Respond with ONLY a JSON object of this exact shape:
-{"topicAnchor": "[<key entities> — <specific scene label>]", "facts": ["<durable fact>", "..."], "keywords": ["<concrete term>", "..."]}
+Respond with ONLY a JSON object of this exact shape (no prose, no markdown, no <think>):
+{"topicAnchor": "...", "facts": ["...", "..."], "keywords": ["...", "..."]}
 
-2-5 facts. 8-20 keywords: concrete scene-specific tokens (locations, objects, proper nouns, unique actions) — NOT abstract themes or character names. Third person, past tense. No prose outside the JSON, no <think>.`;
+How to fill each field:
+- topicAnchor: one short label "[key participants — the specific event/scene]". Concrete and DISTINCTIVE — the single handle that separates this scene from every other. Not a generic mood.
+- facts: 1-6 durable beats — state changes, decisions, revelations, relationship shifts, lasting consequences. Each fact stands ALONE (use names, not pronouns), third person, past tense. NO play-by-play, no moment-to-moment action, no atmosphere.
+- keywords: 4-20 concrete, scene-specific SEARCH tokens — proper nouns, named objects, places, distinctive actions/phrases someone might later search for. NOT abstract themes, NOT bare character names, NOT generic words.
+
+Example (shows the shape + judgment — do NOT copy its content):
+{"topicAnchor":"[Roan & the Cartographer — the drowned archive, lantern descent]","facts":["Roan admitted the brass key was his late mentor's, recasting the expedition as grief, not theft","They struck a deal — Roan keeps the journal, the Cartographer keeps any star-charts — their first real trust"],"keywords":["brass key","drowned archive","mentor's journal","star-charts","lantern descent","the Cartographer","dusk-flood deadline"]}`;
 
 // Tier 1+: consolidate several lower-tier digests into one coarser digest. Context-aware (sees the
 // prior consolidations at this tier) so it emits a non-redundant higher-level recap.
-const CONSOLIDATE_SYSTEM = `You are a memory keeper for a roleplay. You are given several sequential digests of earlier scenes and (optionally) the consolidated digests that already precede them. Merge the new digests into ONE coarser digest that preserves the durable arc — major events, turning points, lasting changes — dropping fine detail already implied. Do NOT repeat anything in the prior consolidated digests.
+const CONSOLIDATE_SYSTEM = `You are the memory-keeper for a long roleplay. Merge several sequential scene digests (and, when given, the consolidated digests that already precede them) into ONE coarser ARC-level digest. Keep the throughline — major events, turning points, lasting changes — and drop fine detail already implied. Do NOT repeat anything covered by the prior consolidated digests.
 
-Respond with ONLY a JSON object of this exact shape:
-{"topicAnchor": "[<key entities> — <arc label>]", "facts": ["<durable beat>", "..."], "keywords": ["<concrete term>", "..."]}
+Respond with ONLY a JSON object of this exact shape (no prose, no markdown, no <think>):
+{"topicAnchor": "...", "facts": ["...", "..."], "keywords": ["...", "..."]}
 
-3-6 facts. 8-20 keywords. Third person, past tense. No prose outside the JSON, no <think>.`;
+How to fill each field:
+- topicAnchor: "[key participants — the arc label]" capturing the whole span.
+- facts: 1-6 arc-level beats — the developments that still matter at this altitude. Each stands ALONE; third person, past tense.
+- keywords: 4-20 concrete, distinctive tokens spanning the merged scenes (proper nouns, objects, places, signature actions). NOT abstract themes.`;
 
 function renderTranscript(block: MsgRow[], charName: string, userName: string): string {
   return block
@@ -184,6 +195,9 @@ function parseDigest(raw: string): {
       // malformed JSON → fall through to the free-text parser
     }
   }
+  // The model was emitting JSON ("{…") but it didn't parse (truncated/garbled) — skip rather than
+  // store a broken "{…" anchor. generateDigests drops empty digests and regenerates them later.
+  if (trimmed.startsWith("{")) return { text: "", topicAnchor: null, keywords: [] };
   // Free-text fallback (the legacy "[anchor]\n- fact\nKEYWORDS: …" shape) — hosted output that
   // ignored the JSON ask, or the deterministic fake summarizer in tests.
   const lines = trimmed.split("\n");

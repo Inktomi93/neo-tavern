@@ -138,7 +138,7 @@ export function createSummarizer(): Summarizer {
             topP: 0.8,
             topK: 20,
             minP: 0,
-            maxTokens: opts?.maxTokens ?? 512,
+            maxTokens: opts?.maxTokens ?? 768,
             ...(grammar ? { grammar } : {}),
           });
           return stripThink(out);
@@ -154,7 +154,7 @@ export function createSummarizer(): Summarizer {
         generation: {
           thinking: "off",
           temperature: opts?.temperature ?? 0.3,
-          maxOutputTokens: opts?.maxTokens ?? 512,
+          maxOutputTokens: opts?.maxTokens ?? 768,
         },
       });
       return { text: stripThink(turn.reply), model: HOSTED_SUMMARIZER_MODEL };
