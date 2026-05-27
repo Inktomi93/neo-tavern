@@ -50,6 +50,28 @@ export const searchRouter = t.router({
       }),
     )
     .query(({ ctx, input }) => ctx.services.search.digests({ ...input, username: ctx.username })),
+
+  // Verbatim half of the hybrid: cross-chat search over raw message segments (owner-scoped).
+  segments: publicProcedure
+    .input(
+      z.object({
+        queryText: z.string().min(1),
+        k: z.number().int().positive().max(50).optional(),
+        rerank: z.boolean().optional(),
+      }),
+    )
+    .query(({ ctx, input }) => ctx.services.search.segments({ ...input, username: ctx.username })),
+
+  // The hybrid "mix": both lenses (digests = theme/precision, segments = verbatim) for one query.
+  corpus: publicProcedure
+    .input(
+      z.object({
+        queryText: z.string().min(1),
+        k: z.number().int().positive().max(50).optional(),
+        rerank: z.boolean().optional(),
+      }),
+    )
+    .query(({ ctx, input }) => ctx.services.search.corpus({ ...input, username: ctx.username })),
 });
 
 export const corpusRouter = t.router({

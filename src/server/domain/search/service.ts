@@ -70,6 +70,26 @@ export interface DigestSearchHit {
   distance: number;
 }
 
+/** A cross-chat corpus hit over the raw SEGMENT substrate (verbatim half of the hybrid). */
+export interface SegmentSearchHit {
+  chatId: string;
+  characterVersionId: string;
+  blockIdx: number;
+  seqStart: number;
+  seqEnd: number;
+  /** Leading slice of the block's raw verbatim text (the supporting evidence). */
+  snippet: string;
+  distance: number;
+}
+
+/** The hybrid "mix": two lenses on the corpus — structured digests (theme/precision) and raw
+ *  segments (verbatim/exact-phrase). Each list is independently CSLS+rerank ranked; the client
+ *  presents/blends them (a unified single-list joint rerank is a future refinement). */
+export interface CorpusResult {
+  digests: DigestSearchHit[];
+  segments: SegmentSearchHit[];
+}
+
 export interface SearchService {
   /** Lean primitive: nearest entities as (entityType, entityId, distance). */
   knn(params: {
@@ -113,6 +133,23 @@ export interface SearchService {
     k?: number | undefined;
     rerank?: boolean | undefined;
   }): Promise<DigestSearchHit[]>;
+
+  /** Cross-chat corpus search over the raw SEGMENT substrate (verbatim half of the hybrid). Same
+   *  owner-scoping + CSLS + optional rerank as digests; hits carry the seq span for click-through. */
+  segments(params: {
+    queryText: string;
+    username: string;
+    k?: number | undefined;
+    rerank?: boolean | undefined;
+  }): Promise<SegmentSearchHit[]>;
+
+  /** The hybrid "mix" — digests (theme) + segments (verbatim) for one query, each ranked. */
+  corpus(params: {
+    queryText: string;
+    username: string;
+    k?: number | undefined;
+    rerank?: boolean | undefined;
+  }): Promise<CorpusResult>;
 }
 
 export interface SearchServiceDeps {
@@ -588,5 +625,84 @@ export function createSearchService(db: Db, deps: SearchServiceDeps = {}): Searc
     return hits;
   }
 
-  return { knn, find, discover, digests };
+  // Cross-chat search over the raw SEGMENT substrate — the verbatim half of the hybrid. Mirrors
+  // digests(): owner-scoped WHERE (chat_segments has owner_id), CSLS-null-safe, optional rerank.
+  async function segments(params: {
+    queryText: string;
+    username: string;
+    k?: number | undefined;
+    rerank?: boolean | undefined;
+  }): Promise<SegmentSearchHit[]> {
+    const { queryText, k = 10, rerank = false } = params;
+    const ownerId = await ensureUser(db, params.username);
+    const embedding = await embedder.embed(queryText);
+    const query = JSON.stringify(Array.from(embedding));
+    const poolK = Math.max(k * CSLS_POOL_FACTOR, k * OWNER_OVERFETCH);
+    const rows = await db.all<{
+      chatId: string;
+      characterVersionId: string;
+      blockIdx: number;
+      seqStart: number;
+      seqEnd: number;
+      text: string;
+      dist: number;
+      hubScore: number | null;
+    }>(sql`
+      SELECT cs.chat_id AS chatId, cs.character_version_id AS characterVersionId,
+             cs.block_idx AS blockIdx, cs.seq_start AS seqStart, cs.seq_end AS seqEnd, cs.text AS text,
+             vector_distance_cos(cs.embedding, vector32(${query})) AS dist,
+             cs.hub_score AS hubScore
+      FROM vector_top_k('chat_segments_ann', vector32(${query}), ${poolK}) AS v
+      JOIN chat_segments cs ON cs.rowid = v.id
+      WHERE cs.owner_id = ${ownerId}
+      ORDER BY dist ASC
+    `);
+    const adjusted = rows.map((row) => ({
+      row,
+      rank: row.hubScore === null ? row.dist : Math.max(0, row.dist - 1 + row.hubScore),
+    }));
+    adjusted.sort((a, b) => a.rank - b.rank);
+    let pool = adjusted.map((a) => a.row);
+    const idOf = (r: (typeof pool)[number]): string => `${r.chatId}:${r.blockIdx}`;
+    if (rerank && pool.length > 0) {
+      const scores = await reranker.rerank(
+        queryText,
+        pool.map((r) => ({ id: idOf(r), text: r.text })),
+      );
+      const order = new Map(scores.map((s, i) => [s.id, i]));
+      pool = [...pool].sort(
+        (a, b) =>
+          (order.get(idOf(a)) ?? Number.POSITIVE_INFINITY) -
+          (order.get(idOf(b)) ?? Number.POSITIVE_INFINITY),
+      );
+    }
+    const hits: SegmentSearchHit[] = pool.slice(0, k).map((r) => ({
+      chatId: r.chatId,
+      characterVersionId: r.characterVersionId,
+      blockIdx: r.blockIdx,
+      seqStart: r.seqStart,
+      seqEnd: r.seqEnd,
+      snippet: r.text.slice(0, SNIPPET_CHARS),
+      distance: r.dist,
+    }));
+    getLog().debug(
+      { k, reranked: rerank, fetched: pool.length, hits: hits.length },
+      "search: segments",
+    );
+    return hits;
+  }
+
+  // The hybrid "mix": run both substrates for one query and return both ranked lenses. (A unified
+  // single-list joint cross-encoder rerank over digest + segment text is a future refinement.)
+  async function corpus(params: {
+    queryText: string;
+    username: string;
+    k?: number | undefined;
+    rerank?: boolean | undefined;
+  }): Promise<CorpusResult> {
+    const [d, s] = await Promise.all([digests(params), segments(params)]);
+    return { digests: d, segments: s };
+  }
+
+  return { knn, find, discover, digests, segments, corpus };
 }
