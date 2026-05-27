@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import { expect, test } from "vitest";
-import { characters, characterVersions, chats, users } from "../../src/db/schema";
+import { characters, characterVersions, chatSegments, chats, users } from "../../src/db/schema";
+import { newId } from "../../src/server/domain/_shared/ids";
 import { createCorpusService } from "../../src/server/domain/corpus";
 import { createSearchService } from "../../src/server/domain/search";
 import type { Embedder } from "../../src/server/embeddings/embedder";
@@ -57,10 +58,19 @@ test("find enriches knn hits — character hits carry name+tags, segment hits ca
     entityId: "A",
     text: "ranger king of the north",
   });
-  await corpus.embedAndStore({
-    entityType: "chat_segment",
-    entityId: "chatA1:0",
+  // Phase B: the segment lives in chat_segments (block-bounded), not the polymorphic embeddings.
+  await db.insert(chatSegments).values({
+    id: newId(),
+    chatId: "chatA1",
+    ownerId: "uA",
+    characterVersionId: "cvA",
+    blockIdx: 0,
+    seqStart: 0,
+    seqEnd: 1,
     text: "the dragon battle at the keep",
+    model: "fake",
+    embedding: VEC["the dragon battle at the keep"] ?? new Float32Array(1024),
+    createdAt: now,
   });
 
   const results = await createSearchService(db, { embedder }).find({ queryText: "hero", k: 10 });

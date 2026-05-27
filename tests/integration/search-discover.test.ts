@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 import type { Db } from "../../src/db/client";
-import { characters, characterVersions, chats, users } from "../../src/db/schema";
-import { createCorpusService } from "../../src/server/domain/corpus";
+import { characters, characterVersions, chatSegments, chats, users } from "../../src/db/schema";
+import { newId } from "../../src/server/domain/_shared/ids";
 import { createSearchService } from "../../src/server/domain/search";
 import type { Embedder } from "../../src/server/embeddings/embedder";
 import { freshDb } from "../support/db";
@@ -77,22 +77,28 @@ async function seedWorld(db: Db): Promise<void> {
       updatedAt: now,
     },
   ]);
-  const corpus = createCorpusService(db, { embedder });
-  await corpus.embedAndStore({
-    entityType: "chat_segment",
-    entityId: "chatA1:0",
-    text: "dragon battle at the keep",
+  // Phase B: segments live in the first-class chat_segments table (block-bounded), not the
+  // polymorphic embeddings. entityId is implicit: "<chatId>:<blockIdx>".
+  const seg = (chatId: string, ownerId: string, cvId: string, blockIdx: number, text: string) => ({
+    id: newId(),
+    chatId,
+    ownerId,
+    characterVersionId: cvId,
+    blockIdx,
+    seqStart: blockIdx * 2,
+    seqEnd: blockIdx * 2 + 1,
+    text,
+    model: "fake",
+    embedding: VEC[text] ?? new Float32Array(1024),
+    createdAt: now,
   });
-  await corpus.embedAndStore({
-    entityType: "chat_segment",
-    entityId: "chatA1:1",
-    text: "the dragon hoard of gold",
-  });
-  await corpus.embedAndStore({
-    entityType: "chat_segment",
-    entityId: "chatB1:0",
-    text: "grocery shopping on a tuesday",
-  });
+  await db
+    .insert(chatSegments)
+    .values([
+      seg("chatA1", "uA", "cvA", 0, "dragon battle at the keep"),
+      seg("chatA1", "uA", "cvA", 1, "the dragon hoard of gold"),
+      seg("chatB1", "uB", "cvB", 0, "grocery shopping on a tuesday"),
+    ]);
 }
 
 test("discover groups matching segments by character, ranked by best, with card + snippets", async () => {

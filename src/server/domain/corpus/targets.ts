@@ -1,9 +1,7 @@
-import { asc, eq } from "drizzle-orm";
 import type { Db } from "../../../db/client";
-import { characters, characterVersions, chats, messages } from "../../../db/schema";
+import { characters, characterVersions } from "../../../db/schema";
 import { getLog } from "../../observability/logger";
 import { buildCardEmbedText } from "./embed-text";
-import { segmentChat } from "./segment";
 import type { EmbedItem } from "./service";
 
 // Coarse char pre-cap (~8192 tok · BGE-M3 truncates at 8192 internally anyway) — keeps the
@@ -24,7 +22,8 @@ function cap(text: string): string {
  * (`scripts/embed-corpus`) and the source_text backfill (`scripts/backfill-source-text`) so
  * the text is built ONE way. No `existingKeys` / degenerate filtering — callers decide what
  * to skip (the embed pass skips done + tiny cards; the backfill matches existing rows).
- * entityId: card = "<characterId>", segment = "<chatId>:<segIndex>".
+ * entityId: card = "<characterId>". (Phase B: chat segments are no longer embedded here — they're
+ * the first-class chat_segments table, generated live per-block by domain/chat/memory.ts.)
  */
 export async function collectEmbedTargets(db: Db): Promise<EmbedItem[]> {
   const versions = await db.select().from(characterVersions);
@@ -54,41 +53,6 @@ export async function collectEmbedTargets(db: Db): Promise<EmbedItem[]> {
     });
   }
 
-  const allChats = await db.select().from(chats);
-  const real = allChats.filter(
-    (ch) => (ch.metadata as { bucket?: string } | null)?.bucket === "real_conversation",
-  );
-  for (const ch of real) {
-    const v = versionById.get(ch.characterVersionId);
-    const charName = v?.name ?? "Character";
-    const characterId = v?.characterId;
-    const rows = await db
-      .select()
-      .from(messages)
-      .where(eq(messages.chatId, ch.id))
-      .orderBy(asc(messages.seq));
-    const segMsgs = rows
-      .filter((m) => m.role !== "system")
-      .map((m) => ({
-        isUser: m.role === "user",
-        speaker: m.role === "user" ? "User" : charName,
-        content: m.content,
-        sendDate: m.createdAt,
-      }));
-    const chatDate = new Date(ch.createdAt).toISOString().slice(0, 10);
-    for (const seg of segmentChat(segMsgs, { characterName: charName, chatDate })) {
-      targets.push({
-        entityType: "chat_segment",
-        entityId: `${ch.id}:${seg.index}`,
-        text: cap(seg.text),
-        metadata: { characterId, chatId: ch.id, segIndex: seg.index },
-      });
-    }
-  }
-  const cards = targets.filter((t) => t.entityType === "character").length;
-  getLog().debug(
-    { targets: targets.length, cards, segments: targets.length - cards },
-    "corpus: collected embed targets",
-  );
+  getLog().debug({ targets: targets.length }, "corpus: collected embed targets (character cards)");
   return targets;
 }
