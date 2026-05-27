@@ -14,7 +14,14 @@
 
 import { asc, eq } from "drizzle-orm";
 import type { Db } from "../../../db/client";
-import { characterVersions, chatDigests, chats, messages, personas } from "../../../db/schema";
+import {
+  characterVersions,
+  chatDigests,
+  chatSegments,
+  chats,
+  messages,
+  personas,
+} from "../../../db/schema";
 import type { GenerationParams } from "../../../shared/generation";
 import type { Embedder } from "../../embeddings/embedder";
 import type { Reranker } from "../../embeddings/reranker";
@@ -206,6 +213,67 @@ async function loadHistory(db: Db, chatId: string): Promise<MsgRow[]> {
   return rows.filter((m) => m.role !== "system" && m.content.trim().length > 0);
 }
 
+interface ChatMeta {
+  ownerId: string;
+  characterVersionId: string;
+  charName: string;
+  userName: string;
+}
+
+// Resolve the chat's owner + pinned character version + display names (char = the cv name; user =
+// the active-or-pinned persona, else "User"). Shared by generateDigests + generateSegments.
+async function loadChatMeta(db: Db, chatId: string): Promise<ChatMeta | null> {
+  const rows = await db
+    .select({
+      ownerId: chats.ownerId,
+      characterVersionId: chats.characterVersionId,
+      personaId: chats.personaId,
+      pinnedPersonaId: chats.pinnedPersonaId,
+    })
+    .from(chats)
+    .where(eq(chats.id, chatId))
+    .limit(1);
+  const chat = rows[0];
+  if (!chat) return null;
+  const cvRows = await db
+    .select({ name: characterVersions.name })
+    .from(characterVersions)
+    .where(eq(characterVersions.id, chat.characterVersionId))
+    .limit(1);
+  const charName = cvRows[0]?.name ?? "Assistant";
+  const personaId = chat.personaId ?? chat.pinnedPersonaId;
+  let userName = "User";
+  if (personaId) {
+    const pRows = await db
+      .select({ name: personas.name })
+      .from(personas)
+      .where(eq(personas.id, personaId))
+      .limit(1);
+    userName = pRows[0]?.name ?? "User";
+  }
+  return {
+    ownerId: chat.ownerId,
+    characterVersionId: chat.characterVersionId,
+    charName,
+    userName,
+  };
+}
+
+async function loadSegments(
+  db: Db,
+  chatId: string,
+): Promise<{ blockIdx: number; seqStart: number; seqEnd: number; createdAt: number }[]> {
+  return db
+    .select({
+      blockIdx: chatSegments.blockIdx,
+      seqStart: chatSegments.seqStart,
+      seqEnd: chatSegments.seqEnd,
+      createdAt: chatSegments.createdAt,
+    })
+    .from(chatSegments)
+    .where(eq(chatSegments.chatId, chatId));
+}
+
 // Embed the staged digests in ONE batched GPU pass, then upsert (idempotent on the unique
 // (chatId,tier,blockIdx) — a regenerated block overwrites in place). Returns how many were written.
 async function embedAndUpsert(
@@ -272,35 +340,9 @@ export async function generateDigests(
   const cfg = resolveCfg(opts.params);
   if (!cfg.enabled || cfg.mode === "off") return { written: 0 };
 
-  const chatRows = await db
-    .select({
-      ownerId: chats.ownerId,
-      characterVersionId: chats.characterVersionId,
-      personaId: chats.personaId,
-      pinnedPersonaId: chats.pinnedPersonaId,
-    })
-    .from(chats)
-    .where(eq(chats.id, opts.chatId))
-    .limit(1);
-  const chat = chatRows[0];
+  const chat = await loadChatMeta(db, opts.chatId);
   if (!chat) return { written: 0 };
-
-  const cvRows = await db
-    .select({ name: characterVersions.name })
-    .from(characterVersions)
-    .where(eq(characterVersions.id, chat.characterVersionId))
-    .limit(1);
-  const charName = cvRows[0]?.name ?? "Assistant";
-  const personaId = chat.personaId ?? chat.pinnedPersonaId;
-  let userName = "User";
-  if (personaId) {
-    const pRows = await db
-      .select({ name: personas.name })
-      .from(personas)
-      .where(eq(personas.id, personaId))
-      .limit(1);
-    userName = pRows[0]?.name ?? "User";
-  }
+  const { charName, userName } = chat;
 
   const history = await loadHistory(db, opts.chatId);
   if (history.length === 0) return { written: 0 };
@@ -419,6 +461,83 @@ export async function generateDigests(
     "memory: digests generated",
   );
   return { written: totalWritten };
+}
+
+/**
+ * (Re)build this chat's raw SEGMENTS — the verbatim half of the hybrid corpus search (docs/memory.md
+ * §4). Same blockSize boundary as digests, but indexes EVERY complete block across the WHOLE chat (no
+ * verbatimWindow cutoff — the cross-chat search tool wants all of it findable; the still-forming
+ * trailing partial block is skipped to avoid per-turn re-embed churn). Embed-only (no summarizer →
+ * cheap), so it runs for ALL chats regardless of memory.enabled. Idempotent/incremental: only
+ * stale/missing blocks re-embed (span changed, or a contained message edited after the segment).
+ */
+export async function generateSegments(
+  db: Db,
+  deps: { embedder: Embedder },
+  opts: { chatId: string; blockSize?: number | undefined },
+): Promise<{ written: number }> {
+  const blockSize = opts.blockSize ?? DEFAULTS.blockSize;
+  const meta = await loadChatMeta(db, opts.chatId);
+  if (!meta) return { written: 0 };
+  const history = await loadHistory(db, opts.chatId);
+  if (history.length < blockSize) return { written: 0 }; // not one complete block yet
+
+  const existing = new Map((await loadSegments(db, opts.chatId)).map((s) => [s.blockIdx, s]));
+  // COMPLETE blocks only, across the whole chat (skip the still-forming trailing partial block).
+  const blocks = chunk(history, blockSize).filter((b) => b.length === blockSize);
+  const pending: { blockIdx: number; seqStart: number; seqEnd: number; text: string }[] = [];
+  for (const [i, block] of blocks.entries()) {
+    const first = block[0];
+    const last = block[block.length - 1];
+    if (!first || !last) continue;
+    const prev = existing.get(i);
+    const stale =
+      !prev ||
+      prev.seqStart !== first.seq ||
+      prev.seqEnd !== last.seq ||
+      block.some((m) => m.editedAt !== null && m.editedAt > prev.createdAt);
+    if (!stale) continue;
+    pending.push({
+      blockIdx: i,
+      seqStart: first.seq,
+      seqEnd: last.seq,
+      text: renderTranscript(block, meta.charName, meta.userName),
+    });
+  }
+  if (pending.length === 0) return { written: 0 };
+
+  const vecs = await deps.embedder.embedBatch(pending.map((p) => p.text));
+  const createdAt = Date.now();
+  let written = 0;
+  for (const [i, p] of pending.entries()) {
+    const vec = vecs[i];
+    if (vec === undefined) continue;
+    const fields = {
+      seqStart: p.seqStart,
+      seqEnd: p.seqEnd,
+      text: p.text,
+      model: deps.embedder.model,
+      embedding: vec,
+      createdAt,
+    };
+    await db
+      .insert(chatSegments)
+      .values({
+        id: newId(),
+        chatId: opts.chatId,
+        ownerId: meta.ownerId,
+        characterVersionId: meta.characterVersionId,
+        blockIdx: p.blockIdx,
+        ...fields,
+      })
+      .onConflictDoUpdate({
+        target: [chatSegments.chatId, chatSegments.blockIdx],
+        set: fields,
+      });
+    written += 1;
+  }
+  getLog().debug({ chatId: opts.chatId, written }, "memory: segments generated");
+  return { written };
 }
 
 // ── retrieval (cheap; on the reply critical path) ──────────────────────────────

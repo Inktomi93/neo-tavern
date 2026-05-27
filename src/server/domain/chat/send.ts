@@ -1,6 +1,7 @@
 import { and, eq } from "drizzle-orm";
 import { chats, messages } from "../../../db/schema";
 import { assemblePrompt } from "../../../shared/prompt-assemble";
+import { env } from "../../env";
 import { getLog } from "../../observability/logger";
 import { type ChatTurnResult, TurnError } from "../../providers/turn";
 import { newId } from "../_shared/ids";
@@ -9,7 +10,7 @@ import { ensureUser } from "../_shared/users";
 import type { RunCompaction } from "./compaction";
 import { DEFAULT_COMPACT_INSTRUCTIONS, MANAGED_COMPACT_DEFAULT_PCT } from "./constants";
 import type { ChatContext } from "./context";
-import { generateDigests } from "./memory";
+import { generateDigests, generateSegments } from "./memory";
 import { resolveTurnRouting } from "./routing";
 import { DbSessionStore } from "./store";
 import type { SendParams, SendResult } from "./types";
@@ -251,6 +252,25 @@ export function createSend(ctx: ChatContext, ops: { runCompaction: RunCompaction
           getLog().warn(
             { chatId: params.chatId, err: err instanceof Error ? err.message : String(err) },
             "memory: background digest generation failed",
+          ),
+        );
+      }
+
+      // Cross-chat corpus indexing: embed this chat's completed raw-message blocks into chat_segments
+      // (the verbatim half of hybrid search) in the background, for EVERY chat — independent of the
+      // memory toggle. Embed-only, lock-free, fire-and-forget. CORPUS_AUTOINDEX=false pauses it.
+      if (env.CORPUS_AUTOINDEX === "true") {
+        void generateSegments(
+          db,
+          { embedder },
+          {
+            chatId: params.chatId,
+            blockSize: memCfg?.blockSize,
+          },
+        ).catch((err) =>
+          getLog().warn(
+            { chatId: params.chatId, err: err instanceof Error ? err.message : String(err) },
+            "corpus: background segment indexing failed",
           ),
         );
       }

@@ -2,7 +2,7 @@ import process from "node:process";
 import { eq } from "drizzle-orm";
 import { createDb, runMigrations } from "../src/db/client";
 import { chats } from "../src/db/schema";
-import { generateDigests } from "../src/server/domain/chat/memory";
+import { generateDigests, generateSegments } from "../src/server/domain/chat/memory";
 import { createEmbedder } from "../src/server/embeddings/embedder";
 import { createSummarizer } from "../src/server/embeddings/summarizer";
 import { env } from "../src/server/env";
@@ -65,8 +65,16 @@ async function main(): Promise<void> {
         params: PARAMS,
       },
     );
-    total += written;
-    console.log(`[backfill] ${c.id}: ${written} digest(s) (re)written`);
+    const seg = await generateSegments(
+      db,
+      { embedder },
+      {
+        chatId: c.id,
+        blockSize: PARAMS.blockSize,
+      },
+    );
+    total += written + seg.written;
+    console.log(`[backfill] ${c.id}: ${written} digest(s) + ${seg.written} segment(s) (re)written`);
   }
   console.log(`[backfill] done — ${total} digest(s) across ${targets.length} chat(s)`);
   process.exit(0);

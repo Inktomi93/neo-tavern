@@ -80,6 +80,11 @@ const envSchema = z.object({
   // to a repo-local, gitignored dir so model artifacts stay self-contained — not leaking
   // into node_modules/.cache or an OS-global HF cache. Resolved relative to cwd (repo root).
   MODEL_CACHE_DIR: z.string().min(1).default("./.models"),
+  // Cross-chat corpus auto-indexing: embed each chat's completed raw-message blocks into
+  // chat_segments (the verbatim half of hybrid search) in the background, post-turn, for EVERY chat.
+  // "true" (default) keeps the search corpus fresh as chats proceed; "false" pauses it to fully
+  // offload the GPU. Embed-only + cheap. Digest generation is separate (gated on memory.enabled).
+  CORPUS_AUTOINDEX: z.enum(["true", "false"]).default("true"),
 
   // Auth/tenancy (see CLAUDE.md). Identity = X-Authentik-Username, trusted ONLY when
   // caddy forwards it with a matching X-Neo-Proxy secret; otherwise (direct LAN/IP
