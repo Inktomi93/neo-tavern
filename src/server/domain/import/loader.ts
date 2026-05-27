@@ -25,6 +25,7 @@ export interface CollectResult {
   bundles: ImportCharacterInput[];
   orphanChatDirs: string[]; // chat dirs whose handle matched no card — skipped (no version to pin)
   unreadableCards: string[]; // PNGs with no parseable card data
+  skippedCharacters: string[]; // cards excluded by the skip-list (card + all its chats dropped)
 }
 
 function sha256(bytes: Uint8Array): string {
@@ -39,7 +40,10 @@ async function listDir(dir: string): Promise<import("node:fs").Dirent[]> {
   }
 }
 
-export async function collectBundlesFromDir(profileDir: string): Promise<CollectResult> {
+export async function collectBundlesFromDir(
+  profileDir: string,
+  skipCharacterNames: string[] = [],
+): Promise<CollectResult> {
   type Group = { card?: ImportCardInput; chats: ImportChatInput[] };
   const byHandle = new Map<string, Group>();
   const group = (handle: string): Group => {
@@ -51,6 +55,12 @@ export async function collectBundlesFromDir(profileDir: string): Promise<Collect
     return g;
   };
   const unreadableCards: string[] = [];
+  // Curation skip-list (case-insensitive card-name match). A matched card AND all its chats are
+  // dropped — e.g. utility characters that aren't RP (the owner's coder-helper). Cards are parsed
+  // before chats, so `skippedHandles` is complete before the chats loop reads it.
+  const skip = new Set(skipCharacterNames.map((s) => s.trim().toLowerCase()).filter(Boolean));
+  const skippedHandles = new Set<string>();
+  const skippedCharacters: string[] = [];
 
   // ── Cards ──────────────────────────────────────────────────────────────
   const charsDir = join(profileDir, "characters");
@@ -61,6 +71,11 @@ export async function collectBundlesFromDir(profileDir: string): Promise<Collect
     const parsed = parseCardPng(bytes, stem);
     if (!parsed) {
       unreadableCards.push(ent.name);
+      continue;
+    }
+    if (skip.has((parsed.name ?? "").trim().toLowerCase())) {
+      skippedHandles.add(slugifyHandle(stem)); // drops its chats too (handle match in the chats loop)
+      skippedCharacters.push(parsed.name);
       continue;
     }
     group(slugifyHandle(stem)).card = {
@@ -77,6 +92,7 @@ export async function collectBundlesFromDir(profileDir: string): Promise<Collect
   for (const dirEnt of await listDir(chatsDir)) {
     if (!dirEnt.isDirectory()) continue;
     const handle = slugifyHandle(dirEnt.name);
+    if (skippedHandles.has(handle)) continue; // skip-listed character — drop its chats
     const dirPath = join(chatsDir, dirEnt.name);
     for (const fileEnt of await listDir(dirPath)) {
       if (!fileEnt.isFile() || !fileEnt.name.toLowerCase().endsWith(".jsonl")) continue;
@@ -97,5 +113,5 @@ export async function collectBundlesFromDir(profileDir: string): Promise<Collect
     if (g.card) bundles.push({ card: g.card, chats: g.chats });
     else if (g.chats.length > 0) orphanChatDirs.push(handle);
   }
-  return { bundles, orphanChatDirs, unreadableCards };
+  return { bundles, orphanChatDirs, unreadableCards, skippedCharacters };
 }

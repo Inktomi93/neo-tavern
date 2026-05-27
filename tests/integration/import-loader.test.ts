@@ -24,6 +24,15 @@ test("collectBundlesFromDir pairs a card with chats across case-variant dirs", a
   expect(files).toEqual(["main - Branch #1.jsonl", "main.jsonl"]);
 });
 
+test("skip-list excludes a character (card + all its chats) case-insensitively, with no orphans", async () => {
+  const { bundles, orphanChatDirs, skippedCharacters } = await collectBundlesFromDir(corpusDir, [
+    "BLOCK OF CHEESE", // case-insensitive match on the card name
+  ]);
+  expect(bundles).toHaveLength(0); // the only character is skipped
+  expect(skippedCharacters).toEqual(["Block of Cheese"]);
+  expect(orphanChatDirs).toEqual([]); // its chats are dropped by handle, not left as orphans
+});
+
 test("end-to-end: collect → import writes the character, chats, variants, and links the branch", async () => {
   const db = await freshDb();
   const svc = createImportService(db, { ownerHandle: "owner" });

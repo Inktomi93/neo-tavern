@@ -21,9 +21,13 @@ async function main(): Promise<void> {
   // The card PNG is the avatar: store it in the CAS and pin the asset onto the version row.
   const assets = createAssetsService(db, createCas(env.ASSETS_DIR));
 
-  const { bundles, orphanChatDirs, unreadableCards } = await collectBundlesFromDir(dir);
+  const skipNames = env.IMPORT_SKIP_CHARACTERS.split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const { bundles, orphanChatDirs, unreadableCards, skippedCharacters } =
+    await collectBundlesFromDir(dir, skipNames);
   console.log(
-    `[import] ${bundles.length} characters · ${orphanChatDirs.length} orphan chat dirs · ${unreadableCards.length} unreadable cards`,
+    `[import] ${bundles.length} characters · ${orphanChatDirs.length} orphan chat dirs · ${unreadableCards.length} unreadable cards${skippedCharacters.length ? ` · skipped: ${skippedCharacters.join(", ")}` : ""}`,
   );
 
   const totals = {

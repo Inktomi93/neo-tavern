@@ -86,6 +86,11 @@ const envSchema = z.object({
   // offload the GPU. Embed-only + cheap. Digest generation is separate (gated on memory.enabled).
   CORPUS_AUTOINDEX: z.enum(["true", "false"]).default("true"),
 
+  // Import curation: comma-separated character names (case-insensitive) to EXCLUDE at import —
+  // the card + all its chats are dropped. Default skips non-RP utility characters (the coder-helper
+  // "Ruby" and scratch "Assistant" cards) so they never enter the corpus. Set to "" to import all.
+  IMPORT_SKIP_CHARACTERS: z.string().default("Ruby,Assistant"),
+
   // Auth/tenancy (see CLAUDE.md). Identity = X-Authentik-Username, trusted ONLY when
   // caddy forwards it with a matching X-Neo-Proxy secret; otherwise (direct LAN/IP
   // access) we fall back to the owner. UNSET secret = header never trusted = always
