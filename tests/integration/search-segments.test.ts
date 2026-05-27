@@ -138,7 +138,10 @@ test("corpus search returns both lenses (digests + segments)", async () => {
   await generateSegments(db, { embedder: fakeEmbedder }, { chatId, blockSize: 2 });
   const search = createSearchService(db, { embedder: fakeEmbedder, reranker: fakeReranker });
 
-  const res = await search.corpus({ queryText: "emeralds", username: "owner", k: 3 });
-  expect(res.digests.length).toBeGreaterThan(0);
-  expect(res.segments.length).toBeGreaterThan(0);
+  const res = await search.corpus({ queryText: "emeralds", username: "owner", k: 10 });
+  expect(res.length).toBeGreaterThan(0);
+  // Unified list, deduped per block — both lenses surface (digest blocks + the uncovered recent
+  // segment block that has no digest), each tagged by source.
+  expect(res.some((h) => h.source === "digest")).toBe(true);
+  expect(res.some((h) => h.source === "segment")).toBe(true);
 });
