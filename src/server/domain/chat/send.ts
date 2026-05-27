@@ -9,6 +9,7 @@ import { ensureUser } from "../_shared/users";
 import type { RunCompaction } from "./compaction";
 import { DEFAULT_COMPACT_INSTRUCTIONS, MANAGED_COMPACT_DEFAULT_PCT } from "./constants";
 import type { ChatContext } from "./context";
+import { generateDigests } from "./memory";
 import { resolveTurnRouting } from "./routing";
 import { DbSessionStore } from "./store";
 import type { SendParams, SendResult } from "./types";
@@ -22,7 +23,7 @@ import type { SendParams, SendResult } from "./types";
 export function createSend(ctx: ChatContext, ops: { runCompaction: RunCompaction }) {
   const { db, loadOwnedChat, maxSeq, listByChat, openRouterRunner, runTurn, recordTurnEvents } =
     ctx;
-  const { buildAssembleContext, resolveConfig, loadCanonHistory } = ctx;
+  const { buildAssembleContext, resolveConfig, loadCanonHistory, embedder, summarizer } = ctx;
   const { runCompaction } = ops;
 
   async function send(params: SendParams): Promise<SendResult> {
@@ -230,6 +231,28 @@ export function createSend(ctx: ChatContext, ops: { runCompaction: RunCompaction
             trigger: "managed",
           });
         }
+      }
+
+      // Memory ({{memory}} digests): regenerate this chat's digests in the BACKGROUND after the
+      // turn (fire-and-forget — never blocks the reply), gated on the opt-in knob + an enabled
+      // memory marker. Idempotent/incremental; only OLDER messages (below verbatimWindow) digest,
+      // so the turn just saved is untouched. Lock-free on purpose (taking the chat lock would make
+      // the next send wait on summarization).
+      const memCfg = promptConfig.params.memory;
+      const hasMemoryMarker = promptConfig.sections.some(
+        (s) => s.type === "marker" && s.marker === "memory" && s.enabled,
+      );
+      if (memCfg?.enabled === true && hasMemoryMarker) {
+        void generateDigests(
+          db,
+          { embedder, summarizer },
+          { chatId: params.chatId, params: memCfg },
+        ).catch((err) =>
+          getLog().warn(
+            { chatId: params.chatId, err: err instanceof Error ? err.message : String(err) },
+            "memory: background digest generation failed",
+          ),
+        );
       }
 
       // chatId-scoped turn summary (the provider already logs each event at its own level;

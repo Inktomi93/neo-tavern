@@ -27,6 +27,7 @@ import {
 } from "../../../shared/prompt-config";
 import { createEmbedder, type Embedder } from "../../embeddings/embedder";
 import { createReranker, type Reranker } from "../../embeddings/reranker";
+import { createSummarizer, type Summarizer } from "../../embeddings/summarizer";
 import { runChatTurn } from "../../providers/claude-sdk";
 import { runChatCompletionTurn, runRawTurn } from "../../providers/openrouter";
 import type { TurnEvent } from "../../providers/turn";
@@ -48,6 +49,9 @@ export interface ChatServiceDeps {
   // BGE-M3 + cross-encoder (lazy singletons — never loaded unless a chat actually uses memory).
   embedder?: Embedder;
   reranker?: Reranker;
+  // Summarizer for the {{memory}} digest pipeline (generateDigests, fired post-turn). Defaults to
+  // the local-first / hosted-Haiku-fallback summarizer; injectable as a fake in tests.
+  summarizer?: Summarizer;
 }
 
 // Recent message texts the keyword-WI marker scans. Small + tunable; includes the just-inserted
@@ -84,6 +88,7 @@ export function createChatContext(db: Db, deps: ChatServiceDeps = {}) {
   const runChatCompletion = deps.runChatCompletion ?? runChatCompletionTurn;
   const embedder = deps.embedder ?? createEmbedder();
   const reranker = deps.reranker ?? createReranker();
+  const summarizer = deps.summarizer ?? createSummarizer();
 
   // The openrouter runner picks the endpoint by api: chat.send (broad catalog) vs beta.responses.
   function openRouterRunner(api: "chat-completions" | "responses"): typeof runRawTurn {
@@ -433,6 +438,8 @@ export function createChatContext(db: Db, deps: ChatServiceDeps = {}) {
 
   return {
     db,
+    embedder,
+    summarizer,
     runTurn,
     openRouterRunner,
     loadOwnedChat,
