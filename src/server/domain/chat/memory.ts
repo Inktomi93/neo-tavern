@@ -141,15 +141,18 @@ Example (shows the shape + judgment — do NOT copy its content):
 
 // Tier 1+: consolidate several lower-tier digests into one coarser digest. Context-aware (sees the
 // prior consolidations at this tier) so it emits a non-redundant higher-level recap.
-const CONSOLIDATE_SYSTEM = `You are the memory-keeper for a long roleplay. Merge several sequential scene digests (and, when given, the consolidated digests that already precede them) into ONE coarser ARC-level digest. Keep the throughline — major events, turning points, lasting changes — and drop fine detail already implied. Do NOT repeat anything covered by the prior consolidated digests.
+const CONSOLIDATE_SYSTEM = `You are the memory-keeper for a long roleplay. Merge several sequential scene digests (and, when given, the consolidated digests that already precede them) into ONE coarser ARC-level digest — a higher-altitude view of this stretch of the story. Keep the throughline (major events, turning points, lasting changes); drop fine detail already implied. Do NOT repeat anything covered by the prior consolidated digests.
 
 Respond with ONLY a JSON object of this exact shape (no prose, no markdown, no <think>):
 {"topicAnchor": "...", "facts": ["...", "..."], "keywords": ["...", "..."]}
 
 How to fill each field:
-- topicAnchor: "[key participants — the arc label]" capturing the whole span.
-- facts: 1-6 arc-level beats — the developments that still matter at this altitude. Each stands ALONE; third person, past tense.
-- keywords: 4-20 concrete, distinctive tokens spanning the merged scenes (proper nouns, objects, places, signature actions). NOT abstract themes.`;
+- topicAnchor: one short label "[key participants — this span's defining turns]". SAME bracket format as a scene digest, but it names what makes THIS span distinct from the spans around it — its specific turning points, NOT the relationship's general theme. It must be DISTINCTIVE: a reader should be able to tell this arc from its neighbors by the anchor alone. "[Roan & the Cartographer — their growing trust and shared journey]" is WRONG (it fits any stretch); "[Roan & the Cartographer — grave-robbing to alliance: the drowned archive through the harbor betrayal]" is RIGHT.
+- facts: 1-6 arc-level beats — the developments that still matter at this altitude (turning points, revelations, lasting changes). Name the specific events of THIS span, not the relationship in general. Each stands ALONE (use names, not pronouns), third person, past tense. Concrete events, not summary adjectives.
+- keywords: 4-20 concrete, distinctive search tokens spanning the merged scenes (proper nouns, named objects, places, signature actions/phrases). NOT abstract themes, NOT bare character names.
+
+Example (shows the shape + judgment — do NOT copy its content):
+{"topicAnchor":"[Roan & the Cartographer — grave-robbing to alliance: the drowned archive through the harbor betrayal]","facts":["Roan's expedition was revealed as grief over his dead mentor, not treasure-hunting, which turned the Cartographer's distrust into partnership","They escaped the dusk-flood with the star-charts but lost the mentor's journal to the harbor-master, who now hunts them both","Their first shared enemy replaced their rivalry — the alliance held through the betrayal"],"keywords":["drowned archive","star-charts","mentor's journal","dusk-flood","harbor-master","brass key","the harbor betrayal","first shared enemy"]}`;
 
 function renderTranscript(block: MsgRow[], charName: string, userName: string): string {
   return block
