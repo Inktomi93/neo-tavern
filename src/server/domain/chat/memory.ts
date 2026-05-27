@@ -33,14 +33,15 @@ type MemoryConfig = NonNullable<GenerationParams["memory"]>;
 
 // Defaults (docs/memory.md §3/§5). blockSize/verbatimWindow are message counts; minScore is cosine.
 const DEFAULTS = {
-  blockSize: 16,
-  verbatimWindow: 30,
-  mode: "mixA" as NonNullable<MemoryConfig["mode"]>,
-  fanOut: 8,
-  maxTier: 2,
-  retrieveK: 8,
-  rerankTo: 4,
-  minScore: 0.3,
+  blockSize: 8, // ~3k BGE tok/block (median) — under the 8192 cap (16-msg blocks truncate 24%); finer digests
+  verbatimWindow: 8, // recent tail never digested — ST's `protect` zone, NOT a context-budget knob
+  queryWindow: 2, // recent messages forming the retrieval query (ST native vectors `query: 2`)
+  mode: "mixC" as NonNullable<MemoryConfig["mode"]>, // flat query-driven RAG (ST model) is the default
+  fanOut: 4,
+  maxTier: 3,
+  retrieveK: 4,
+  rerankTo: 3,
+  minScore: 0.25, // ST `score_threshold`
   keywordMatch: true,
 } as const;
 
@@ -88,6 +89,7 @@ function resolveCfg(p: MemoryConfig) {
     enabled: p.enabled ?? false,
     blockSize: p.blockSize ?? DEFAULTS.blockSize,
     verbatimWindow: p.verbatimWindow ?? DEFAULTS.verbatimWindow,
+    queryWindow: p.queryWindow ?? DEFAULTS.queryWindow,
     mode: p.mode ?? DEFAULTS.mode,
     fanOut: p.fanOut ?? DEFAULTS.fanOut,
     maxTier: p.maxTier ?? DEFAULTS.maxTier,
@@ -300,6 +302,8 @@ async function embedAndUpsert(
       model: embedder.model,
       summarizerModel: r.summarizerModel,
       embedding: vec,
+      // Rough token estimate (cost visibility); the embedder enforces the real BGE-M3 8192 cap.
+      tokens: Math.round(r.text.length / 4),
       createdAt,
     };
     await db
@@ -480,16 +484,21 @@ export async function generateSegments(
   const meta = await loadChatMeta(db, opts.chatId);
   if (!meta) return { written: 0 };
   const history = await loadHistory(db, opts.chatId);
-  if (history.length < blockSize) return { written: 0 }; // not one complete block yet
+  if (history.length === 0) return { written: 0 };
 
   const existing = new Map((await loadSegments(db, opts.chatId)).map((s) => [s.blockIdx, s]));
-  // COMPLETE blocks only, across the whole chat (skip the still-forming trailing partial block).
-  const blocks = chunk(history, blockSize).filter((b) => b.length === blockSize);
+  // ALL blocks across the whole chat, INCLUDING the trailing partial (or a whole sub-blockSize chat),
+  // so every chat is searchable — 100% corpus coverage (vs complete-blocks-only = 54%). The trailing
+  // partial re-embeds as it grows (the seqEnd staleness check). Segments don't get the verbatimWindow
+  // protection digests do — the corpus wants everything searchable; the tip just re-embeds on change.
+  const blocks = chunk(history, blockSize);
   const pending: { blockIdx: number; seqStart: number; seqEnd: number; text: string }[] = [];
   for (const [i, block] of blocks.entries()) {
     const first = block[0];
     const last = block[block.length - 1];
     if (!first || !last) continue;
+    const text = renderTranscript(block, meta.charName, meta.userName);
+    if (text.trim().length === 0) continue; // skip a genuinely empty block
     const prev = existing.get(i);
     const stale =
       !prev ||
@@ -497,12 +506,7 @@ export async function generateSegments(
       prev.seqEnd !== last.seq ||
       block.some((m) => m.editedAt !== null && m.editedAt > prev.createdAt);
     if (!stale) continue;
-    pending.push({
-      blockIdx: i,
-      seqStart: first.seq,
-      seqEnd: last.seq,
-      text: renderTranscript(block, meta.charName, meta.userName),
-    });
+    pending.push({ blockIdx: i, seqStart: first.seq, seqEnd: last.seq, text });
   }
   if (pending.length === 0) return { written: 0 };
 
@@ -518,6 +522,8 @@ export async function generateSegments(
       text: p.text,
       model: deps.embedder.model,
       embedding: vec,
+      // Rough token estimate (cost visibility); the embedder enforces the real BGE-M3 8192 cap.
+      tokens: Math.round(p.text.length / 4),
       createdAt,
     };
     await db
@@ -579,7 +585,7 @@ export async function retrieveMemory(
   }
 
   // mixB / mixC — retrieve the most relevant tier-0 digests for the current scene.
-  const query = await recentQueryText(db, opts.chatId);
+  const query = await recentQueryText(db, opts.chatId, cfg.queryWindow);
   if (query.length === 0) return formatBlock(tier0);
   const qv = await deps.embedder.embed(query);
   const scored: { d: DigestRow; score: number }[] = [];
@@ -590,11 +596,16 @@ export async function retrieveMemory(
   }
   if (cfg.keywordMatch) {
     const qWords = new Set(query.toLowerCase().match(/[a-z0-9]+/g) ?? []);
+    // A keyword is often a multi-word phrase ("Unleashed RX-78-2"); it matches when ALL of its
+    // alphanumeric tokens appear in the recent query. (The old `qWords.has(wholePhrase)` could never
+    // match a multi-word keyword — reviewer #4.)
+    const kwMatches = (kw: string): boolean => {
+      const words = kw.toLowerCase().match(/[a-z0-9]+/g) ?? [];
+      return words.length > 0 && words.every((w) => qWords.has(w));
+    };
     for (const d of tier0) {
       if (scored.some((s) => s.d === d)) continue;
-      if (d.keywords.some((k) => qWords.has(k.toLowerCase()))) {
-        scored.push({ d, score: cfg.minScore });
-      }
+      if (d.keywords.some(kwMatches)) scored.push({ d, score: cfg.minScore });
     }
   }
   scored.sort((a, b) => b.score - a.score);
@@ -617,10 +628,10 @@ export async function retrieveMemory(
   return formatBlock(chosen.sort(bySeq));
 }
 
-async function recentQueryText(db: Db, chatId: string): Promise<string> {
+async function recentQueryText(db: Db, chatId: string, window: number): Promise<string> {
   const hist = await loadHistory(db, chatId);
   return hist
-    .slice(-2)
+    .slice(-window)
     .map((m) => m.content)
     .join("\n")
     .trim();

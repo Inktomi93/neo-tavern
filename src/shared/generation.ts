@@ -68,49 +68,55 @@ export const generationParamsSchema = z.object({
         .int()
         .positive()
         .optional()
-        .describe("Messages per tier-0 digest block (default 16)."),
+        .describe("Messages per tier-0 digest block (default 8; ≈3k BGE tok, under the 8192 cap)."),
       verbatimWindow: z
         .number()
         .int()
         .nonnegative()
         .optional()
-        .describe("Recent messages never digested — the live tail / seam buffer (default 30)."),
+        .describe("Recent messages never digested — the protect zone / seam buffer (default 8)."),
+      queryWindow: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe("Recent messages used as the retrieval query for mixB/mixC (default 2)."),
       mode: z
         .enum(["off", "mixA", "mixB", "mixC", "tiered"])
         .optional()
         .describe(
-          "off | mixA (all tier-0, chronological) | mixB (+vector retrieve) | mixC (+rerank) | tiered (consolidation bridge). Default mixA.",
+          "off | mixA (all tier-0, chronological) | mixB (+vector retrieve) | mixC (+rerank) | tiered (consolidation bridge). Default mixC (flat query-driven RAG).",
         ),
       fanOut: z
         .number()
         .int()
         .positive()
         .optional()
-        .describe("Tier-k digests consolidated into one tier-(k+1) digest (default 8)."),
+        .describe("Tier-k digests consolidated into one tier-(k+1) digest (default 4)."),
       maxTier: z
         .number()
         .int()
         .nonnegative()
         .optional()
-        .describe("Max consolidation depth; 0 = tier-0 only (default 2)."),
+        .describe("Max consolidation depth; 0 = tier-0 only (default 3)."),
       retrieveK: z
         .number()
         .int()
         .positive()
         .optional()
-        .describe("Vector candidate pool size for mixB/mixC (default 8)."),
+        .describe("Vector candidate pool size for mixB/mixC (default 4)."),
       rerankTo: z
         .number()
         .int()
         .positive()
         .optional()
-        .describe("Digests kept after cross-encoder rerank in mixC (default 4)."),
+        .describe("Digests kept after cross-encoder rerank in mixC (default 3)."),
       minScore: z
         .number()
         .min(0)
         .max(1)
         .optional()
-        .describe("Minimum cosine similarity for a retrieved digest (default 0.3)."),
+        .describe("Minimum cosine similarity for a retrieved digest (default 0.25)."),
       keywordMatch: z
         .boolean()
         .optional()

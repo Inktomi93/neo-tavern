@@ -22,11 +22,11 @@ import { env } from "../src/server/env";
  */
 const PARAMS = {
   enabled: true,
-  mode: "tiered" as const,
-  blockSize: 16,
-  verbatimWindow: 30,
-  fanOut: 8,
-  maxTier: 2,
+  mode: "tiered" as const, // backfill builds every tier; mode only affects runtime retrieval
+  blockSize: 8,
+  verbatimWindow: 8,
+  fanOut: 4,
+  maxTier: 3,
 };
 
 async function main(): Promise<void> {
