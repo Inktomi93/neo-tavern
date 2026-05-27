@@ -121,9 +121,23 @@ model changes. (agent-sdk carries compaction natively in its session, so the mar
 on a model swap. `hubScore` (CSLS, migration 0005) + `sourceText` (for the reranker, 0006) ride
 along. Search: `vector_top_k('embeddings_ann', vector32(?), k)` → exact cosine re-rank → CSLS
 adjust → optional cross-encoder rerank. See `docs/corpus-import.md`. Entity types: `character` +
-`chat_segment` (the corpus, batch-embedded) and **`chat_message`** (live chat-history memory — the
-`{{memory}}` marker, #40: entityId `<chatId>:<messageId>:<chunkIdx>`, embedded lazily, retrieved by
-**exact in-process cosine scoped to one chat**, NOT the global ANN — see `domain/chat/memory.ts`).
+`chat_segment` (the corpus, batch-embedded). The retired `chat_message` memory (#40) is **replaced**
+by the dedicated `chat_digests` table (below).
+
+## Chat memory = `chat_digests` (its own table — migration 0018)
+
+The within-chat `{{memory}}` system (`docs/memory.md`) stores per-N-turn **structured digests** in a
+**dedicated `chat_digests` table** — NOT the polymorphic `embeddings` table — so it gets real FKs:
+`chatId` → `chats.id` **cascade** (nuke-the-chat cleans up its digests), `ownerId` → `users.id`
+(indexed — per-user corpus scoping), `characterVersionId` → `characterVersions.id` RESTRICT (the
+chat's pin). Columns: `tier` (0 = per-block, 1+ = consolidation), `blockIdx`, `seqStart`/`seqEnd` (the
+canon span — verbatim click-through **and** the edit-staleness key), `text`, `topicAnchor`,
+`keywords` (JSON), `model`, `summarizerModel`, `embedding F32_BLOB(1024)` (always populated),
+`hubScore`, `tokens`; unique `(chatId, tier, blockIdx)`; hand-added `chat_digests_ann` ANN index. Two
+read paths over ONE substrate: within-chat memory injection (**exact in-process cosine, scoped by
+`chatId`** — ignores the ANN) and cross-chat **corpus search** (the ANN — hybrid with `chat_segment`;
+staged, see `docs/memory.md` §4). **Forward-correctness:** the polymorphic `embeddings` rows have no
+`ownerId`, so per-user scoping of that legacy layer is a follow-up under real multi-user.
 
 ## Assets are content-addressed (CAS — migration 0016)
 `hash` (sha-256, unique) IS the locator: binaries (card PNGs, persona avatars) live on the mounted
