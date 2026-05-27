@@ -50,22 +50,82 @@ export const generationParamsSchema = z.object({
       instructions: z.string().optional(),
     })
     .optional(),
-  // Memory — chat-history retrieval (the SillyTavern `vectors` extension model). Runner-AGNOSTIC: it
-  // fills the {{memory}} prompt marker in the DYNAMIC (cache-safe) half, so it works in every mode.
-  // First-class opt-in toggle. When `enabled`, domain/chat embeds this chat's messages (lazily,
-  // per-message, ≤`chunkChars`) and EACH TURN queries with the recent `queryMessages` to inject the
-  // top `insert` relevant OLDER messages — excluding the most recent `protect` (already in context) —
-  // above `minScore` cosine similarity, optionally cross-encoder `rerank`ed. Defaults mirror ST. The
-  // marker's PLACEMENT (which half / where) is the preset's job; this knob is the behavior + params.
+  // Memory — within-chat structured-digest recall (docs/memory.md). Runner-AGNOSTIC: fills the
+  // {{memory}} marker in the DYNAMIC (cache-safe) half, so it works in every mode and coexists with
+  // compaction (orthogonal — memory reaches back past the window compaction drops). When `enabled`,
+  // domain/chat digests OLDER messages (per `blockSize`-message blocks, once aged below
+  // `verbatimWindow`), embeds each digest, and injects them (Mix A = all chronological; the vector/
+  // keyword/rerank gear engages as the list outgrows budget; `tiered` consolidates). Knobs are
+  // .describe()'d for the future preset-editor UI.
   memory: z
     .object({
-      enabled: z.boolean().optional(),
-      queryMessages: z.number().int().positive().optional(), // recent msgs forming the query (ST: 2)
-      insert: z.number().int().positive().optional(), // how many to retrieve (ST: 3)
-      protect: z.number().int().nonnegative().optional(), // recent msgs shielded from retrieval (ST: 5)
-      minScore: z.number().min(0).max(1).optional(), // min cosine similarity (ST score_threshold: 0.25)
-      chunkChars: z.number().int().positive().optional(), // split a message into ≤N-char chunks (ST: 400)
-      rerank: z.boolean().optional(), // second-stage cross-encoder rerank of the candidates
+      enabled: z
+        .boolean()
+        .optional()
+        .describe("Turn on within-chat digest memory for this preset."),
+      blockSize: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe("Messages per tier-0 digest block (default 16)."),
+      verbatimWindow: z
+        .number()
+        .int()
+        .nonnegative()
+        .optional()
+        .describe("Recent messages never digested — the live tail / seam buffer (default 30)."),
+      mode: z
+        .enum(["off", "mixA", "mixB", "mixC", "tiered"])
+        .optional()
+        .describe(
+          "off | mixA (all tier-0, chronological) | mixB (+vector retrieve) | mixC (+rerank) | tiered (consolidation bridge). Default mixA.",
+        ),
+      fanOut: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe("Tier-k digests consolidated into one tier-(k+1) digest (default 8)."),
+      maxTier: z
+        .number()
+        .int()
+        .nonnegative()
+        .optional()
+        .describe("Max consolidation depth; 0 = tier-0 only (default 2)."),
+      retrieveK: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe("Vector candidate pool size for mixB/mixC (default 8)."),
+      rerankTo: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe("Digests kept after cross-encoder rerank in mixC (default 4)."),
+      minScore: z
+        .number()
+        .min(0)
+        .max(1)
+        .optional()
+        .describe("Minimum cosine similarity for a retrieved digest (default 0.3)."),
+      keywordMatch: z
+        .boolean()
+        .optional()
+        .describe("Also match digest keywords whole-word against recent messages (default true)."),
+      summarizer: z
+        .object({
+          source: z
+            .enum(["local", "hosted"])
+            .optional()
+            .describe("local GGUF (default if configured) | hosted Haiku fallback."),
+          maxTokens: z.number().int().positive().optional(),
+          temperature: z.number().min(0).max(2).optional(),
+        })
+        .optional()
+        .describe("Which summarizer writes digests (local-first, hosted Haiku fallback)."),
     })
     .optional(),
 });

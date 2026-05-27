@@ -1,64 +1,153 @@
-// Chat-history memory — the SillyTavern `vectors` extension model, adapted to our architecture.
-// Embeds this chat's messages (lazily, per-message, ≤chunkChars) and, each turn, queries with the
-// recent N to retrieve the most relevant OLDER messages — excluding the most recent `protect`
-// (already in context) — above a cosine-similarity floor, optionally cross-encoder reranked. The
-// formatted block fills the {{memory}} marker in the DYNAMIC (cache-safe) half (assemblePrompt
-// stays pure; this is the async retrieval the caller runs first — same shape as compactSummary).
+// Within-chat MEMORY — the structured-digest system (docs/memory.md). Canon is truth; digests are a
+// derived, regenerable index over the append-only `messages` table. We keep every message forever,
+// including those that age out of the model's context window — memory is what re-surfaces that
+// aged-out canon into the prompt (orthogonal to compaction, which manages the live window).
 //
-// Lives IN domain/chat (uses the embeddings INFRA directly — domain may import infra) — NOT a
-// cross-feature dep on domain/corpus or domain/search. Retrieval is EXACT in-process cosine over
-// just this chat's vectors (not the global ANN index): a single chat is small, and the ANN's
-// global pool would mix in other chats / hit its result-budget ceiling (docs/conventions.md).
+// The unit is a per-N-turn STRUCTURED digest: a topic-anchor first line + significance-filtered
+// facts + concrete keywords (the structure is what makes RP prose retrieve with clean signal —
+// raw chunks all embed into the same mush). tier 0 = per-block (independent — a deep edit only
+// re-digests its own block); tier 1+ = consolidation (digest-of-digests) so the injected
+// story-so-far stays budget-bounded as a chat grows past today's max.
+//
+// Lives IN domain/chat (uses the embeddings INFRA directly). Retrieval is EXACT in-process cosine
+// over THIS chat's digests (never the global ANN — that's the separate cross-chat corpus scope).
 
-import { and, asc, eq, like } from "drizzle-orm";
+import { asc, eq } from "drizzle-orm";
 import type { Db } from "../../../db/client";
-import { embeddings, messages } from "../../../db/schema";
+import { characterVersions, chatDigests, chats, messages, personas } from "../../../db/schema";
 import type { GenerationParams } from "../../../shared/generation";
 import type { Embedder } from "../../embeddings/embedder";
 import type { Reranker } from "../../embeddings/reranker";
+import type { Summarizer } from "../../embeddings/summarizer";
 import { getLog } from "../../observability/logger";
 import { newId } from "../_shared/ids";
 
-const MEMORY_ENTITY = "chat_message";
-
-// ST `vectors` defaults (settings block): query=2, insert=3, protect=5, score_threshold=0.25,
-// message_chunk_size=400. Resolved per call from the preset's GenerationParams.memory.
-const DEFAULTS = { queryMessages: 2, insert: 3, protect: 5, minScore: 0.25, chunkChars: 400 };
-
 type MemoryConfig = NonNullable<GenerationParams["memory"]>;
-export interface MemoryDeps {
+
+// Defaults (docs/memory.md §3/§5). blockSize/verbatimWindow are message counts; minScore is cosine.
+const DEFAULTS = {
+  blockSize: 16,
+  verbatimWindow: 30,
+  mode: "mixA" as NonNullable<MemoryConfig["mode"]>,
+  fanOut: 8,
+  maxTier: 2,
+  retrieveK: 8,
+  rerankTo: 4,
+  minScore: 0.3,
+  keywordMatch: true,
+} as const;
+
+// Retrieval needs the embedder (query vector, mixB/C) + reranker (mixC); generation needs the
+// embedder (digest vectors) + summarizer. Two narrow dep shapes so callers inject only what they use.
+export interface RetrieveMemoryDeps {
   embedder: Embedder;
   reranker: Reranker;
 }
-
-// entityId = `${chatId}:${messageId}:${chunkIdx}` (chatId/messageId are nanoids — no ":" inside),
-// so a `LIKE '<chatId>:%'` scopes to one chat and the messageId parses back out.
-function memKey(chatId: string, messageId: string, chunkIdx: number): string {
-  return `${chatId}:${messageId}:${chunkIdx}`;
-}
-function messageIdOf(entityId: string): string {
-  return entityId.split(":")[1] ?? "";
+export interface GenerateDigestsDeps {
+  embedder: Embedder;
+  summarizer: Summarizer;
 }
 
-// Greedy ≤max-char chunker (whitespace-collapsed, broken on spaces, never mid-word). Simple by
-// design — ST's recursive splitter is overkill for RP messages.
-function chunkText(text: string, max: number): string[] {
-  const t = text.replace(/\s+/g, " ").trim();
-  if (t.length === 0) return [];
-  if (t.length <= max) return [t];
-  const out: string[] = [];
-  let i = 0;
-  while (i < t.length) {
-    let end = Math.min(i + max, t.length);
-    if (end < t.length) {
-      const space = t.lastIndexOf(" ", end);
-      if (space > i) end = space;
-    }
-    const piece = t.slice(i, end).trim();
-    if (piece.length > 0) out.push(piece);
-    i = end;
+interface MsgRow {
+  seq: number;
+  role: string;
+  content: string;
+  editedAt: number | null;
+}
+interface DigestRow {
+  tier: number;
+  blockIdx: number;
+  seqStart: number;
+  seqEnd: number;
+  text: string;
+  keywords: string[];
+  createdAt: number;
+  embedding: Float32Array | null;
+}
+// A staged (re)write before the batched embed + upsert.
+interface PendingDigest {
+  tier: number;
+  blockIdx: number;
+  seqStart: number;
+  seqEnd: number;
+  text: string;
+  topicAnchor: string | null;
+  keywords: string[];
+  summarizerModel: string;
+}
+
+function resolveCfg(p: MemoryConfig) {
+  return {
+    enabled: p.enabled ?? false,
+    blockSize: p.blockSize ?? DEFAULTS.blockSize,
+    verbatimWindow: p.verbatimWindow ?? DEFAULTS.verbatimWindow,
+    mode: p.mode ?? DEFAULTS.mode,
+    fanOut: p.fanOut ?? DEFAULTS.fanOut,
+    maxTier: p.maxTier ?? DEFAULTS.maxTier,
+    retrieveK: p.retrieveK ?? DEFAULTS.retrieveK,
+    rerankTo: p.rerankTo ?? DEFAULTS.rerankTo,
+    minScore: p.minScore ?? DEFAULTS.minScore,
+    keywordMatch: p.keywordMatch ?? DEFAULTS.keywordMatch,
+    summarizerSource: p.summarizer?.source,
+    summarizerMaxTokens: p.summarizer?.maxTokens,
+    summarizerTemperature: p.summarizer?.temperature,
+  };
+}
+
+// ── prompts ──────────────────────────────────────────────────────────────────
+
+// Tier-0: structured, INDEPENDENT (no prior-digest chain). Topic anchor (CharMemory's precision
+// step-change) + significance-filtered facts ("mentioned later?" litmus) + concrete keywords
+// (MemoryBooks). The structure is the retrieval signal.
+const TIER0_SYSTEM = `You are a memory keeper for a roleplay. Read the conversation block and write a structured digest of ONLY what is durable — events, revelations, decisions, relationship shifts, concrete facts (names, places, objects). Skip play-by-play and in-the-moment chatter (the litmus: would someone bring this up unprompted weeks later?).
+
+Output EXACTLY this shape and nothing else:
+[<key names/entities> — <specific scene label>]
+- <durable fact>
+- <durable fact>
+KEYWORDS: <8-20 concrete, scene-specific terms: locations, objects, proper nouns, unique actions — NOT abstract themes or character names>
+
+2-5 bullets. Third person, past tense. No preamble, no commentary, no <think>.`;
+
+// Tier 1+: consolidate several lower-tier digests into one coarser digest. Context-aware (sees the
+// prior consolidations at this tier) so it emits a non-redundant higher-level recap.
+const CONSOLIDATE_SYSTEM = `You are a memory keeper for a roleplay. You are given several sequential digests of earlier scenes and (optionally) the consolidated digests that already precede them. Merge the new digests into ONE coarser digest that preserves the durable arc — major events, turning points, lasting changes — and drops fine detail already implied. Do NOT repeat anything in the prior consolidated digests.
+
+Output EXACTLY this shape and nothing else:
+[<key names/entities> — <arc label>]
+- <durable beat>
+- <durable beat>
+KEYWORDS: <8-20 concrete, scene-specific terms>
+
+3-6 bullets. Third person, past tense. No preamble, no <think>.`;
+
+function renderTranscript(block: MsgRow[], charName: string, userName: string): string {
+  return block
+    .map((m) => `${m.role === "user" ? userName : charName}: ${m.content.trim()}`)
+    .join("\n\n");
+}
+
+// Parse the model's structured output → the stored fields. Lenient: a missing KEYWORDS line just
+// yields no keywords; the topic anchor falls back to the first non-empty line.
+function parseDigest(raw: string): {
+  text: string;
+  topicAnchor: string | null;
+  keywords: string[];
+} {
+  const lines = raw.trim().split("\n");
+  const kwIdx = lines.findIndex((l) => /^\s*keywords\s*:/i.test(l));
+  let keywords: string[] = [];
+  if (kwIdx !== -1) {
+    keywords = (lines[kwIdx] ?? "")
+      .replace(/^\s*keywords\s*:/i, "")
+      .split(/[,;]/)
+      .map((k) => k.trim())
+      .filter((k) => k.length > 0);
   }
-  return out;
+  const bodyLines = kwIdx === -1 ? lines : lines.slice(0, kwIdx);
+  const text = bodyLines.join("\n").trim();
+  const anchorLine = bodyLines.find((l) => l.trim().length > 0)?.trim() ?? null;
+  return { text, topicAnchor: anchorLine, keywords };
 }
 
 // Cosine of two L2-normalized vectors = their dot product (the embedder normalizes).
@@ -69,148 +158,351 @@ function cosineSim(a: Float32Array, b: Float32Array): number {
   return s;
 }
 
-// Embed any of this chat's user/assistant messages not yet embedded (idempotent + incremental):
-// the first call on an existing chat embeds the backlog; later calls do only the new tail.
-export async function embedChatMessages(
-  db: Db,
-  embedder: Embedder,
-  chatId: string,
-  chunkChars: number,
-): Promise<number> {
-  const msgs = await db
-    .select({ id: messages.id, role: messages.role, content: messages.content })
+// Chunk an ordered array into fixed-size blocks; the final block may be short (it grows and
+// re-digests as more messages age out).
+function chunk<T>(arr: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
+
+async function loadDigests(db: Db, chatId: string): Promise<DigestRow[]> {
+  const rows = await db
+    .select({
+      tier: chatDigests.tier,
+      blockIdx: chatDigests.blockIdx,
+      seqStart: chatDigests.seqStart,
+      seqEnd: chatDigests.seqEnd,
+      text: chatDigests.text,
+      keywords: chatDigests.keywords,
+      createdAt: chatDigests.createdAt,
+      embedding: chatDigests.embedding,
+    })
+    .from(chatDigests)
+    .where(eq(chatDigests.chatId, chatId));
+  return rows.map((r) => ({
+    tier: r.tier,
+    blockIdx: r.blockIdx,
+    seqStart: r.seqStart,
+    seqEnd: r.seqEnd,
+    text: r.text,
+    keywords: Array.isArray(r.keywords) ? (r.keywords as string[]) : [],
+    createdAt: r.createdAt,
+    embedding: r.embedding,
+  }));
+}
+
+async function loadHistory(db: Db, chatId: string): Promise<MsgRow[]> {
+  const rows = await db
+    .select({
+      seq: messages.seq,
+      role: messages.role,
+      content: messages.content,
+      editedAt: messages.editedAt,
+    })
     .from(messages)
     .where(eq(messages.chatId, chatId))
     .orderBy(asc(messages.seq));
-  const already = new Set(
-    (
-      await db
-        .select({ entityId: embeddings.entityId })
-        .from(embeddings)
-        .where(
-          and(eq(embeddings.entityType, MEMORY_ENTITY), like(embeddings.entityId, `${chatId}:%`)),
-        )
-    ).map((r) => messageIdOf(r.entityId)),
-  );
-  const pending = msgs.filter(
-    (m) => m.role !== "system" && !already.has(m.id) && m.content.trim().length > 0,
-  );
-  if (pending.length === 0) return 0;
+  return rows.filter((m) => m.role !== "system" && m.content.trim().length > 0);
+}
 
-  const chunks: { entityId: string; text: string }[] = [];
-  for (const m of pending) {
-    for (const [idx, c] of chunkText(m.content, chunkChars).entries()) {
-      chunks.push({ entityId: memKey(chatId, m.id, idx), text: c });
-    }
-  }
-  if (chunks.length === 0) return 0;
-
-  const vecs = await embedder.embedBatch(chunks.map((c) => c.text));
-  const now = Date.now();
-  for (const [i, ch] of chunks.entries()) {
+// Embed the staged digests in ONE batched GPU pass, then upsert (idempotent on the unique
+// (chatId,tier,blockIdx) — a regenerated block overwrites in place). Returns how many were written.
+async function embedAndUpsert(
+  db: Db,
+  embedder: Embedder,
+  chatId: string,
+  ownerId: string,
+  characterVersionId: string,
+  rows: PendingDigest[],
+): Promise<number> {
+  if (rows.length === 0) return 0;
+  const vecs = await embedder.embedBatch(rows.map((r) => r.text));
+  const createdAt = Date.now();
+  let written = 0;
+  for (const [i, r] of rows.entries()) {
     const vec = vecs[i];
     if (vec === undefined) continue;
+    const fields = {
+      seqStart: r.seqStart,
+      seqEnd: r.seqEnd,
+      text: r.text,
+      topicAnchor: r.topicAnchor,
+      keywords: r.keywords,
+      model: embedder.model,
+      summarizerModel: r.summarizerModel,
+      embedding: vec,
+      createdAt,
+    };
     await db
-      .insert(embeddings)
+      .insert(chatDigests)
       .values({
         id: newId(),
-        entityType: MEMORY_ENTITY,
-        entityId: ch.entityId,
-        model: embedder.model,
-        embedding: vec,
-        sourceText: ch.text,
-        createdAt: now,
+        chatId,
+        ownerId,
+        characterVersionId,
+        tier: r.tier,
+        blockIdx: r.blockIdx,
+        ...fields,
       })
-      .onConflictDoNothing();
+      .onConflictDoUpdate({
+        target: [chatDigests.chatId, chatDigests.tier, chatDigests.blockIdx],
+        set: fields,
+      });
+    written += 1;
   }
-  getLog().debug({ chatId, messages: pending.length, chunks: chunks.length }, "memory: embedded");
-  return pending.length;
+  return written;
+}
+
+// ── generation (background; never on the reply critical path) ──────────────────
+
+/**
+ * (Re)build this chat's digests from canon: segment OLDER messages (aged below `verbatimWindow`) into
+ * `blockSize` tier-0 blocks, (re)digest stale/missing ones independently, then consolidate filled
+ * tiers up to `maxTier`. Idempotent + incremental — only stale/missing blocks call the summarizer.
+ * Stale = the block's span changed (grew) OR a contained message was edited after the digest was
+ * written (`editedAt > createdAt`); a regenerated child marks its parent stale (bounded vertical
+ * cascade). Returns how many digests were (re)written. Used live (post-turn) and for bulk backfill.
+ */
+export async function generateDigests(
+  db: Db,
+  deps: GenerateDigestsDeps,
+  opts: { chatId: string; params: MemoryConfig },
+): Promise<{ written: number }> {
+  const cfg = resolveCfg(opts.params);
+  if (!cfg.enabled || cfg.mode === "off") return { written: 0 };
+
+  const chatRows = await db
+    .select({
+      ownerId: chats.ownerId,
+      characterVersionId: chats.characterVersionId,
+      personaId: chats.personaId,
+      pinnedPersonaId: chats.pinnedPersonaId,
+    })
+    .from(chats)
+    .where(eq(chats.id, opts.chatId))
+    .limit(1);
+  const chat = chatRows[0];
+  if (!chat) return { written: 0 };
+
+  const cvRows = await db
+    .select({ name: characterVersions.name })
+    .from(characterVersions)
+    .where(eq(characterVersions.id, chat.characterVersionId))
+    .limit(1);
+  const charName = cvRows[0]?.name ?? "Assistant";
+  const personaId = chat.personaId ?? chat.pinnedPersonaId;
+  let userName = "User";
+  if (personaId) {
+    const pRows = await db
+      .select({ name: personas.name })
+      .from(personas)
+      .where(eq(personas.id, personaId))
+      .limit(1);
+    userName = pRows[0]?.name ?? "User";
+  }
+
+  const history = await loadHistory(db, opts.chatId);
+  if (history.length === 0) return { written: 0 };
+
+  // Dormancy / eligibility: only digest messages aged below the verbatim window. A fresh chat (or one
+  // with < one block aged out) does nothing — the seam buffer keeps live swipes/edits off digests.
+  const maxSeq = history[history.length - 1]?.seq ?? 0;
+  const cutoff = maxSeq - cfg.verbatimWindow;
+  const older = history.filter((m) => m.seq <= cutoff);
+  if (older.length < cfg.blockSize) return { written: 0 };
+
+  const summarizeOpts = {
+    source: cfg.summarizerSource,
+    maxTokens: cfg.summarizerMaxTokens,
+    temperature: cfg.summarizerTemperature,
+  };
+  let totalWritten = 0;
+  let pending: PendingDigest[] = [];
+  let existing = await loadDigests(db, opts.chatId);
+  const at = (tier: number, blockIdx: number) =>
+    existing.find((d) => d.tier === tier && d.blockIdx === blockIdx);
+
+  // tier 0 — independent per-block digests.
+  const blocks = chunk(older, cfg.blockSize);
+  for (const [i, block] of blocks.entries()) {
+    const first = block[0];
+    const last = block[block.length - 1];
+    if (!first || !last) continue;
+    const seqStart = first.seq;
+    const seqEnd = last.seq;
+    const prev = at(0, i);
+    const stale =
+      !prev ||
+      prev.seqStart !== seqStart ||
+      prev.seqEnd !== seqEnd ||
+      block.some((m) => m.editedAt !== null && m.editedAt > prev.createdAt);
+    if (!stale) continue;
+    const userPrompt = `Conversation block (messages ${seqStart}-${seqEnd}):\n\n${renderTranscript(block, charName, userName)}\n\nWrite the digest:`;
+    const res = await deps.summarizer.summarize(TIER0_SYSTEM, userPrompt, summarizeOpts);
+    const parsed = parseDigest(res.text);
+    if (parsed.text.length === 0) continue;
+    pending.push({ tier: 0, blockIdx: i, seqStart, seqEnd, summarizerModel: res.model, ...parsed });
+  }
+  if (pending.length > 0) {
+    totalWritten += await embedAndUpsert(
+      db,
+      deps.embedder,
+      opts.chatId,
+      chat.ownerId,
+      chat.characterVersionId,
+      pending,
+    );
+    existing = await loadDigests(db, opts.chatId);
+    pending = [];
+  }
+
+  // tiers 1..maxTier — consolidate `fanOut` lower-tier digests into one coarser digest. Deterministic
+  // by blockIdx: parent block i covers children [i*fanOut, (i+1)*fanOut). A parent is stale if any
+  // child was (re)written after it, or its covered span changed.
+  for (let k = 0; k < cfg.maxTier; k++) {
+    const tierK = existing.filter((d) => d.tier === k).sort((a, b) => a.blockIdx - b.blockIdx);
+    const groups = Math.floor(tierK.length / cfg.fanOut);
+    const priorConsolidations: string[] = [];
+    for (let i = 0; i < groups; i++) {
+      const children = tierK.slice(i * cfg.fanOut, (i + 1) * cfg.fanOut);
+      const cFirst = children[0];
+      const cLast = children[children.length - 1];
+      if (!cFirst || !cLast) continue;
+      const seqStart = cFirst.seqStart;
+      const seqEnd = cLast.seqEnd;
+      const parent = existing.find((d) => d.tier === k + 1 && d.blockIdx === i);
+      const stale =
+        !parent ||
+        parent.seqStart !== seqStart ||
+        parent.seqEnd !== seqEnd ||
+        children.some((c) => c.createdAt > parent.createdAt);
+      if (!stale) {
+        if (parent) priorConsolidations.push(parent.text);
+        continue;
+      }
+      const priorBlock =
+        priorConsolidations.length > 0
+          ? `Prior consolidated digests (do NOT repeat):\n${priorConsolidations.join("\n\n")}\n\n`
+          : "";
+      const childBlock = children.map((c) => c.text).join("\n\n");
+      const userPrompt = `${priorBlock}New digests to merge (scenes ${seqStart}-${seqEnd}):\n\n${childBlock}\n\nWrite the consolidated digest:`;
+      const res = await deps.summarizer.summarize(CONSOLIDATE_SYSTEM, userPrompt, summarizeOpts);
+      const parsed = parseDigest(res.text);
+      if (parsed.text.length === 0) continue;
+      priorConsolidations.push(parsed.text);
+      pending.push({
+        tier: k + 1,
+        blockIdx: i,
+        seqStart,
+        seqEnd,
+        summarizerModel: res.model,
+        ...parsed,
+      });
+    }
+    if (pending.length > 0) {
+      totalWritten += await embedAndUpsert(
+        db,
+        deps.embedder,
+        opts.chatId,
+        chat.ownerId,
+        chat.characterVersionId,
+        pending,
+      );
+      existing = await loadDigests(db, opts.chatId);
+      pending = [];
+    }
+  }
+
+  getLog().debug(
+    { chatId: opts.chatId, tier0Blocks: blocks.length, written: totalWritten },
+    "memory: digests generated",
+  );
+  return { written: totalWritten };
+}
+
+// ── retrieval (cheap; on the reply critical path) ──────────────────────────────
+
+function formatBlock(digests: DigestRow[]): string | null {
+  const block = digests
+    .map((d) => d.text.trim())
+    .filter((t) => t.length > 0)
+    .join("\n\n");
+  return block.length > 0 ? block : null;
 }
 
 /**
- * Retrieve the formatted memory block for a chat's NEXT turn, or null when nothing qualifies.
- * Mirrors ST's `rearrangeChat`: bail if history ≤ protect; query = the recent `queryMessages`;
- * exclude the recent `protect`; keep the top `insert` candidates above `minScore`; present them
- * chronologically as `Speaker: text`. The {{memory}} marker wraps this ("Past events:\n…").
+ * The formatted memory block for this chat's NEXT turn (the {{memory}} marker wraps it), or null.
+ * mixA = all tier-0 chronological; tiered = the bridge (coarse high-tier for the distant past + the
+ * uncovered tier-0 tail); mixB/mixC = vector (+keyword) retrieve the most relevant tier-0 digests,
+ * mixC additionally cross-encoder reranks. Always presented chronologically by seqStart.
  */
 export async function retrieveMemory(
   db: Db,
-  deps: MemoryDeps,
-  opts: { chatId: string; params: MemoryConfig; charName: string; userName: string },
+  deps: RetrieveMemoryDeps,
+  opts: { chatId: string; params: MemoryConfig },
 ): Promise<string | null> {
-  const cfg = {
-    queryMessages: opts.params.queryMessages ?? DEFAULTS.queryMessages,
-    insert: opts.params.insert ?? DEFAULTS.insert,
-    protect: opts.params.protect ?? DEFAULTS.protect,
-    minScore: opts.params.minScore ?? DEFAULTS.minScore,
-    chunkChars: opts.params.chunkChars ?? DEFAULTS.chunkChars,
-    rerank: opts.params.rerank ?? false,
-  };
+  const cfg = resolveCfg(opts.params);
+  if (!cfg.enabled || cfg.mode === "off") return null;
+  const digests = await loadDigests(db, opts.chatId);
+  if (digests.length === 0) return null;
 
-  const all = await db
-    .select({ id: messages.id, seq: messages.seq, role: messages.role, content: messages.content })
-    .from(messages)
-    .where(eq(messages.chatId, opts.chatId))
-    .orderBy(asc(messages.seq));
-  const history = all.filter((m) => m.role !== "system" && m.content.trim().length > 0);
-  if (history.length <= cfg.protect) return null; // nothing older than the protected window
+  const bySeq = (a: DigestRow, b: DigestRow) => a.seqStart - b.seqStart;
+  const tier0 = digests.filter((d) => d.tier === 0).sort(bySeq);
 
-  await embedChatMessages(db, deps.embedder, opts.chatId, cfg.chunkChars);
+  if (cfg.mode === "mixA") return formatBlock(tier0);
 
-  const queryText = history
-    .slice(-cfg.queryMessages)
+  // tiered: every digest NOT covered by a higher-tier consolidation = coarse-old + fine-recent.
+  if (cfg.mode === "tiered") {
+    const covered = (d: DigestRow) =>
+      digests.some((c) => c.tier > d.tier && c.seqStart <= d.seqStart && c.seqEnd >= d.seqEnd);
+    return formatBlock(digests.filter((d) => !covered(d)).sort(bySeq));
+  }
+
+  // mixB / mixC — retrieve the most relevant tier-0 digests for the current scene.
+  const query = await recentQueryText(db, opts.chatId);
+  if (query.length === 0) return formatBlock(tier0);
+  const qv = await deps.embedder.embed(query);
+  const scored: { d: DigestRow; score: number }[] = [];
+  for (const d of tier0) {
+    if (d.embedding === null) continue;
+    const score = cosineSim(qv, d.embedding);
+    if (score >= cfg.minScore) scored.push({ d, score });
+  }
+  if (cfg.keywordMatch) {
+    const qWords = new Set(query.toLowerCase().match(/[a-z0-9]+/g) ?? []);
+    for (const d of tier0) {
+      if (scored.some((s) => s.d === d)) continue;
+      if (d.keywords.some((k) => qWords.has(k.toLowerCase()))) {
+        scored.push({ d, score: cfg.minScore });
+      }
+    }
+  }
+  scored.sort((a, b) => b.score - a.score);
+  let chosen = scored.slice(0, cfg.retrieveK).map((s) => s.d);
+  if (cfg.mode === "mixC" && chosen.length > 0) {
+    const hits = await deps.reranker.rerank(
+      query,
+      chosen.map((d) => ({ id: `${d.tier}:${d.blockIdx}`, text: d.text })),
+    );
+    const order = new Map(hits.map((h, i) => [h.id, i]));
+    chosen = [...chosen]
+      .sort(
+        (a, b) =>
+          (order.get(`${a.tier}:${a.blockIdx}`) ?? Number.POSITIVE_INFINITY) -
+          (order.get(`${b.tier}:${b.blockIdx}`) ?? Number.POSITIVE_INFINITY),
+      )
+      .slice(0, cfg.rerankTo);
+  }
+  if (chosen.length === 0) return null;
+  return formatBlock(chosen.sort(bySeq));
+}
+
+async function recentQueryText(db: Db, chatId: string): Promise<string> {
+  const hist = await loadHistory(db, chatId);
+  return hist
+    .slice(-2)
     .map((m) => m.content)
     .join("\n")
     .trim();
-  if (queryText.length === 0) return null;
-
-  const protectedIds = new Set(history.slice(-cfg.protect).map((m) => m.id));
-  const candidateIds = new Set(history.filter((m) => !protectedIds.has(m.id)).map((m) => m.id));
-  if (candidateIds.size === 0) return null;
-
-  const rows = await db
-    .select({ entityId: embeddings.entityId, embedding: embeddings.embedding })
-    .from(embeddings)
-    .where(
-      and(eq(embeddings.entityType, MEMORY_ENTITY), like(embeddings.entityId, `${opts.chatId}:%`)),
-    );
-  const queryVec = await deps.embedder.embed(queryText);
-
-  // Best chunk similarity per candidate message (a message dedups to one entry, like ST's hashes).
-  const bestSim = new Map<string, number>();
-  for (const r of rows) {
-    const mid = messageIdOf(r.entityId);
-    if (!candidateIds.has(mid) || r.embedding === null) continue;
-    const sim = cosineSim(queryVec, r.embedding);
-    if (sim > (bestSim.get(mid) ?? Number.NEGATIVE_INFINITY)) bestSim.set(mid, sim);
-  }
-
-  let chosen = [...bestSim.entries()]
-    .filter(([, sim]) => sim >= cfg.minScore)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, cfg.insert)
-    .map(([mid]) => mid);
-  if (chosen.length === 0) return null;
-
-  const byId = new Map(history.map((m) => [m.id, m]));
-  if (cfg.rerank) {
-    const docs = chosen.map((mid) => ({ id: mid, text: byId.get(mid)?.content ?? "" }));
-    const scores = await deps.reranker.rerank(queryText, docs);
-    const order = new Map(scores.map((s, i) => [s.id, i]));
-    chosen = [...chosen].sort(
-      (a, b) =>
-        (order.get(a) ?? Number.POSITIVE_INFINITY) - (order.get(b) ?? Number.POSITIVE_INFINITY),
-    );
-  }
-
-  // Present chronologically (by seq) — "past events" read in order, regardless of match ranking.
-  const label = (role: string): string => (role === "user" ? opts.userName : opts.charName);
-  const block = chosen
-    .map((mid) => byId.get(mid))
-    .filter((m): m is NonNullable<typeof m> => m !== undefined)
-    .sort((a, b) => a.seq - b.seq)
-    .map((m) => `${label(m.role)}: ${m.content.trim()}`)
-    .join("\n\n");
-  getLog().debug({ chatId: opts.chatId, retrieved: chosen.length }, "memory: retrieved");
-  return block.length > 0 ? block : null;
 }

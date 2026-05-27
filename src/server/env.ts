@@ -60,6 +60,22 @@ const envSchema = z.object({
   // The onnx-community/bge-reranker-v2-m3-ONNX repo ships ONLY fp16 weights (fp32/auto fail
   // — no file), so fp16 is the default for both cpu and cuda (ORT runs fp16 on cpu via fallback).
   RERANK_DTYPE: z.enum(["fp16", "q8"]).default("fp16"),
+  // Per-model GPU placement (CUDA only). Unlike process-level CUDA_VISIBLE_DEVICES, we pin each
+  // ONNX model to a specific card IN-PROCESS via session_options.executionProviders=[{name:cuda,
+  // deviceId}] (transformers.js keeps a caller-provided EP — the `??=` seam in models/session.js;
+  // verified: deviceId:1 lands the reranker's VRAM on physical GPU 1). Default split: embedder +
+  // summarizer on GPU 0, reranker on GPU 1. Ignored when the model's device is "cpu".
+  EMBED_GPU_ID: z.coerce.number().int().min(0).default(0),
+  RERANK_GPU_ID: z.coerce.number().int().min(0).default(1),
+  // Idle-unload: free a model's VRAM after this many minutes with no requests (it cold-reloads on
+  // the next call). For sharing the GPUs with other homelab services. 0 = never unload (stay warm).
+  IDLE_UNLOAD_MIN: z.coerce.number().min(0).default(10),
+  // Optional in-process local summarizer (node-llama-cpp): path to a GGUF (e.g. a Qwen3-4B-Instruct
+  // Q8). UNSET (default) = disabled — the server never loads node-llama-cpp. When set, it gets the
+  // same warm/idle-unload lifecycle as the embedder/reranker. NOTE: node-llama-cpp 3.18.1 can't pin
+  // a specific GPU in-process (no deviceId API), so placement is its default (CUDA_VISIBLE_DEVICES
+  // is the only lever); fine since it's an occasional generative call, not a hot throughput path.
+  SUMMARIZER_GGUF: z.string().optional(),
   // Where transformers.js downloads/caches model weights (BGE-M3, the reranker). Pinned
   // to a repo-local, gitignored dir so model artifacts stay self-contained — not leaking
   // into node_modules/.cache or an OS-global HF cache. Resolved relative to cwd (repo root).

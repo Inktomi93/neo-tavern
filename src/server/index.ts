@@ -11,6 +11,9 @@ import { createDebugService } from "./domain/debug";
 import { createModelsService } from "./domain/models";
 import { createPresetService } from "./domain/preset";
 import { createSearchService } from "./domain/search";
+import { warmUpEmbedder } from "./embeddings/embedder";
+import { warmUpReranker } from "./embeddings/reranker";
+import { warmUpSummarizer } from "./embeddings/summarizer";
 import { env } from "./env";
 import { registerDebugRoutes } from "./observability/debug";
 import { getLog, logger } from "./observability/logger";
@@ -80,4 +83,20 @@ if (IS_PROD) {
 
 serve({ fetch: app.fetch, port: env.PORT }, (info) => {
   logger.info({ port: info.port, prod: IS_PROD, version: APP_VERSION }, "neo-tavern listening");
+  // Warm the embedder + reranker in the background (load + ORT kernel JIT) so the first real
+  // request is fast. Fire-and-forget on purpose: a momentarily-busy shared GPU shouldn't keep the
+  // server from booting — a failed warm-up just means that model lazy-loads on its first request
+  // (WarmModel resets a failed load so it can retry). They idle-unload again after IDLE_UNLOAD_MIN.
+  void Promise.allSettled([warmUpEmbedder(), warmUpReranker(), warmUpSummarizer()]).then(
+    (results) => {
+      for (const result of results) {
+        if (result.status === "rejected") {
+          getLog().warn(
+            { err: result.reason instanceof Error ? result.reason.message : String(result.reason) },
+            "warm-up failed (model will lazy-load on first request)",
+          );
+        }
+      }
+    },
+  );
 });

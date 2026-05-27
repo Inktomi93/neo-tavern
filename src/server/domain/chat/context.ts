@@ -309,12 +309,7 @@ export function createChatContext(db: Db, deps: ChatServiceDeps = {}) {
       memory = await retrieveMemory(
         db,
         { embedder, reranker },
-        {
-          chatId: chat.id,
-          params: memCfg,
-          charName: cv?.name ?? "Assistant",
-          userName: activePersona?.name ?? "User",
-        },
+        { chatId: chat.id, params: memCfg },
       );
     }
 
