@@ -120,11 +120,12 @@ model changes. (agent-sdk carries compaction natively in its session, so the mar
 `1024` matches BGE-M3; the `model` column + the column dimension are the only things that change
 on a model swap. `hubScore` (CSLS, migration 0005) + `sourceText` (for the reranker, 0006) ride
 along. Search: `vector_top_k('embeddings_ann', vector32(?), k)` → exact cosine re-rank → CSLS
-adjust → optional cross-encoder rerank. See `docs/corpus-import.md`. Entity types: `character` +
-`chat_segment` (the corpus, batch-embedded). The retired `chat_message` memory (#40) is **replaced**
-by the dedicated `chat_digests` table (below).
+adjust → optional cross-encoder rerank. See `docs/corpus-import.md`. Entity type: `character` (the
+corpus card layer, batch-embedded via `pnpm embed:corpus`). The retired `chat_message` memory (#40)
+**and** the old polymorphic `chat_segment` (Phase B) are **replaced** by dedicated first-class tables
+— `chat_digests` + `chat_segments` (below).
 
-## Chat memory = `chat_digests` (its own table — migration 0018)
+## Chat memory = `chat_digests` + `chat_segments` (own tables — migrations 0018/0019)
 
 The within-chat `{{memory}}` system (`docs/memory.md`) stores per-N-turn **structured digests** in a
 **dedicated `chat_digests` table** — NOT the polymorphic `embeddings` table — so it gets real FKs:
@@ -135,9 +136,13 @@ canon span — verbatim click-through **and** the edit-staleness key), `text`, `
 `keywords` (JSON), `model`, `summarizerModel`, `embedding F32_BLOB(1024)` (always populated),
 `hubScore`, `tokens`; unique `(chatId, tier, blockIdx)`; hand-added `chat_digests_ann` ANN index. Two
 read paths over ONE substrate: within-chat memory injection (**exact in-process cosine, scoped by
-`chatId`** — ignores the ANN) and cross-chat **corpus search** (the ANN — hybrid with `chat_segment`;
-staged, see `docs/memory.md` §4). **Forward-correctness:** the polymorphic `embeddings` rows have no
-`ownerId`, so per-user scoping of that legacy layer is a follow-up under real multi-user.
+`chatId`** — ignores the ANN) and cross-chat **corpus search** (the ANN). Its verbatim counterpart is
+the **`chat_segments`** table (migration 0019) — same FKs + block boundary, raw block text, generated
+live for every chat (`generateSegments`, behind `CORPUS_AUTOINDEX`); `search.corpus` joint-reranks
+both substrates into one deduped, source-tagged list; CSLS hub-scores on both via `pnpm csls`. The old
+polymorphic `chat_segment` is **retired** (Phase B: `discover`/`knn`/`find` read `chat_segments`).
+**Forward-correctness:** the polymorphic `embeddings` rows (now just `character`) have no `ownerId`,
+so per-user scoping of that layer is a follow-up under real multi-user.
 
 ## Assets are content-addressed (CAS — migration 0016)
 `hash` (sha-256, unique) IS the locator: binaries (card PNGs, persona avatars) live on the mounted

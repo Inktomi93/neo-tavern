@@ -122,11 +122,12 @@ within-chat/cross-chat separation:
 
 Same table, two read paths: memory does per-chat in-process cosine; corpus uses the ANN. **Raw
 messages are always retained** as canon and verbatim click-through; a digest is an *index into* canon.
-The existing raw `chat_segment` corpus embeddings stay as the **hybrid verbatim/exact-phrase layer** —
-corpus search is the **"mix"**: `chat_digests` ANN (precise, topic-anchored) + optional `chat_segment`
-ANN (verbatim) → merged/reranked. The *only* deferred decision is whether to ever *retire*
-`chat_segment` — gated on digest-search being validated on our corpus (§9). We don't delete the
-working differentiator on a hunch; hybrid is a fine permanent end state.
+The raw verbatim layer is now its own first-class **`chat_segments` table** (block-bounded, live,
+owner-scoped); the old import-only polymorphic `chat_segment` is **retired** (no longer produced or
+read — `discover`/`knn`/`find` migrated, Phase B). `search.corpus` is the unified **"mix"**: ONE
+reranked list over `chat_digests` (precise, topic-anchored) + `chat_segments` (verbatim), deduped per
+block, source-tagged, with the seq span for click-through. Hybrid is the permanent end state — digests
+don't replace segments; they complement them. **[BUILT — §11.]**
 
 ---
 
@@ -242,14 +243,14 @@ practical expression of §1 (we keep all messages; the model loses visibility).
 - **No replacing compaction** (§7). **No cross-chat character memory** (injection). **No settings
   page** — knobs live in the preset `config.params.memory` blob, surfaced later by the preset-editor UI.
 
-**Built right, the first time (not deferred):** hierarchical **tiering/consolidation** (§3 — the
-system exists to extend chats past today's max, so it must scale), and **corpus search on the digest
-substrate** (§4 — background work, no reason to stage).
+**Built:** hierarchical **tiering/consolidation** (§3); **corpus search on the digest substrate** (§4);
+the first-class **`chat_segments`** verbatim layer + the **unified `search.corpus`** hybrid; **CSLS
+hub-scores** on both new tables; and the **retirement of the old polymorphic `chat_segment`** (Phase B
+— `discover`/`knn`/`find` read `chat_segments`; `embed:corpus` no longer emits `chat_segment`).
 
 **Genuinely deferred (features on top of the substrate, zero rework to add later):** side-prompt
 **trackers** (a single entry that updates in place — a *different artifact* from a point-in-time
-digest), **clips** (user-pinned one-offs), **user-curated long-term promotion**, and the **decision to
-retire `chat_segment`** (gated on digest-search validation, §9 — until then, hybrid). The substrate is
+digest), **clips** (user-pinned one-offs), and **user-curated long-term promotion**. The substrate is
 designed not to preclude any of these.
 
 ---
@@ -268,9 +269,10 @@ on the 222-msg Bess chat — parse → segment into N=16 blocks → digest each 
 - **Vector recall + local rerank** is sharp: therapy / spousal-neglect / childhood-history queries
   surface exactly the right digests (rerank cleanly promotes the correct digest over vector's top-1).
 - **Topic-anchor + keyword structure** improving retrieval precision is **proven in CharMemory /
-  MemoryBooks**, but **not yet on *our* corpus**. We still build the digest substrate and corpus-search
-  path **alongside** (§4) — what's gated on validation is only whether we ever *retire* the raw
-  `chat_segment` layer; until then corpus search runs both as a hybrid "mix."
+  MemoryBooks**, but **not yet quantified on *our* corpus** — that real-corpus quality check is the one
+  open validation (run `search.corpus` over the imported archive + spot-check). The substrate, the
+  first-class `chat_segments` layer, CSLS on both, and the unified hybrid are all **built** (§4/§11);
+  the old `chat_segment` is **retired**.
 - **Tiering/consolidation** (Summaryception) is proven in that extension; our tier-1+ consolidation +
   vertical invalidation is the part most likely to need iteration → the test suite covers tier
   consolidation and vertical invalidation explicitly (§11).
@@ -367,5 +369,11 @@ scoping added to the hybrid corpus layer (`chat_digests` already has it).
 rewrite + hosted summarizer; (3) `domain/chat/memory.ts` generate/consolidate/retrieve (structured,
 tiered); (4) post-turn background refresh + DI; (5) corpus digest-search path (hybrid) + hubness;
 (6) backfill script; (7) tests; (8) in-app validation on the long chats (memory coherence +
-faithfulness vs canon) and a corpus digest-search spot-check. Retiring `chat_segment` stays gated on
-that validation (§4, §9).
+faithfulness vs canon) and a `search.corpus` spot-check.
+
+**Phase B + refinements (BUILT):** `chat_segments` table (migration 0019) + live `generateSegments`
+(all chats, whole-chat, embed-only, post-turn behind `CORPUS_AUTOINDEX`); `search.segments` +
+unified `search.corpus`; CSLS `computeDigestHubScores`/`computeSegmentHubScores` (via `pnpm csls`);
+`discover`/`knn`/`find` migrated to `chat_segments` and the old polymorphic `chat_segment` retired
+(not produced or read). The lone open item is quantifying digest-vs-segment search quality on the
+real corpus.
