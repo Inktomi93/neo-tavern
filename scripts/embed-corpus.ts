@@ -81,7 +81,13 @@ async function main(): Promise<void> {
   );
 }
 
-await main().catch((error: unknown) => {
-  console.error("[embed] failed:", error);
-  process.exitCode = 1;
-});
+await main()
+  .catch((error: unknown) => {
+    console.error("[embed] failed:", error);
+    process.exitCode = 1;
+  })
+  // onnxruntime-node's CUDA EP corrupts the heap in its atexit/static destructors
+  // (microsoft/onnxruntime#19768) — a successful run otherwise dies with SIGABRT (134),
+  // which under `set -euo pipefail` makes embed:corpus:gpu falsely report failure. Force a
+  // clean exit *after* all DB writes have flushed, skipping those native destructors.
+  .finally(() => process.exit(process.exitCode ?? 0));
