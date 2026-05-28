@@ -1,6 +1,7 @@
+import { on } from "node:events";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import { ChatNotFoundError, ChatOperationError } from "../../domain/chat";
+import { ChatNotFoundError, ChatOperationError, chatStreamEmitter } from "../../domain/chat";
 import { publicProcedure, t } from "../trpc";
 
 // Thin driver: validate input, call the domain service via ctx, translate domain errors to
@@ -71,6 +72,21 @@ export const chatRouter = t.router({
     .mutation(({ ctx, input }) =>
       ctx.services.chat.send({ username: ctx.username, ...input }).catch(domainErrorToTrpc),
     ),
+
+  // Subscribe to real-time token deltas for a specific chat.
+  streamMessages: publicProcedure
+    .input(z.object({ chatId: z.string().min(1) }))
+    .subscription(async function* ({ input, signal }) {
+      try {
+        for await (const [event] of on(chatStreamEmitter, "delta", { signal })) {
+          if (event.chatId === input.chatId) {
+            yield event.text as string;
+          }
+        }
+      } catch (err) {
+        if (err instanceof Error && err.name !== "AbortError") throw err;
+      }
+    }),
 
   // Switch a chat's api/source/model in place (the generalized escape valve). NOT_FOUND if unowned,
   // BAD_REQUEST on an incoherent/unimplemented combo.

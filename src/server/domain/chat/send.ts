@@ -1,6 +1,10 @@
 import { and, eq } from "drizzle-orm";
 import { chats, messages } from "../../../db/schema";
+import type { ChatDeltaEvent } from "../../../shared/chat-types";
+import { createMacroContext } from "../../../shared/macro";
 import { assemblePrompt } from "../../../shared/prompt-assemble";
+import type { RegexPlacement } from "../../../shared/regex";
+import { createRegexService } from "../../../shared/regex-service";
 import { env } from "../../env";
 import { getLog } from "../../observability/logger";
 import { type ChatTurnResult, TurnError } from "../../providers/turn";
@@ -13,6 +17,7 @@ import type { ChatContext } from "./context";
 import { generateDigests, generateSegments } from "./memory";
 import { resolveTurnRouting } from "./routing";
 import { DbSessionStore } from "./store";
+import { chatStreamEmitter } from "./stream";
 import type { SendParams, SendResult } from "./types";
 
 /**
@@ -45,16 +50,6 @@ export function createSend(ctx: ChatContext, ops: { runCompaction: RunCompaction
       }
 
       const userSeq = currentMax + 1;
-      // TODO: Phase 4 - Run regexService.executeScripts() on params.content for "USER_INPUT" placement here
-      // Requires fetching promptConfig early or getting regex scripts from settings.
-      await db.insert(messages).values({
-        id: newId(),
-        chatId: params.chatId,
-        seq: userSeq,
-        role: "user",
-        content: params.content,
-        createdAt: Date.now(),
-      });
 
       // Assemble the character/system prompt from the chat's pinned preset + its character,
       // persona, and attached world-info. Built fresh each turn (the recent-message scan for
@@ -64,7 +59,42 @@ export function createSend(ctx: ChatContext, ops: { runCompaction: RunCompaction
         buildAssembleContext(chat),
         resolveConfig(chat),
       ]);
-      const systemPrompt = assemblePrompt(promptConfig, assembleCtx);
+
+      const macroCtx = createMacroContext({
+        char: assembleCtx.character.name,
+        user: assembleCtx.activePersona?.name ?? "User",
+        persona: assembleCtx.activePersona?.description ?? "",
+        scenario: assembleCtx.character.scenario ?? "",
+        env: {},
+        onWarn: (msg, err) => getLog().warn({ err }, msg),
+      });
+
+      const regexService = createRegexService();
+
+      // Apply USER_INPUT regex scripts
+      params.content = regexService.executeScripts(
+        params.content,
+        promptConfig.regexScripts,
+        "USER_INPUT",
+        macroCtx,
+      );
+
+      // Append to recentMessages so World Info matches keywords on the regex-processed text
+      assembleCtx.recentMessages.push(params.content);
+
+      await db.insert(messages).values({
+        id: newId(),
+        chatId: params.chatId,
+        seq: userSeq,
+        role: "user",
+        content: params.content,
+        createdAt: Date.now(),
+      });
+
+      const executeRegex = (text: string, placement: RegexPlacement) =>
+        regexService.executeScripts(text, promptConfig.regexScripts, placement, macroCtx);
+
+      const systemPrompt = assemblePrompt(promptConfig, assembleCtx, executeRegex);
 
       // The single point where model + provider are chosen (no hardcoded model anywhere here).
       // A throw here is a config invariant (incoherent/unimplemented combo) — log it with the
@@ -111,6 +141,10 @@ export function createSend(ctx: ChatContext, ops: { runCompaction: RunCompaction
 
       let turn: ChatTurnResult;
       try {
+        const onDelta = (event: ChatDeltaEvent) => {
+          chatStreamEmitter.emit("delta", event);
+        };
+
         if (routing.runner === "agent-sdk") {
           // agent-sdk runner (Max sub OR OpenRouter skin — `source` picks the env): stateless
           // resume-per-message through our DB-backed SessionStore.
@@ -122,9 +156,8 @@ export function createSend(ctx: ChatContext, ops: { runCompaction: RunCompaction
             systemPrompt,
             generation: promptConfig.params,
             ...(chat.sessionId ? { resume: chat.sessionId } : {}),
+            onDelta,
           });
-          // TODO: Phase 4 - Run regexService.executeScripts() on turn.reply for "AI_OUTPUT" placement here
-          // using the `promptConfig.regexScripts` and `assembleCtx.macroContext`.
         } else {
           // openrouter runner: rebuild the conversation from canon (incl. the user message just
           // inserted) → chat.send or beta.responses (by api). No session store; routing rides through.
@@ -136,10 +169,12 @@ export function createSend(ctx: ChatContext, ops: { runCompaction: RunCompaction
               : undefined;
           turn = await openRouterRunner(routing.api)({
             model: routing.model,
+            chatId: params.chatId,
             systemPrompt,
             history: await loadCanonHistory(params.chatId, { afterSeq }),
             generation: routing.params,
             providerRouting: routing.providerRouting,
+            onDelta,
           });
         }
       } catch (error) {
@@ -171,6 +206,14 @@ export function createSend(ctx: ChatContext, ops: { runCompaction: RunCompaction
         }
         throw error; // unexpected (non-provider) failure — let it propagate
       }
+
+      // Apply AI_OUTPUT regex scripts
+      turn.reply = regexService.executeScripts(
+        turn.reply,
+        promptConfig.regexScripts,
+        "AI_OUTPUT",
+        macroCtx,
+      );
 
       const assistantMsgId = newId();
       await db.insert(messages).values({

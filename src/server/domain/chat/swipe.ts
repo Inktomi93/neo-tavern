@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { and, desc, eq, lt } from "drizzle-orm";
 import { chats, messages, messageVariants, sessionEntries } from "../../../db/schema";
+import type { ChatDeltaEvent } from "../../../shared/chat-types";
 import { assemblePrompt } from "../../../shared/prompt-assemble";
 import { getLog } from "../../observability/logger";
 import { type ChatTurnResult, TurnError } from "../../providers/turn";
@@ -12,6 +13,7 @@ import type { ChatContext } from "./context";
 import { resolveTurnRouting } from "./routing";
 import { buildSeedFrames } from "./seed";
 import { DbSessionStore } from "./store";
+import { chatStreamEmitter } from "./stream";
 import {
   ChatOperationError,
   type MessageView,
@@ -88,6 +90,10 @@ export function createSwipe(ctx: ChatContext) {
       // the new canonical state. Track it so a failed turn cleans up the seeded frames (no orphan).
       let seededSessionId: string | null = null;
       try {
+        const onDelta = (event: ChatDeltaEvent) => {
+          chatStreamEmitter.emit("delta", event);
+        };
+
         if (routing.runner === "agent-sdk") {
           const store = new DbSessionStore(db, params.chatId);
           if (history.length > 0) {
@@ -104,6 +110,7 @@ export function createSwipe(ctx: ChatContext) {
               systemPrompt,
               generation: promptConfig.params,
               resume: seededSessionId,
+              onDelta,
             });
           } else {
             // greeting swipe: fresh session, OPEN_SCENE prompt generates an alternate opening.
@@ -114,15 +121,18 @@ export function createSwipe(ctx: ChatContext) {
               sessionStore: store,
               systemPrompt,
               generation: promptConfig.params,
+              onDelta,
             });
           }
         } else {
           turn = await openRouterRunner(routing.api)({
             model: routing.model,
+            chatId: params.chatId,
             systemPrompt,
             history: [...history, { role: "user", content: regenPrompt }],
             generation: promptConfig.params,
             providerRouting: routing.providerRouting,
+            onDelta,
           });
         }
       } catch (error) {
