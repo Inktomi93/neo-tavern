@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { createRegexService } from "../../../src/server/domain/_shared/regex";
 import { SimpleMacroRegistry } from "../../../src/shared/macro/registry";
 import type { MacroContext } from "../../../src/shared/macro/types";
 import type { RegexScript } from "../../../src/shared/regex";
-import { createRegexService } from "../../../src/shared/regex-service";
 
 describe("Regex Domain Service", () => {
   const service = createRegexService();

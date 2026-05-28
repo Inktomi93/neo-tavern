@@ -3,7 +3,7 @@
 // Owner-agnostic on purpose: it's ops/verification tooling behind the DEBUG_TOKEN gate, not a
 // user-facing read path (the chat UI uses the tRPC chat router, which IS owner-scoped).
 
-import { asc, desc, eq, getTableName, inArray, sql } from "drizzle-orm";
+import { asc, count, desc, eq, getTableName, inArray, sql } from "drizzle-orm";
 import type { SQLiteTable } from "drizzle-orm/sqlite-core";
 import type { Db } from "../../../db/client";
 import {
@@ -98,9 +98,7 @@ export function createDebugService(db: Db): DebugService {
   // count(*) via a raw query keyed on the schema's table name. NOTE (docs/conventions.md): count(*)
   // can read 0 on a vector-indexed table in some bindings — embeddings is the one to eyeball.
   async function countRows(table: SQLiteTable): Promise<number> {
-    const rows = await db.all<{ n: number }>(
-      sql`SELECT count(*) AS n FROM ${sql.identifier(getTableName(table))}`,
-    );
+    const rows = await db.select({ n: count() }).from(table);
     return Number(rows[0]?.n ?? 0);
   }
 

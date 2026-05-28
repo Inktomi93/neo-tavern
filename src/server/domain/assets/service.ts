@@ -7,7 +7,7 @@
 import { stat } from "node:fs/promises";
 import { and, eq, inArray, isNotNull, or } from "drizzle-orm";
 import type { Db } from "../../../db/client";
-import { assets, characters, characterVersions, personas } from "../../../db/schema";
+import { assets, auditLogs, characters, characterVersions, personas } from "../../../db/schema";
 import type { AssetKind } from "../../../shared/assets";
 import { getLog } from "../../observability/logger";
 import type { Cas } from "../../storage/cas";
@@ -214,6 +214,16 @@ export function createAssetsService(db: Db, cas: Cas): AssetsService {
         }
         await cas.remove(hash);
         await db.delete(assets).where(eq(assets.hash, hash)); // drop the now-blobless row too
+
+        await db.insert(auditLogs).values({
+          id: newId(),
+          timestamp: Date.now(),
+          action: "DELETE_ASSET",
+          domain: "assets",
+          entityId: hash,
+          details: { reason: "garbage_collection" },
+        });
+
         removed++;
       }
 

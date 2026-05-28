@@ -47,3 +47,6 @@ references/*
 # Local scratchpad/lab scripts
 scratch/*
 !scratch/.gitkeep
+
+# TanStack Router temp
+.tanstack/

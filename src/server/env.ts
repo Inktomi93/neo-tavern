@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import process from "node:process";
@@ -187,6 +187,9 @@ let isolatedConfigDir: string | undefined;
 function ephemeralClaudeConfigDir(): string {
   if (isolatedConfigDir === undefined) {
     isolatedConfigDir = mkdtempSync(join(tmpdir(), "neo-tavern-claude-or-"));
+    process.on("exit", () => {
+      if (isolatedConfigDir) rmSync(isolatedConfigDir, { recursive: true, force: true });
+    });
   }
   return isolatedConfigDir;
 }

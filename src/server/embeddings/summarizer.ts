@@ -1,3 +1,4 @@
+import { performance } from "node:perf_hooks";
 import type {
   ChatHistoryItem,
   Llama,
@@ -7,6 +8,7 @@ import type {
   LlamaModel,
 } from "node-llama-cpp";
 import { env } from "../env";
+import { getLog } from "../observability/logger";
 import { runChatCompletionTurn } from "../providers/openrouter";
 import { WarmModel } from "./warm-model";
 
@@ -115,6 +117,7 @@ export function createSummarizer(): Summarizer {
       // Local-first: the GGUF unless hosted is explicitly requested or no GGUF is configured.
       if (opts?.source !== "hosted" && isSummarizerConfigured()) {
         const text = await warm.use(async (loaded) => {
+          const start = performance.now();
           // Fresh system prompt per call — independent summaries, no prior-turn bleed.
           loaded.session.setChatHistory([
             { type: "system", text: systemPrompt } as ChatHistoryItem,
@@ -141,12 +144,18 @@ export function createSummarizer(): Summarizer {
             maxTokens: opts?.maxTokens ?? 768,
             ...(grammar ? { grammar } : {}),
           });
+          const durationMs = Math.round(performance.now() - start);
+          getLog().debug(
+            { model: SUMMARIZER_MODEL, promptLength: userPrompt.length, durationMs },
+            "summarizer: local generation",
+          );
           return stripThink(out);
         });
         return { text, model: SUMMARIZER_MODEL };
       }
       // Hosted fallback — Haiku over the existing chat-completions runner (reuse, don't reinvent).
       // thinking:"off" ⇒ no reasoning block is sent; Haiku replies in-character immediately.
+      const start = performance.now();
       const turn = await runChatCompletionTurn({
         model: HOSTED_SUMMARIZER_MODEL,
         systemPrompt: { static: systemPrompt, dynamic: "" },
@@ -157,6 +166,11 @@ export function createSummarizer(): Summarizer {
           maxOutputTokens: opts?.maxTokens ?? 768,
         },
       });
+      const durationMs = Math.round(performance.now() - start);
+      getLog().debug(
+        { model: HOSTED_SUMMARIZER_MODEL, promptLength: userPrompt.length, durationMs },
+        "summarizer: hosted generation",
+      );
       return { text: stripThink(turn.reply), model: HOSTED_SUMMARIZER_MODEL };
     },
   };

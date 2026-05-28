@@ -1,3 +1,4 @@
+import { performance } from "node:perf_hooks";
 import {
   AutoModelForSequenceClassification,
   AutoTokenizer,
@@ -6,6 +7,7 @@ import {
   type PreTrainedTokenizer,
 } from "@huggingface/transformers";
 import { env } from "../env";
+import { getLog } from "../observability/logger";
 import { WarmModel } from "./warm-model";
 
 // Same repo-local model cache as the embedder (transformers.js `env` is a process-global).
@@ -113,6 +115,7 @@ export function createReranker(): Reranker {
       if (docs.length === 0) return [];
       return warm.use(async ({ model, tokenizer }) => {
         const hits: RerankHit[] = [];
+        const start = performance.now();
         for (let b = 0; b < docs.length; b += RERANK_BATCH_SIZE) {
           const chunk = docs.slice(b, b + RERANK_BATCH_SIZE);
           // text_pair batches (query, doc) pairs; both arrays must match in length.
@@ -135,6 +138,11 @@ export function createReranker(): Reranker {
             });
           }
         }
+        const durationMs = Math.round(performance.now() - start);
+        getLog().debug(
+          { model: RERANKER_MODEL, queryLength: query.length, docs: docs.length, durationMs },
+          "reranker: scored docs",
+        );
         return hits.sort((a, b) => b.score - a.score);
       });
     },

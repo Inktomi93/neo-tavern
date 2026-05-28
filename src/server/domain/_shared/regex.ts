@@ -1,7 +1,7 @@
-import { processMacros } from "./macro/index";
-import type { MacroContext } from "./macro/types";
-import type { RegexPlacement, RegexScript } from "./regex";
-import { SubstituteFindRegex } from "./regex";
+import { processMacros } from "../../../shared/macro/index";
+import type { MacroContext } from "../../../shared/macro/types";
+import type { RegexPlacement, RegexScript } from "../../../shared/regex";
+import { SubstituteFindRegex } from "../../../shared/regex";
 
 function sanitizeRegexMacro(x: string): string {
   // FIXED: Restored the proper regex syntax and added curly braces around the switch block

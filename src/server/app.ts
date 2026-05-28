@@ -3,17 +3,17 @@ import { Readable } from "node:stream";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { Hono } from "hono";
+import sharp from "sharp";
 import type { Db } from "../db/client";
 import { isAssetHash } from "../shared/assets";
 import { processMacros } from "../shared/macro";
-import type { MacroContext } from "../shared/macro/types";
 import type { RegexPlacement, RegexScript } from "../shared/regex";
-import { createRegexService } from "../shared/regex-service";
 import { resolveUsername } from "./auth/trust-header";
+import { createRegexService } from "./domain/_shared/regex";
 import { createAssetsService } from "./domain/assets";
 import { createDebugService } from "./domain/debug";
 import { env } from "./env";
-import { registerDebugRoutes } from "./observability/debug";
+import { debugAuthMiddleware, registerDebugRoutes } from "./observability/debug";
 import { getLog } from "./observability/logger";
 import { observability } from "./observability/middleware";
 import type { Cas } from "./storage/cas";
@@ -21,29 +21,21 @@ import { createContext, type Services } from "./trpc/context";
 import { appRouter } from "./trpc/router";
 import { APP_VERSION } from "./version";
 
-export function buildApp(db: Db, cas: Cas, services: Services, isProd: boolean) {
-  const app = new Hono();
-
-  // Must be first: assigns the request id + binds the request-scoped logger.
-  app.use(observability);
-
-  const assetsService = createAssetsService(db, cas);
-  registerDebugRoutes(app, createDebugService(db), assetsService);
-
-  // Extra dev/debug routes that depend on domain logic (entry layer can import domain,
-  // observability infra cannot). Protected by the /api/_debug/* middleware from above.
-  app.post("/api/_debug/macros/eval", async (c) => {
+// Macro/regex eval routes that need domain-layer imports (processMacros, createRegexService).
+// Kept outside buildApp so the composition root stays as pure wiring.
+function registerDomainDebugRoutes(router: Hono) {
+  router.post("/macros/eval", async (c) => {
     const body = await c.req.json();
     const text = typeof body.text === "string" ? body.text : "";
     const options = typeof body.options === "object" && body.options !== null ? body.options : {};
     const result = processMacros(text, {
       ...options,
-      onWarn: (msg, err) => getLog().warn({ err }, msg),
+      onWarn: (msg: string, err?: unknown) => getLog().warn({ err }, msg),
     });
     return c.json({ result });
   });
 
-  app.post("/api/_debug/regex/execute", async (c) => {
+  router.post("/regex/execute", async (c) => {
     const body = await c.req.json();
     const text = typeof body.text === "string" ? body.text : "";
     const scripts = Array.isArray(body.scripts) ? body.scripts : [];
@@ -51,7 +43,7 @@ export function buildApp(db: Db, cas: Cas, services: Services, isProd: boolean) 
     const options = typeof body.options === "object" && body.options !== null ? body.options : {};
 
     const regexService = createRegexService();
-    // process macros options need to be mapped if there are real RP variables
+    // Macro context is stubbed here — real RP variables are not available in the debug REPL.
     const ctx = {
       ...options,
       evaluateAST: () => "",
@@ -63,10 +55,30 @@ export function buildApp(db: Db, cas: Cas, services: Services, isProd: boolean) 
       text,
       scripts as RegexScript[],
       placement as RegexPlacement,
-      ctx as unknown as MacroContext,
+      // biome-ignore lint/suspicious/noExplicitAny: debug REPL only — ctx is a stub
+      ctx as any,
     );
     return c.json({ result });
   });
+}
+
+export function buildApp(db: Db, cas: Cas, services: Services, isProd: boolean) {
+  const app = new Hono();
+
+  // Must be first: assigns the request id + binds the request-scoped logger.
+  app.use(observability);
+
+  const assetsService = createAssetsService(db, cas);
+  registerDebugRoutes(app, createDebugService(db), assetsService);
+
+  const debugRouter = new Hono();
+  debugRouter.use("/*", debugAuthMiddleware);
+
+  // Extra dev/debug routes that depend on domain logic (entry layer can import domain,
+  // observability infra cannot). Protected by the /api/_debug/* middleware from above.
+  registerDomainDebugRoutes(debugRouter);
+
+  app.route("/api/_debug", debugRouter);
 
   app.get("/api/healthz", (c) => c.json({ ok: true, version: APP_VERSION }));
 
@@ -77,14 +89,41 @@ export function buildApp(db: Db, cas: Cas, services: Services, isProd: boolean) 
     const meta = await assetsService.getMetadata(hash);
     if (!meta || !(await cas.exists(hash))) return c.notFound();
 
-    // We use Web Streams (or Node streams cast to unknown) as Hono supports streaming natively.
-    const stream = createReadStream(cas.blobPath(hash));
-    const webStream = Readable.toWeb(stream) as unknown as ReadableStream;
-    return c.body(webStream, 200, {
-      "Content-Type": meta.mime,
-      "Content-Length": meta.size.toString(),
-      "Cache-Control": "public, max-age=31536000, immutable", // it's CAS!
-    });
+    const widthParam = c.req.query("w");
+    const formatParam = c.req.query("f");
+
+    // 1. Setup the raw disk stream
+    let stream: NodeJS.ReadableStream = createReadStream(cas.blobPath(hash));
+    let responseMime = meta.mime;
+    let responseSize: string | undefined = meta.size.toString();
+
+    // 2. JIT Transformation (Only if requested AND it's an image)
+    if (widthParam && meta.mime.startsWith("image/")) {
+      const width = Number.parseInt(widthParam, 10);
+      const transformer = sharp().resize({ width, withoutEnlargement: true });
+
+      if (formatParam === "webp") {
+        transformer.webp({ quality: 80 });
+        responseMime = "image/webp";
+      }
+
+      // Pipe the raw file through the C-bindings transformer
+      stream = stream.pipe(transformer);
+      responseSize = undefined; // Delete Content-Length since we are streaming a dynamic size
+    }
+
+    // 3. Convert to Web Stream and serve
+    const webStream = Readable.toWeb(stream as import("stream").Readable) as ReadableStream;
+
+    const headers: Record<string, string> = {
+      "Content-Type": responseMime,
+      "Cache-Control": "public, max-age=31536000, immutable",
+    };
+    if (responseSize) {
+      headers["Content-Length"] = responseSize;
+    }
+
+    return c.body(webStream, 200, headers);
   });
 
   app.post("/api/assets/upload", async (c) => {

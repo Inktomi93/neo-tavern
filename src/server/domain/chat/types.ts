@@ -37,6 +37,7 @@ export interface ChatSummary {
   id: string;
   title: string;
   characterName: string | null;
+  avatarHash: string | null;
   api: ChatApi;
   source: ChatSource;
   model: string | null;

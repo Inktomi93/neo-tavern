@@ -1,5 +1,5 @@
 import { desc, eq } from "drizzle-orm";
-import { characterVersions, chats } from "../../../db/schema";
+import { assets, characterVersions, chats } from "../../../db/schema";
 import { assemblePrompt } from "../../../shared/prompt-assemble";
 import { ensureUser } from "../_shared/users";
 import type { ChatContext } from "./context";
@@ -29,6 +29,7 @@ export function createRead(ctx: ChatContext) {
         id: chats.id,
         title: chats.title,
         characterName: characterVersions.name,
+        avatarHash: assets.hash,
         api: chats.api,
         source: chats.source,
         model: chats.model,
@@ -42,12 +43,14 @@ export function createRead(ctx: ChatContext) {
       })
       .from(chats)
       .leftJoin(characterVersions, eq(chats.characterVersionId, characterVersions.id))
+      .leftJoin(assets, eq(characterVersions.avatarAssetId, assets.id))
       .where(eq(chats.ownerId, ownerId))
       .orderBy(desc(chats.updatedAt));
     return rows.map((r) => ({
       id: r.id,
       title: r.title,
       characterName: r.characterName,
+      avatarHash: r.avatarHash ?? null,
       api: r.api,
       source: r.source,
       model: r.model,
@@ -102,8 +105,13 @@ export function createRead(ctx: ChatContext) {
     const chat = await loadOwnedChat(ownerId, params.chatId); // throws ChatNotFoundError if unowned
     const cv = (
       await db
-        .select({ name: characterVersions.name, characterId: characterVersions.characterId })
+        .select({
+          name: characterVersions.name,
+          characterId: characterVersions.characterId,
+          avatarHash: assets.hash,
+        })
         .from(characterVersions)
+        .leftJoin(assets, eq(characterVersions.avatarAssetId, assets.id))
         .where(eq(characterVersions.id, chat.characterVersionId))
         .limit(1)
     )[0];
@@ -111,6 +119,7 @@ export function createRead(ctx: ChatContext) {
       id: chat.id,
       title: chat.title,
       characterName: cv?.name ?? null,
+      avatarHash: cv?.avatarHash ?? null,
       api: chat.api,
       source: chat.source,
       model: chat.model,

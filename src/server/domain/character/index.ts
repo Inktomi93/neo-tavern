@@ -1,2 +1,9 @@
 export { createCharacterService } from "./service";
-export * from "./types";
+export type {
+  CharacterDetail,
+  CharacterService,
+  CharacterSummary,
+  CreateCharacterInput,
+  UpdateCharacterInput,
+} from "./types";
+export { CharacterNotFoundError, CharacterOperationError } from "./types";

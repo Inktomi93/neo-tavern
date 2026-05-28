@@ -1,2 +1,8 @@
 export { createPersonaService } from "./service";
-export * from "./types";
+export type {
+  CreatePersonaInput,
+  PersonaDetail,
+  PersonaService,
+  UpdatePersonaInput,
+} from "./types";
+export { PersonaNotFoundError } from "./types";

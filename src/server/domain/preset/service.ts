@@ -7,7 +7,7 @@
 
 import { and, desc, eq } from "drizzle-orm";
 import type { Db } from "../../../db/client";
-import { chats, messages, presets, presetVersions } from "../../../db/schema";
+import { auditLogs, chats, messages, presets, presetVersions } from "../../../db/schema";
 import {
   DEFAULT_PROMPT_CONFIG,
   type PromptConfig,
@@ -105,6 +105,16 @@ export function createPresetService(db: Db): PresetService {
         createdAt: now,
       });
       await db.update(presets).set({ currentVersionId: versionId }).where(eq(presets.id, presetId));
+
+      await db.insert(auditLogs).values({
+        id: newId(),
+        timestamp: now,
+        action: "CREATE_PRESET",
+        domain: "preset",
+        entityId: presetId,
+        details: { name, kind },
+      });
+
       log.info({ presetId, kind }, "preset: created");
       const row = await ownedPreset(ownerId, presetId);
       if (row === undefined) throw new PresetNotFoundError(presetId); // unreachable — just inserted
@@ -226,6 +236,15 @@ export function createPresetService(db: Db): PresetService {
           .where(eq(presets.id, presetId));
       }
 
+      await db.insert(auditLogs).values({
+        id: newId(),
+        timestamp: now,
+        action: "UPDATE_PRESET",
+        domain: "preset",
+        entityId: presetId,
+        details: { edits: idEdits, configUpdated: config !== undefined },
+      });
+
       const updated = await ownedPreset(ownerId, presetId);
       if (updated === undefined) throw new PresetNotFoundError(presetId);
       return detailOf(updated);
@@ -255,6 +274,16 @@ export function createPresetService(db: Db): PresetService {
       // Break the circular currentVersionId pointer, then delete (versions cascade with the preset).
       await db.update(presets).set({ currentVersionId: null }).where(eq(presets.id, presetId));
       await db.delete(presets).where(eq(presets.id, presetId));
+
+      await db.insert(auditLogs).values({
+        id: newId(),
+        timestamp: Date.now(),
+        action: "DELETE_PRESET",
+        domain: "preset",
+        entityId: presetId,
+        details: {},
+      });
+
       log.info({ presetId }, "preset: deleted");
       return { deleted: true };
     },

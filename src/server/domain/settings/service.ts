@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import type { Db } from "../../../db/client";
-import { settings, userSettings } from "../../../db/schema";
+import { auditLogs, settings, userSettings } from "../../../db/schema";
+import { newId } from "../_shared/ids";
 import { ensureUser } from "../_shared/users";
 import type {
   GlobalSettingView,
@@ -49,6 +50,15 @@ export function createSettingsService(db: Db): SettingsService {
 
     await db.update(userSettings).set(updates).where(eq(userSettings.userId, ownerId));
 
+    await db.insert(auditLogs).values({
+      id: newId(),
+      timestamp: Date.now(),
+      action: "UPDATE_USER_SETTINGS",
+      domain: "settings",
+      entityId: ownerId,
+      details: { config: input.config },
+    });
+
     return getUserSettings(params);
   }
 
@@ -62,6 +72,15 @@ export function createSettingsService(db: Db): SettingsService {
     await db.insert(settings).values({ key, value, updatedAt }).onConflictDoUpdate({
       target: settings.key,
       set: { value, updatedAt },
+    });
+
+    await db.insert(auditLogs).values({
+      id: newId(),
+      timestamp: Date.now(),
+      action: "SET_GLOBAL_SETTING",
+      domain: "settings",
+      entityId: key,
+      details: { value },
     });
 
     const rows = await db.select().from(settings).where(eq(settings.key, key));

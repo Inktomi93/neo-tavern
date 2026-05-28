@@ -2,7 +2,7 @@
 
 import { and, desc, eq } from "drizzle-orm";
 import type { Db } from "../../../db/client";
-import { personas } from "../../../db/schema";
+import { auditLogs, personas } from "../../../db/schema";
 import { getLog } from "../../observability/logger";
 import { newId } from "../_shared/ids";
 import { ensureUser } from "../_shared/users";
@@ -50,6 +50,15 @@ export function createPersonaService(db: Db): PersonaService {
         createdAt: now,
       });
 
+      await db.insert(auditLogs).values({
+        id: newId(),
+        timestamp: now,
+        action: "CREATE_PERSONA",
+        domain: "persona",
+        entityId: personaId,
+        details: { name: input.name },
+      });
+
       log.info({ personaId }, "persona: created");
 
       const row = await ownedPersona(ownerId, personaId);
@@ -87,6 +96,14 @@ export function createPersonaService(db: Db): PersonaService {
 
       if (Object.keys(edits).length > 0) {
         await db.update(personas).set(edits).where(eq(personas.id, personaId));
+        await db.insert(auditLogs).values({
+          id: newId(),
+          timestamp: Date.now(),
+          action: "UPDATE_PERSONA",
+          domain: "persona",
+          entityId: personaId,
+          details: edits,
+        });
       }
 
       const updated = await ownedPersona(ownerId, personaId);
@@ -100,6 +117,16 @@ export function createPersonaService(db: Db): PersonaService {
       if (row === undefined) throw new PersonaNotFoundError(personaId);
 
       await db.delete(personas).where(eq(personas.id, personaId));
+
+      await db.insert(auditLogs).values({
+        id: newId(),
+        timestamp: Date.now(),
+        action: "DELETE_PERSONA",
+        domain: "persona",
+        entityId: personaId,
+        details: {},
+      });
+
       log.info({ personaId }, "persona: deleted");
       return { deleted: true };
     },

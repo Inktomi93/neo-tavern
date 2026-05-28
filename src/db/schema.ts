@@ -27,7 +27,13 @@ const vector32 = customType<{
     return `F32_BLOB(${config?.dim ?? 1024})`;
   },
   toDriver(value: Float32Array): Uint8Array {
-    return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+    const buffer = new ArrayBuffer(value.length * 4);
+    const view = new DataView(buffer);
+    for (let i = 0; i < value.length; i++) {
+      // biome-ignore lint/style/noNonNullAssertion: guaranteed by length
+      view.setFloat32(i * 4, value[i]!, true);
+    }
+    return new Uint8Array(buffer);
   },
   fromDriver(value: Uint8Array): Float32Array {
     // Copy into a fresh, 4-byte-aligned buffer (the driver may hand back an
@@ -720,4 +726,19 @@ export const sessionEntries = sqliteTable(
       .on(t.sessionId, t.subpath, t.uuid)
       .where(sql`${t.uuid} is not null`),
   ],
+);
+
+// ───────────────────────── Audit Logging ─────────────────────────
+// Append-only audit trail for destructive actions and global configuration changes.
+export const auditLogs = sqliteTable(
+  "audit_logs",
+  {
+    id: text("id").primaryKey(),
+    timestamp: integer("timestamp").notNull(),
+    action: text("action").notNull(),
+    domain: text("domain").notNull(),
+    entityId: text("entity_id"),
+    details: text("details", { mode: "json" }),
+  },
+  (t) => [index("audit_logs_time_idx").on(t.timestamp)],
 );

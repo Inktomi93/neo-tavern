@@ -1,5 +1,7 @@
+import { performance } from "node:perf_hooks";
 import { type FeatureExtractionPipeline, env as hf, pipeline } from "@huggingface/transformers";
 import { env } from "../env";
+import { getLog } from "../observability/logger";
 import { WarmModel } from "./warm-model";
 
 // Keep ALL model downloads self-contained in a repo-local, gitignored dir (not the OS HF
@@ -78,7 +80,13 @@ export function createEmbedder(): Embedder {
 
     embed(text: string): Promise<Float32Array> {
       return warm.use(async (extract) => {
+        const start = performance.now();
         const output = await extract(text, { pooling: "cls", normalize: true });
+        const durationMs = Math.round(performance.now() - start);
+        getLog().debug(
+          { model: EMBEDDING_MODEL, textLength: text.length, durationMs },
+          "embedder: generated embedding",
+        );
         return new Float32Array(output.data as ArrayLike<number>);
       });
     },
@@ -88,7 +96,13 @@ export function createEmbedder(): Embedder {
       return warm.use(async (extract) => {
         // [N, dim] tensor; tolist() splits it into N plain arrays in input order.
         const run = async (batch: string[]): Promise<Float32Array[]> => {
+          const start = performance.now();
           const output = await extract(batch, { pooling: "cls", normalize: true });
+          const durationMs = Math.round(performance.now() - start);
+          getLog().debug(
+            { model: EMBEDDING_MODEL, batchSize: batch.length, durationMs },
+            "embedder: embedded batch",
+          );
           return (output.tolist() as number[][]).map((row) => Float32Array.from(row));
         };
         if (texts.length === 1) return run(texts);

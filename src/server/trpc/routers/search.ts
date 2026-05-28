@@ -72,6 +72,16 @@ export const searchRouter = t.router({
       }),
     )
     .query(({ ctx, input }) => ctx.services.search.corpus({ ...input, username: ctx.username })),
+
+  // Cross-modal search: find images based on text query using SigLIP embeddings.
+  images: publicProcedure
+    .input(
+      z.object({
+        queryText: z.string().min(1),
+        k: z.number().int().positive().max(50).optional(),
+      }),
+    )
+    .query(({ ctx, input }) => ctx.services.search.images(input)),
 });
 
 export const corpusRouter = t.router({

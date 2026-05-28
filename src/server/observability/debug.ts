@@ -1,7 +1,7 @@
 import { Buffer } from "node:buffer";
 import { timingSafeEqual } from "node:crypto";
 import process from "node:process";
-import type { Hono } from "hono";
+import type { Context, Hono, Next } from "hono";
 import { DEFAULT_CHAT_MODEL_ID, DEFAULT_RAW_MODEL_ID } from "../../shared/models";
 import { env } from "../env";
 import { APP_VERSION } from "../version";
@@ -86,18 +86,20 @@ export interface AssetInspector {
  * log/error/request rings can't answer. `assets` (optional) adds /api/_debug/db/assets — the CAS
  * blob-store health check (dangling/corrupt/orphan), the disk-side counterpart to the DB inspector.
  */
+export async function debugAuthMiddleware(c: Context, next: Next) {
+  if (env.DEBUG_TOKEN === undefined) {
+    return c.json({ error: "debug API disabled — set DEBUG_TOKEN to enable" }, 404);
+  }
+  const provided = c.req.header("x-debug-token") ?? c.req.query("token");
+  if (!tokenMatches(provided)) {
+    return c.json({ error: "unauthorized" }, 401);
+  }
+  await next();
+  return undefined;
+}
+
 export function registerDebugRoutes(app: Hono, db?: DbInspector, assets?: AssetInspector): void {
-  app.use("/api/_debug/*", async (c, next) => {
-    if (env.DEBUG_TOKEN === undefined) {
-      return c.json({ error: "debug API disabled — set DEBUG_TOKEN to enable" }, 404);
-    }
-    const provided = c.req.header("x-debug-token") ?? c.req.query("token");
-    if (!tokenMatches(provided)) {
-      return c.json({ error: "unauthorized" }, 401);
-    }
-    await next();
-    return undefined;
-  });
+  app.use("/api/_debug/*", debugAuthMiddleware);
 
   app.get("/api/_debug/info", (c) =>
     c.json({

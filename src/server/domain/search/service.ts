@@ -2,6 +2,7 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import type { Db } from "../../../db/client";
 import { assets, characters, characterVersions, chatSegments } from "../../../db/schema";
 import { createEmbedder, type Embedder } from "../../embeddings/embedder";
+import { createImageEmbedder, type ImageEmbedder } from "../../embeddings/image-embedder";
 import { createReranker, type Reranker } from "../../embeddings/reranker";
 import { getLog } from "../../observability/logger";
 import { ensureUser } from "../_shared/users";
@@ -14,6 +15,12 @@ export interface SearchHit {
    * CSLS-adjusted distance (hubness correction) — or by cross-encoder score when `rerank` is
    * set — NOT by this raw value. A consumer must keep the returned order, not re-sort by it.
    */
+  distance: number;
+}
+
+export interface ImageSearchHit {
+  assetId: string;
+  assetHash: string;
   distance: number;
 }
 
@@ -163,10 +170,14 @@ export interface SearchService {
     k?: number | undefined;
     rerank?: boolean | undefined;
   }): Promise<CorpusHit[]>;
+
+  /** Image search over the image_embeddings table using SigLIP text encoding. */
+  images(params: { queryText: string; k?: number | undefined }): Promise<ImageSearchHit[]>;
 }
 
 export interface SearchServiceDeps {
   embedder?: Embedder;
+  imageEmbedder?: ImageEmbedder;
   reranker?: Reranker;
 }
 
@@ -209,15 +220,13 @@ interface SegmentDisplay {
   snippet: string;
 }
 
-function chatIdOf(entityId: string): string {
-  return entityId.split(":")[0] ?? entityId; // chat_segment entityId = "<chatId>:<segIdx>"
-}
 function asStringArray(v: unknown): string[] {
   return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
 }
 
 export function createSearchService(db: Db, deps: SearchServiceDeps = {}): SearchService {
   const embedder = deps.embedder ?? createEmbedder();
+  const imageEmbedder = deps.imageEmbedder ?? createImageEmbedder();
   const reranker = deps.reranker ?? createReranker();
 
   // Keep only candidates whose backing entity is owned by ownerId (character → characters,
@@ -256,10 +265,10 @@ export function createSearchService(db: Db, deps: SearchServiceDeps = {}): Searc
     ownerId?: string,
   ): Promise<Map<string, SegmentDisplay>> {
     const out = new Map<string, SegmentDisplay>();
-    const chatIds = [...new Set(entityIds.map(chatIdOf))];
-    if (chatIds.length === 0) return out;
+    if (entityIds.length === 0) return out;
     const segRows = await db
       .select({
+        id: chatSegments.id,
         chatId: chatSegments.chatId,
         blockIdx: chatSegments.blockIdx,
         cvId: chatSegments.characterVersionId,
@@ -268,8 +277,8 @@ export function createSearchService(db: Db, deps: SearchServiceDeps = {}): Searc
       .from(chatSegments)
       .where(
         ownerId
-          ? and(eq(chatSegments.ownerId, ownerId), inArray(chatSegments.chatId, chatIds))
-          : inArray(chatSegments.chatId, chatIds),
+          ? and(eq(chatSegments.ownerId, ownerId), inArray(chatSegments.id, entityIds))
+          : inArray(chatSegments.id, entityIds),
       );
     if (segRows.length === 0) return out;
     const cvIds = [...new Set(segRows.map((r) => r.cvId))];
@@ -289,7 +298,7 @@ export function createSearchService(db: Db, deps: SearchServiceDeps = {}): Searc
     for (const r of segRows) {
       const cv = cvById.get(r.cvId);
       if (!cv) continue;
-      out.set(`${r.chatId}:${r.blockIdx}`, {
+      out.set(r.id, {
         characterId: cv.characterId,
         name: cv.name,
         tags: asStringArray(cv.tags),
@@ -366,13 +375,14 @@ export function createSearchService(db: Db, deps: SearchServiceDeps = {}): Searc
       ORDER BY dist ASC
     `);
     const segRows = await db.all<{
+      id: string;
       chatId: string;
       blockIdx: number;
       dist: number;
       hubScore: number | null;
       text: string;
     }>(sql`
-      SELECT cs.chat_id AS chatId, cs.block_idx AS blockIdx,
+      SELECT cs.id AS id, cs.chat_id AS chatId, cs.block_idx AS blockIdx,
              vector_distance_cos(cs.embedding, vector32(${query})) AS dist,
              cs.hub_score AS hubScore, cs.text AS text
       FROM vector_top_k('chat_segments_ann', vector32(${query}), ${poolK}) AS v
@@ -397,7 +407,7 @@ export function createSearchService(db: Db, deps: SearchServiceDeps = {}): Searc
       ...segRows.map((r) => ({
         cand: {
           entityType: "chat_segment",
-          entityId: `${r.chatId}:${r.blockIdx}`,
+          entityId: r.id,
           distance: r.dist,
           sourceText: r.text,
         },
@@ -484,13 +494,14 @@ export function createSearchService(db: Db, deps: SearchServiceDeps = {}): Searc
     const poolK = Math.min(k * DISCOVER_SEGMENT_POOL_FACTOR, DISCOVER_SEGMENT_POOL_CAP);
     // Segment pool from the first-class chat_segments table (Phase B), CSLS-rankable + rerankable.
     const rows = await db.all<{
+      id: string;
       chatId: string;
       blockIdx: number;
       dist: number;
       hubScore: number | null;
       text: string;
     }>(sql`
-      SELECT cs.chat_id AS chatId, cs.block_idx AS blockIdx,
+      SELECT cs.id AS id, cs.chat_id AS chatId, cs.block_idx AS blockIdx,
              vector_distance_cos(cs.embedding, vector32(${query})) AS dist,
              cs.hub_score AS hubScore, cs.text AS text
       FROM vector_top_k('chat_segments_ann', vector32(${query}), ${poolK}) AS v
@@ -501,7 +512,7 @@ export function createSearchService(db: Db, deps: SearchServiceDeps = {}): Searc
       .map((row) => ({
         cand: {
           entityType: "chat_segment",
-          entityId: `${row.chatId}:${row.blockIdx}`,
+          entityId: row.id,
           distance: row.dist,
           sourceText: row.text,
         },
@@ -868,5 +879,41 @@ export function createSearchService(db: Db, deps: SearchServiceDeps = {}): Searc
     return out;
   }
 
-  return { knn, find, discover, digests, segments, corpus };
+  async function images(params: {
+    queryText: string;
+    k?: number | undefined;
+  }): Promise<ImageSearchHit[]> {
+    const { queryText, k = 10 } = params;
+    const embedding = await imageEmbedder.embedText(queryText);
+    const query = JSON.stringify(Array.from(embedding));
+
+    const rows = await db.all<{
+      assetId: string;
+      assetHash: string;
+      dist: number;
+      characterId: string | null;
+      characterName: string | null;
+    }>(sql`
+      SELECT ie.asset_id AS assetId, a.hash AS assetHash,
+             vector_distance_cos(ie.embedding, vector32(${query})) AS dist,
+             c.id AS characterId,
+             cv.name AS characterName
+      FROM vector_top_k('image_embeddings_ann', vector32(${query}), ${k}) AS v
+      JOIN image_embeddings ie ON ie.rowid = v.id
+      JOIN assets a ON a.id = ie.asset_id
+      LEFT JOIN character_versions cv ON cv.avatar_asset_id = ie.asset_id
+      LEFT JOIN characters c ON c.current_version_id = cv.id
+      ORDER BY dist ASC
+    `);
+
+    return rows.map((r) => ({
+      assetId: r.assetId,
+      assetHash: r.assetHash,
+      distance: r.dist,
+      characterId: r.characterId,
+      characterName: r.characterName,
+    }));
+  }
+
+  return { knn, find, discover, digests, segments, corpus, images };
 }

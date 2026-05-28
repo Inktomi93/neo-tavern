@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 
 import { and, eq, notExists } from "drizzle-orm";
 import type { Db } from "../../../db/client";
@@ -40,13 +40,12 @@ export async function runImageEmbedPass(db: Db, casRootDir: string) {
 
   for (const asset of pendingAssets) {
     try {
-      // 1. Read bytes from CAS and wrap in a Blob
+      // 1. Get the absolute path to the blob
       const blobPath = cas.blobPath(asset.hash);
-      const buffer = readFileSync(blobPath);
-      const blob = new Blob([buffer], { type: asset.mime });
+      const absolutePath = resolve(blobPath);
 
-      // 2. Extract features using the Blob directly (transformers.js handles it)
-      const embeddingArray = await embedder.embed(blob);
+      // 2. Extract features using the absolute file path directly
+      const embeddingArray = await embedder.embed(absolutePath);
 
       // 3. Insert into the image_embeddings table
       await db.insert(imageEmbeddings).values({
