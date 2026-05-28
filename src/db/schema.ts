@@ -608,17 +608,69 @@ export const tags = sqliteTable("tags", {
   source: text("source", { enum: ["manual", "auto"] }).default("manual"),
 });
 
-export const taggables = sqliteTable(
-  "taggables",
+export const characterTags = sqliteTable(
+  "character_tags",
   {
     tagId: text("tag_id")
       .notNull()
       .references(() => tags.id, { onDelete: "cascade" }),
-    // entityType/entityId are POLYMORPHIC (a tag on any entity) — cannot be a real FK; left as text.
-    entityType: text("entity_type").notNull(),
-    entityId: text("entity_id").notNull(),
+    characterId: text("character_id")
+      .notNull()
+      .references(() => characters.id, { onDelete: "cascade" }),
   },
-  (t) => [primaryKey({ columns: [t.tagId, t.entityType, t.entityId] })],
+  (t) => [primaryKey({ columns: [t.tagId, t.characterId] })],
+);
+
+export const chatTags = sqliteTable(
+  "chat_tags",
+  {
+    tagId: text("tag_id")
+      .notNull()
+      .references(() => tags.id, { onDelete: "cascade" }),
+    chatId: text("chat_id")
+      .notNull()
+      .references(() => chats.id, { onDelete: "cascade" }),
+  },
+  (t) => [primaryKey({ columns: [t.tagId, t.chatId] })],
+);
+
+export const worldBookTags = sqliteTable(
+  "world_book_tags",
+  {
+    tagId: text("tag_id")
+      .notNull()
+      .references(() => tags.id, { onDelete: "cascade" }),
+    worldBookId: text("world_book_id")
+      .notNull()
+      .references(() => worldBooks.id, { onDelete: "cascade" }),
+  },
+  (t) => [primaryKey({ columns: [t.tagId, t.worldBookId] })],
+);
+
+export const personaTags = sqliteTable(
+  "persona_tags",
+  {
+    tagId: text("tag_id")
+      .notNull()
+      .references(() => tags.id, { onDelete: "cascade" }),
+    personaId: text("persona_id")
+      .notNull()
+      .references(() => personas.id, { onDelete: "cascade" }),
+  },
+  (t) => [primaryKey({ columns: [t.tagId, t.personaId] })],
+);
+
+export const presetTags = sqliteTable(
+  "preset_tags",
+  {
+    tagId: text("tag_id")
+      .notNull()
+      .references(() => tags.id, { onDelete: "cascade" }),
+    presetId: text("preset_id")
+      .notNull()
+      .references(() => presets.id, { onDelete: "cascade" }),
+  },
+  (t) => [primaryKey({ columns: [t.tagId, t.presetId] })],
 );
 
 // ───────────────────────── SDK session persistence (the DbSessionStore substrate) ─────────────────────────

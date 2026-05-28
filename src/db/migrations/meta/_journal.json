@@ -148,6 +148,20 @@
       "when": 1779908511079,
       "tag": "0020_retire_embeddings_add_character_embeddings",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "6",
+      "when": 1779935132289,
+      "tag": "0021_soft_madrox",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "6",
+      "when": 1779935146855,
+      "tag": "0022_fast_killer_shrike",
+      "breakpoints": true
     }
   ]
 }
