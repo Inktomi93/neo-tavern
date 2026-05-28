@@ -23,7 +23,14 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
   const { send } = createSend(ctx, { runCompaction });
   const { swipe, selectVariant } = createSwipe(ctx);
   const { forkChat, setProvider } = createBranch(ctx);
-  const { create, editMessage } = createLifecycle(ctx);
+  const {
+    create,
+    editMessage,
+    delete: deleteChat,
+    updateTitle,
+    star,
+    archive,
+  } = createLifecycle(ctx);
   const { listChats, getChat, listMessages, previewAssembly } = createRead(ctx);
 
   return {
@@ -39,5 +46,9 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
     selectVariant,
     editMessage,
     compact,
+    delete: deleteChat,
+    updateTitle,
+    star,
+    archive,
   };
 }

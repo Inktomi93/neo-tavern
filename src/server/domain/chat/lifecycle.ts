@@ -217,5 +217,64 @@ export function createLifecycle(ctx: ChatContext) {
     });
   }
 
-  return { create, editMessage };
+  async function deleteChat(params: {
+    username: string;
+    chatId: string;
+  }): Promise<{ deleted: boolean }> {
+    const ownerId = await ensureUser(db, params.username);
+    return withChatLock(params.chatId, async () => {
+      await loadOwnedChat(ownerId, params.chatId);
+      // DB has ON DELETE CASCADE for messages, variants, etc.
+      await db.delete(chats).where(eq(chats.id, params.chatId));
+      getLog().info({ chatId: params.chatId }, "chat: deleted");
+      return { deleted: true };
+    });
+  }
+
+  async function updateTitle(params: {
+    username: string;
+    chatId: string;
+    title: string;
+  }): Promise<void> {
+    const ownerId = await ensureUser(db, params.username);
+    return withChatLock(params.chatId, async () => {
+      await loadOwnedChat(ownerId, params.chatId);
+      await db
+        .update(chats)
+        .set({ title: params.title, updatedAt: Date.now() })
+        .where(eq(chats.id, params.chatId));
+    });
+  }
+
+  async function star(params: {
+    username: string;
+    chatId: string;
+    starred: boolean;
+  }): Promise<void> {
+    const ownerId = await ensureUser(db, params.username);
+    return withChatLock(params.chatId, async () => {
+      await loadOwnedChat(ownerId, params.chatId);
+      await db
+        .update(chats)
+        .set({ starred: params.starred, updatedAt: Date.now() })
+        .where(eq(chats.id, params.chatId));
+    });
+  }
+
+  async function archive(params: {
+    username: string;
+    chatId: string;
+    archived: boolean;
+  }): Promise<void> {
+    const ownerId = await ensureUser(db, params.username);
+    return withChatLock(params.chatId, async () => {
+      await loadOwnedChat(ownerId, params.chatId);
+      await db
+        .update(chats)
+        .set({ archived: params.archived, updatedAt: Date.now() })
+        .where(eq(chats.id, params.chatId));
+    });
+  }
+
+  return { create, editMessage, delete: deleteChat, updateTitle, star, archive };
 }

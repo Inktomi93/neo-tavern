@@ -143,4 +143,28 @@ export const chatRouter = t.router({
     .mutation(({ ctx, input }) =>
       ctx.services.chat.compact({ username: ctx.username, ...input }).catch(domainErrorToTrpc),
     ),
+
+  delete: publicProcedure
+    .input(z.object({ chatId: z.string().min(1) }))
+    .mutation(({ ctx, input }) =>
+      ctx.services.chat.delete({ username: ctx.username, ...input }).catch(domainErrorToTrpc),
+    ),
+
+  updateTitle: publicProcedure
+    .input(z.object({ chatId: z.string().min(1), title: z.string().min(1).max(200) }))
+    .mutation(({ ctx, input }) =>
+      ctx.services.chat.updateTitle({ username: ctx.username, ...input }).catch(domainErrorToTrpc),
+    ),
+
+  star: publicProcedure
+    .input(z.object({ chatId: z.string().min(1), starred: z.boolean() }))
+    .mutation(({ ctx, input }) =>
+      ctx.services.chat.star({ username: ctx.username, ...input }).catch(domainErrorToTrpc),
+    ),
+
+  archive: publicProcedure
+    .input(z.object({ chatId: z.string().min(1), archived: z.boolean() }))
+    .mutation(({ ctx, input }) =>
+      ctx.services.chat.archive({ username: ctx.username, ...input }).catch(domainErrorToTrpc),
+    ),
 });

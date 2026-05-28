@@ -559,3 +559,53 @@ test("swipe on a chat whose tip is not an assistant turn throws not_swipeable", 
     reason: "not_swipeable",
   });
 });
+
+// ── 6: lifecycle metadata ───────────────────────────────────────────────────
+
+test("updateTitle changes chat title", async () => {
+  const db = await freshDb();
+  const chat = createChatService(db, { runTurn: fakeRunner("x").run });
+
+  const { chatId } = await chat.create({ username: "owner", title: "Original", ...baseChar });
+  await chat.updateTitle({ username: "owner", chatId, title: "New Title" });
+
+  const summary = (await chat.listChats({ username: "owner" }))[0];
+  expect(summary?.title).toBe("New Title");
+});
+
+test("star toggles starred status", async () => {
+  const db = await freshDb();
+  const chat = createChatService(db, { runTurn: fakeRunner("x").run });
+
+  const { chatId } = await chat.create({ username: "owner", title: "T", ...baseChar });
+
+  await chat.star({ username: "owner", chatId, starred: true });
+  expect((await chat.getChat({ username: "owner", chatId })).starred).toBe(true);
+
+  await chat.star({ username: "owner", chatId, starred: false });
+  expect((await chat.getChat({ username: "owner", chatId })).starred).toBe(false);
+});
+
+test("archive toggles archived status", async () => {
+  const db = await freshDb();
+  const chat = createChatService(db, { runTurn: fakeRunner("x").run });
+
+  const { chatId } = await chat.create({ username: "owner", title: "T", ...baseChar });
+
+  await chat.archive({ username: "owner", chatId, archived: true });
+  expect((await chat.getChat({ username: "owner", chatId })).archived).toBe(true);
+
+  await chat.archive({ username: "owner", chatId, archived: false });
+  expect((await chat.getChat({ username: "owner", chatId })).archived).toBe(false);
+});
+
+test("delete removes chat completely", async () => {
+  const db = await freshDb();
+  const chat = createChatService(db, { runTurn: fakeRunner("x").run });
+
+  const { chatId } = await chat.create({ username: "owner", title: "T", ...baseChar });
+  await chat.delete({ username: "owner", chatId });
+
+  await expect(chat.getChat({ username: "owner", chatId })).rejects.toThrow("chat not found");
+  expect(await chat.listChats({ username: "owner" })).toHaveLength(0);
+});

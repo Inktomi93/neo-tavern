@@ -203,6 +203,10 @@ export interface ChatService {
   /** Manually compact an agent-sdk chat's session (steered `/compact`). No-op (compacted:false) for
    *  openrouter chats or a chat with no session yet. The lever for compaction mode "off". */
   compact(params: CompactParams): Promise<{ compacted: boolean }>;
+  delete(params: { username: string; chatId: string }): Promise<{ deleted: boolean }>;
+  updateTitle(params: { username: string; chatId: string; title: string }): Promise<void>;
+  star(params: { username: string; chatId: string; starred: boolean }): Promise<void>;
+  archive(params: { username: string; chatId: string; archived: boolean }): Promise<void>;
 }
 
 // Thrown when a chat doesn't exist or isn't owned by the caller. The trpc layer maps

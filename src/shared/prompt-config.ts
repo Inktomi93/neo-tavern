@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { generationParamsSchema } from "./generation";
+import { regexScriptSchema } from "./regex";
 
 // The prompt structure a chat is generated under — the versioned `config` blob stored on
 // `preset_versions.config` (migration 0007). It is ONE immutable snapshot per version
@@ -92,6 +93,7 @@ export const promptConfigSchema = z
     // Generation knobs — the SINGLE provider-agnostic vocabulary (shared/generation.ts). Each runner
     // translates it to its native surface; a knob a runner can't honor is a no-op there.
     params: generationParamsSchema.default({}),
+    regexScripts: z.array(regexScriptSchema).default([]),
   })
   .refine((c) => c.sections.filter((s) => s.type === "boundary").length <= 1, {
     message: "a prompt config may have at most one boundary section",
@@ -226,4 +228,5 @@ export const DEFAULT_PROMPT_CONFIG: PromptConfig = {
     },
   ],
   params: {},
+  regexScripts: [],
 };

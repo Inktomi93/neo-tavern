@@ -1,10 +1,5 @@
-import {
-  PROMPT_MACROS,
-  type PromptConfig,
-  type PromptMacro,
-  type PromptSection,
-  type WorldInfoScope,
-} from "./prompt-config";
+import { processMacros } from "./macro";
+import type { PromptConfig, PromptSection, WorldInfoScope } from "./prompt-config";
 
 // Pure prompt assembly: render a versioned PromptConfig against a chat's resolved data into the
 // STATIC + DYNAMIC system-prompt halves (split at the config's boundary section). No DB, no infra
@@ -103,15 +98,12 @@ function renderMacros(
   character: AssembleCharacter,
   persona: AssemblePersona | null | undefined,
 ): string {
-  const values: Record<PromptMacro, string> = {
+  return processMacros(text, {
     char: character.name,
     user: persona?.name ?? "User",
     persona: persona?.description ?? "",
     scenario: character.scenario ?? "",
-  };
-  return text.replace(/\{\{(\w+)\}\}/g, (whole: string, key: string): string => {
-    const macro = PROMPT_MACROS.find((m) => m === key.toLowerCase());
-    return macro === undefined ? whole : values[macro];
+    env: {},
   });
 }
 

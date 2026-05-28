@@ -1,11 +1,18 @@
 import { z } from "zod";
 import { CHAT_MODELS, DEFAULT_CHAT_MODEL_ID } from "../../shared/models";
+import { characterRouter } from "./routers/character";
 import { chatRouter } from "./routers/chat";
+import { personaRouter } from "./routers/persona";
 import { presetRouter } from "./routers/preset";
 import { corpusRouter, searchRouter } from "./routers/search";
+import { settingsRouter } from "./routers/settings";
+import { tagRouter } from "./routers/tag";
+import { worldInfoRouter } from "./routers/world-info";
 import { publicProcedure, t } from "./trpc";
 
 export const appRouter = t.router({
+  character: characterRouter,
+  persona: personaRouter,
   health: publicProcedure.query(({ ctx }) => ({ ok: true, version: ctx.version })),
   echo: publicProcedure
     .input(z.object({ message: z.string().min(1) }))
@@ -31,6 +38,9 @@ export const appRouter = t.router({
   preset: presetRouter,
   corpus: corpusRouter,
   search: searchRouter,
+  settings: settingsRouter,
+  tag: tagRouter,
+  worldInfo: worldInfoRouter,
 });
 
 export type AppRouter = typeof appRouter;

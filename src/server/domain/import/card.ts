@@ -40,6 +40,7 @@ export interface ParsedCard {
    *  columns (title/content/legacyKeys/enabled/priority) and stashes the rest in
    *  `world_entries.metadata`. */
   lorebookEntries: Record<string, unknown>[];
+  regexScripts: Record<string, unknown>[];
   /** The whole normalized card JSON — archival, stored verbatim in `character_versions.raw`. */
   raw: unknown;
 }
@@ -71,6 +72,10 @@ interface RawCard {
   char_greeting?: unknown;
   example_dialogue?: unknown;
   world_scenario?: unknown;
+  extensions?: {
+    regex_scripts?: unknown;
+    [key: string]: unknown;
+  };
 }
 
 function isPng(data: Uint8Array): boolean {
@@ -226,6 +231,11 @@ export function parseCardPng(bytes: Uint8Array, fallbackName: string): ParsedCar
     tags: strArray(data.tags ?? cardJson.tags),
     cardVersion: nullIfEmpty(str(data.character_version)),
     lorebookEntries: extractLorebook(data.character_book),
+    regexScripts: Array.isArray(data.extensions?.regex_scripts)
+      ? data.extensions.regex_scripts.filter(
+          (e): e is Record<string, unknown> => typeof e === "object" && e !== null,
+        )
+      : [],
     raw: cardJson,
   };
 }

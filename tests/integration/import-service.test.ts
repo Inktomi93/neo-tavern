@@ -36,6 +36,7 @@ function card(o: Partial<ParsedCard> = {}): ParsedCard {
     tags: [],
     cardVersion: null,
     lorebookEntries: [],
+    regexScripts: [],
     raw: { spec: "chara_card_v2" },
     ...o,
   };

@@ -45,6 +45,8 @@ export function createSend(ctx: ChatContext, ops: { runCompaction: RunCompaction
       }
 
       const userSeq = currentMax + 1;
+      // TODO: Phase 4 - Run regexService.executeScripts() on params.content for "USER_INPUT" placement here
+      // Requires fetching promptConfig early or getting regex scripts from settings.
       await db.insert(messages).values({
         id: newId(),
         chatId: params.chatId,
@@ -121,6 +123,8 @@ export function createSend(ctx: ChatContext, ops: { runCompaction: RunCompaction
             generation: promptConfig.params,
             ...(chat.sessionId ? { resume: chat.sessionId } : {}),
           });
+          // TODO: Phase 4 - Run regexService.executeScripts() on turn.reply for "AI_OUTPUT" placement here
+          // using the `promptConfig.regexScripts` and `assembleCtx.macroContext`.
         } else {
           // openrouter runner: rebuild the conversation from canon (incl. the user message just
           // inserted) → chat.send or beta.responses (by api). No session store; routing rides through.

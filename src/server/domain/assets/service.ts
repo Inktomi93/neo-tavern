@@ -55,6 +55,7 @@ export interface FsckResult {
 
 export interface AssetsService {
   store(bytes: Uint8Array, kind: AssetKind, mime: string): Promise<StoredAsset>;
+  getMetadata(hash: string): Promise<{ mime: string; size: number } | undefined>;
   backfillAvatars(ownerId: string, cards: BackfillCard[]): Promise<BackfillResult>;
   collectGarbage(options: GcOptions): Promise<GcResult>;
   fsck(): Promise<FsckResult>;
@@ -110,6 +111,17 @@ export function createAssetsService(db: Db, cas: Cas): AssetsService {
 
   return {
     store,
+
+    async getMetadata(hash) {
+      const row = (
+        await db
+          .select({ mime: assets.mime, size: assets.size })
+          .from(assets)
+          .where(eq(assets.hash, hash))
+          .limit(1)
+      )[0];
+      return row;
+    },
 
     async backfillAvatars(ownerId, cards) {
       let linked = 0;

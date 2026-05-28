@@ -18,6 +18,7 @@ const customConfig: PromptConfig = {
     { type: "literal", id: "x", name: "X", role: "system", content: "CUSTOM", enabled: true },
   ],
   params: {},
+  regexScripts: [],
 };
 
 // Pin a preset version by pointing a real chat at it (the RESTRICT FK that makes it immutable).

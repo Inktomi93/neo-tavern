@@ -1,8 +1,13 @@
+import type { CharacterService } from "../domain/character";
 import type { ChatService } from "../domain/chat";
 import type { CorpusService } from "../domain/corpus";
 import type { ModelsService } from "../domain/models";
+import type { PersonaService } from "../domain/persona";
 import type { PresetService } from "../domain/preset";
 import type { SearchService } from "../domain/search";
+import type { SettingsService } from "../domain/settings";
+import type { TagService } from "../domain/tag";
+import type { WorldInfoService } from "../domain/world-info";
 import { getLog } from "../observability/logger";
 import { APP_VERSION } from "../version";
 
@@ -11,11 +16,16 @@ import { APP_VERSION } from "../version";
 // here — they never touch db/providers/auth (the layer cake forbids it, even
 // type-only). Add a service per domain feature as they land.
 export interface Services {
+  character: CharacterService;
   chat: ChatService;
   corpus: CorpusService;
   models: ModelsService;
+  persona: PersonaService;
   preset: PresetService;
   search: SearchService;
+  settings: SettingsService;
+  tag: TagService;
+  worldInfo: WorldInfoService;
 }
 
 export interface Context {

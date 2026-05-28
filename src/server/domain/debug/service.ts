@@ -10,20 +10,24 @@ import {
   assets,
   characterEmbeddings,
   characters,
+  characterTags,
   characterVersions,
   chatEvents,
   chats,
+  chatTags,
   imageEmbeddings,
   messages,
   messageVariants,
   personas,
+  personaTags,
   presets,
+  presetTags,
   presetVersions,
   sessionEntries,
-  taggables,
   tags,
   users,
   worldBooks,
+  worldBookTags,
   worldEntries,
 } from "../../../db/schema";
 import { getLog } from "../../observability/logger";
@@ -83,7 +87,11 @@ const COUNTED_TABLES: SQLiteTable[] = [
   imageEmbeddings,
   assets,
   tags,
-  taggables,
+  characterTags,
+  chatTags,
+  worldBookTags,
+  personaTags,
+  presetTags,
 ];
 
 export function createDebugService(db: Db): DebugService {
