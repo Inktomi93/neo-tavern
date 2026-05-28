@@ -72,6 +72,7 @@ export interface CharacterDetail {
   tags: string[] | null;
   creatorNotes: string | null;
   avatarAssetId: string | null;
+  avatarHash: string | null;
 }
 
 export interface CharacterSummary {
@@ -80,6 +81,7 @@ export interface CharacterSummary {
   name: string | null;
   description: string | null;
   avatarAssetId: string | null;
+  avatarHash: string | null;
   currentVersionId: string | null;
   version: number | null;
   starred: boolean;

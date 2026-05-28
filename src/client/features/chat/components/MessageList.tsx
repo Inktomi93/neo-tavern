@@ -4,7 +4,15 @@ import { useChatUIStore } from "../store";
 import type { ChatMessage } from "../types";
 import { MessageBubble } from "./MessageBubble";
 
-export function MessageList({ messages, chatId }: { messages: ChatMessage[]; chatId: string }) {
+export function MessageList({
+  messages,
+  chatId,
+  targetSeq,
+}: {
+  messages: ChatMessage[];
+  chatId: string;
+  targetSeq?: number | undefined;
+}) {
   const parentRef = useRef<HTMLDivElement>(null);
 
   // Pull from our new local Zustand store
@@ -17,12 +25,17 @@ export function MessageList({ messages, chatId }: { messages: ChatMessage[]; cha
     overscan: 5,
   });
 
-  // Auto-scroll to bottom when new messages arrive
+  // Auto-scroll to bottom when new messages arrive, or scroll to specific seq
   useEffect(() => {
-    if (isAutoScrollEnabled && messages.length > 0 && parentRef.current) {
+    if (targetSeq !== undefined && messages.length > 0 && parentRef.current) {
+      const index = messages.findIndex((m) => m.seq >= targetSeq);
+      if (index !== -1) {
+        rowVirtualizer.scrollToIndex(index, { align: "center" });
+      }
+    } else if (isAutoScrollEnabled && messages.length > 0 && parentRef.current) {
       rowVirtualizer.scrollToIndex(messages.length - 1, { align: "end" });
     }
-  }, [messages.length, rowVirtualizer, isAutoScrollEnabled]);
+  }, [messages, rowVirtualizer, isAutoScrollEnabled, targetSeq]);
 
   if (messages.length === 0) {
     return (

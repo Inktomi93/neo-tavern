@@ -12,6 +12,7 @@ import { createSettingsService } from "./domain/settings";
 import { createTagService } from "./domain/tag";
 import { createWorldInfoService } from "./domain/world-info";
 import { warmUpEmbedder } from "./embeddings/embedder";
+import { warmUpImageEmbedder } from "./embeddings/image-embedder";
 import { warmUpReranker } from "./embeddings/reranker";
 import { warmUpSummarizer } from "./embeddings/summarizer";
 import { env } from "./env";
@@ -49,16 +50,19 @@ serve({ fetch: app.fetch, port: env.PORT }, (info) => {
   // request is fast. Fire-and-forget on purpose: a momentarily-busy shared GPU shouldn't keep the
   // server from booting — a failed warm-up just means that model lazy-loads on its first request
   // (WarmModel resets a failed load so it can retry). They idle-unload again after IDLE_UNLOAD_MIN.
-  void Promise.allSettled([warmUpEmbedder(), warmUpReranker(), warmUpSummarizer()]).then(
-    (results) => {
-      for (const result of results) {
-        if (result.status === "rejected") {
-          getLog().warn(
-            { err: result.reason instanceof Error ? result.reason.message : String(result.reason) },
-            "warm-up failed (model will lazy-load on first request)",
-          );
-        }
+  void Promise.allSettled([
+    warmUpEmbedder(),
+    warmUpImageEmbedder(),
+    warmUpReranker(),
+    warmUpSummarizer(),
+  ]).then((results) => {
+    for (const result of results) {
+      if (result.status === "rejected") {
+        getLog().warn(
+          { err: result.reason instanceof Error ? result.reason.message : String(result.reason) },
+          "warm-up failed (model will lazy-load on first request)",
+        );
       }
-    },
-  );
+    }
+  });
 });

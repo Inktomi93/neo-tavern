@@ -22,6 +22,9 @@ export default defineConfig({
   ],
   server: {
     port: 5173,
+    watch: {
+      ignored: ["**/references/**"],
+    },
     proxy: {
       // Vite is the dev front door; Hono owns /api here and serves the built
       // bundle itself in production.
@@ -34,5 +37,8 @@ export default defineConfig({
   build: {
     outDir: "dist/client",
     emptyOutDir: true,
+  },
+  optimizeDeps: {
+    entries: ["index.html"],
   },
 });

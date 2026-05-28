@@ -5,7 +5,7 @@
 
 import { and, desc, eq } from "drizzle-orm";
 import type { Db } from "../../../db/client";
-import { characters, characterVersions, chats } from "../../../db/schema";
+import { assets, characters, characterVersions, chats } from "../../../db/schema";
 import { getLog } from "../../observability/logger";
 import { newId } from "../_shared/ids";
 import { ensureUser } from "../_shared/users";
@@ -53,8 +53,12 @@ export function createCharacterService(db: Db): CharacterService {
         ? undefined
         : (
             await db
-              .select()
+              .select({
+                cv: characterVersions,
+                hash: assets.hash,
+              })
               .from(characterVersions)
+              .leftJoin(assets, eq(assets.id, characterVersions.avatarAssetId))
               .where(eq(characterVersions.id, character.currentVersionId))
               .limit(1)
           )[0];
@@ -67,20 +71,21 @@ export function createCharacterService(db: Db): CharacterService {
       archived: character.archived ?? false,
       createdAt: character.createdAt,
 
-      pinned: current === undefined ? false : await versionPinned(current.id),
+      pinned: current === undefined ? false : await versionPinned(current.cv.id),
 
-      version: current?.version ?? null,
-      name: current?.name ?? null,
-      description: current?.description ?? null,
-      personality: current?.personality ?? null,
-      scenario: current?.scenario ?? null,
-      greetings: (current?.greetings as string[]) ?? null,
-      exampleMessages: current?.exampleMessages ?? null,
-      systemPrompt: current?.systemPrompt ?? null,
-      postHistoryInstructions: current?.postHistoryInstructions ?? null,
-      tags: (current?.tags as string[]) ?? null,
-      creatorNotes: current?.creatorNotes ?? null,
-      avatarAssetId: current?.avatarAssetId ?? null,
+      version: current?.cv.version ?? null,
+      name: current?.cv.name ?? null,
+      description: current?.cv.description ?? null,
+      personality: current?.cv.personality ?? null,
+      scenario: current?.cv.scenario ?? null,
+      greetings: (current?.cv.greetings as string[]) ?? null,
+      exampleMessages: current?.cv.exampleMessages ?? null,
+      systemPrompt: current?.cv.systemPrompt ?? null,
+      postHistoryInstructions: current?.cv.postHistoryInstructions ?? null,
+      tags: (current?.cv.tags as string[]) ?? null,
+      creatorNotes: current?.cv.creatorNotes ?? null,
+      avatarAssetId: current?.cv.avatarAssetId ?? null,
+      avatarHash: current?.hash ?? null,
     };
   }
 
@@ -156,6 +161,7 @@ export function createCharacterService(db: Db): CharacterService {
         let name: string | null = null;
         let descText: string | null = null;
         let avatarAssetId: string | null = null;
+        let avatarHash: string | null = null;
 
         if (c.currentVersionId !== null) {
           const cv = (
@@ -165,8 +171,10 @@ export function createCharacterService(db: Db): CharacterService {
                 name: characterVersions.name,
                 description: characterVersions.description,
                 avatarAssetId: characterVersions.avatarAssetId,
+                avatarHash: assets.hash,
               })
               .from(characterVersions)
+              .leftJoin(assets, eq(assets.id, characterVersions.avatarAssetId))
               .where(eq(characterVersions.id, c.currentVersionId))
               .limit(1)
           )[0];
@@ -175,6 +183,7 @@ export function createCharacterService(db: Db): CharacterService {
             name = cv.name;
             descText = cv.description;
             avatarAssetId = cv.avatarAssetId;
+            avatarHash = cv.avatarHash;
           }
         }
 
@@ -184,6 +193,7 @@ export function createCharacterService(db: Db): CharacterService {
           name,
           description: descText,
           avatarAssetId,
+          avatarHash,
           currentVersionId: c.currentVersionId,
           version: v,
           starred: c.starred ?? false,

@@ -5,7 +5,7 @@
 // column to drift). See docs/data-model.md + docs/assets.md.
 
 import { stat } from "node:fs/promises";
-import { and, eq, inArray, isNotNull } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, or } from "drizzle-orm";
 import type { Db } from "../../../db/client";
 import { assets, characters, characterVersions, personas } from "../../../db/schema";
 import type { AssetKind } from "../../../shared/assets";
@@ -172,28 +172,29 @@ export function createAssetsService(db: Db, cas: Cas): AssetsService {
     },
 
     async collectGarbage({ graceMs, now = Date.now() }) {
-      const referencedIds = new Set<string>();
-      for (const r of await db
-        .select({ id: characterVersions.avatarAssetId })
-        .from(characterVersions)
-        .where(isNotNull(characterVersions.avatarAssetId))) {
-        if (r.id !== null) referencedIds.add(r.id);
-      }
-      for (const r of await db
-        .select({ id: personas.avatarAssetId })
-        .from(personas)
-        .where(isNotNull(personas.avatarAssetId))) {
-        if (r.id !== null) referencedIds.add(r.id);
-      }
-      const referencedHashes = new Set<string>();
-      if (referencedIds.size > 0) {
-        for (const r of await db
-          .select({ hash: assets.hash })
-          .from(assets)
-          .where(inArray(assets.id, [...referencedIds]))) {
-          referencedHashes.add(r.hash);
-        }
-      }
+      const referencedHashesRows = await db
+        .selectDistinct({ hash: assets.hash })
+        .from(assets)
+        .where(
+          or(
+            inArray(
+              assets.id,
+              db
+                .select({ id: characterVersions.avatarAssetId })
+                .from(characterVersions)
+                .where(isNotNull(characterVersions.avatarAssetId)),
+            ),
+            inArray(
+              assets.id,
+              db
+                .select({ id: personas.avatarAssetId })
+                .from(personas)
+                .where(isNotNull(personas.avatarAssetId)),
+            ),
+          ),
+        );
+
+      const referencedHashes = new Set(referencedHashesRows.map((r) => r.hash));
 
       let scanned = 0;
       let removed = 0;

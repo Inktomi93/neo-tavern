@@ -10,6 +10,17 @@ export function useDiscover(q: string, rerank: boolean, active: boolean) {
   );
 }
 
+export function useCorpus(q: string, rerank: boolean, active: boolean) {
+  return trpc.search.corpus.useQuery({ queryText: q, rerank }, { enabled: active && q.length > 0 });
+}
+
+export function useSegments(q: string, rerank: boolean, active: boolean) {
+  return trpc.search.segments.useQuery(
+    { queryText: q, rerank },
+    { enabled: active && q.length > 0 },
+  );
+}
+
 export function useFind(q: string, rerank: boolean, active: boolean) {
   return trpc.search.find.useQuery({ queryText: q, rerank }, { enabled: active && q.length > 0 });
 }

@@ -64,7 +64,7 @@ export function CharacterEditor() {
       const res = await fetch("/api/assets/upload", { method: "POST", body: fd });
       if (res.ok) {
         const data = await res.json();
-        setAvatarAssetId(data.id);
+        setAvatarAssetId(data.assetId);
       } else {
         toast.error("Failed to upload avatar");
       }

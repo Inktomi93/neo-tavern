@@ -60,6 +60,7 @@ export type FindResult =
 export interface DigestSearchHit {
   chatId: string;
   characterVersionId: string;
+  characterName: string;
   tier: number;
   blockIdx: number;
   seqStart: number;
@@ -75,6 +76,7 @@ export interface DigestSearchHit {
 export interface SegmentSearchHit {
   chatId: string;
   characterVersionId: string;
+  characterName: string;
   blockIdx: number;
   seqStart: number;
   seqEnd: number;
@@ -90,11 +92,13 @@ export interface CorpusHit {
   source: "digest" | "segment";
   chatId: string;
   characterVersionId: string;
+  characterName: string;
   tier: number;
   blockIdx: number;
   seqStart: number;
   seqEnd: number;
   snippet: string;
+  topicAnchor: string | null;
   distance: number;
 }
 
@@ -607,9 +611,21 @@ export function createSearchService(db: Db, deps: SearchServiceDeps = {}): Searc
           (order.get(idOf(b)) ?? Number.POSITIVE_INFINITY),
       );
     }
+
+    const cvIds = [...new Set(pool.map((r) => r.characterVersionId))];
+    const cvMap = new Map<string, string>();
+    if (cvIds.length > 0) {
+      const cvRows = await db
+        .select({ id: characterVersions.id, name: characterVersions.name })
+        .from(characterVersions)
+        .where(inArray(characterVersions.id, cvIds));
+      for (const row of cvRows) cvMap.set(row.id, row.name);
+    }
+
     const hits: DigestSearchHit[] = pool.slice(0, k).map((r) => ({
       chatId: r.chatId,
       characterVersionId: r.characterVersionId,
+      characterName: cvMap.get(r.characterVersionId) ?? "Unknown",
       tier: r.tier,
       blockIdx: r.blockIdx,
       seqStart: r.seqStart,
@@ -676,9 +692,21 @@ export function createSearchService(db: Db, deps: SearchServiceDeps = {}): Searc
           (order.get(idOf(b)) ?? Number.POSITIVE_INFINITY),
       );
     }
+
+    const cvIds = [...new Set(pool.map((r) => r.characterVersionId))];
+    const cvMap = new Map<string, string>();
+    if (cvIds.length > 0) {
+      const cvRows = await db
+        .select({ id: characterVersions.id, name: characterVersions.name })
+        .from(characterVersions)
+        .where(inArray(characterVersions.id, cvIds));
+      for (const row of cvRows) cvMap.set(row.id, row.name);
+    }
+
     const hits: SegmentSearchHit[] = pool.slice(0, k).map((r) => ({
       chatId: r.chatId,
       characterVersionId: r.characterVersionId,
+      characterName: cvMap.get(r.characterVersionId) ?? "Unknown",
       blockIdx: r.blockIdx,
       seqStart: r.seqStart,
       seqEnd: r.seqEnd,
@@ -718,10 +746,12 @@ export function createSearchService(db: Db, deps: SearchServiceDeps = {}): Searc
       text: string;
       dist: number;
       hubScore: number | null;
+      topicAnchor: string | null;
     }>(sql`
       SELECT cd.chat_id AS chatId, cd.character_version_id AS characterVersionId, cd.tier AS tier,
              cd.block_idx AS blockIdx, cd.seq_start AS seqStart, cd.seq_end AS seqEnd, cd.text AS text,
-             vector_distance_cos(cd.embedding, vector32(${query})) AS dist, cd.hub_score AS hubScore
+             vector_distance_cos(cd.embedding, vector32(${query})) AS dist, cd.hub_score AS hubScore,
+             cd.topic_anchor AS topicAnchor
       FROM vector_top_k('chat_digests_ann', vector32(${query}), ${poolK}) AS v
       JOIN chat_digests cd ON cd.rowid = v.id
       WHERE cd.owner_id = ${ownerId}
@@ -753,11 +783,13 @@ export function createSearchService(db: Db, deps: SearchServiceDeps = {}): Searc
         source: "digest" as const,
         chatId: r.chatId,
         characterVersionId: r.characterVersionId,
+        characterName: "", // resolved after
         tier: r.tier,
         blockIdx: r.blockIdx,
         seqStart: r.seqStart,
         seqEnd: r.seqEnd,
         snippet: r.text.slice(0, SNIPPET_CHARS),
+        topicAnchor: r.topicAnchor,
         distance: r.dist,
         rank: csls(r.dist, r.hubScore),
         text: r.text,
@@ -766,11 +798,13 @@ export function createSearchService(db: Db, deps: SearchServiceDeps = {}): Searc
         source: "segment" as const,
         chatId: r.chatId,
         characterVersionId: r.characterVersionId,
+        characterName: "", // resolved after
         tier: 0,
         blockIdx: r.blockIdx,
         seqStart: r.seqStart,
         seqEnd: r.seqEnd,
         snippet: r.text.slice(0, SNIPPET_CHARS),
+        topicAnchor: null,
         distance: r.dist,
         rank: csls(r.dist, r.hubScore),
         text: r.text,
@@ -803,17 +837,32 @@ export function createSearchService(db: Db, deps: SearchServiceDeps = {}): Searc
         source: c.source,
         chatId: c.chatId,
         characterVersionId: c.characterVersionId,
+        characterName: "", // resolved after
         tier: c.tier,
         blockIdx: c.blockIdx,
         seqStart: c.seqStart,
         seqEnd: c.seqEnd,
         snippet: c.snippet,
+        topicAnchor: c.topicAnchor,
         distance: c.distance,
       });
       if (out.length >= k) break;
     }
+
+    const cvIds = [...new Set(out.map((r) => r.characterVersionId))];
+    if (cvIds.length > 0) {
+      const cvRows = await db
+        .select({ id: characterVersions.id, name: characterVersions.name })
+        .from(characterVersions)
+        .where(inArray(characterVersions.id, cvIds));
+      const cvMap = new Map(cvRows.map((r) => [r.id, r.name]));
+      for (const hit of out) {
+        hit.characterName = cvMap.get(hit.characterVersionId) ?? "Unknown";
+      }
+    }
+
     getLog().debug(
-      { k, reranked: rerank, digests: digRows.length, segments: segRows.length, hits: out.length },
+      { k, reranked: rerank, fetched: cands.length, hits: out.length },
       "search: corpus (hybrid)",
     );
     return out;

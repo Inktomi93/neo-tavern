@@ -1,6 +1,7 @@
 import { createRootRoute, Link, Outlet, useLocation } from "@tanstack/react-router";
-import { Library, MessageSquare } from "lucide-react";
+import { Home, Library } from "lucide-react";
 import { Toaster } from "sonner";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
 export const Route = createRootRoute({
@@ -11,19 +12,19 @@ function NavRail() {
   const location = useLocation();
 
   const links = [
-    { to: "/", icon: MessageSquare, label: "Chat", testId: "nav-chat" },
+    { to: "/", icon: Home, label: "Home", testId: "nav-chat" },
     {
       to: "/corpus",
-      search: { mode: "discover", q: "", rerank: false },
+      search: { mode: "chats", q: "", rerank: false },
       icon: Library,
-      label: "Corpus",
+      label: "Lorebook",
       testId: "nav-corpus",
     },
   ];
 
   return (
     <nav
-      className="flex flex-row items-center justify-around border-t bg-background p-2 sm:w-16 sm:flex-col sm:justify-start sm:gap-4 sm:border-r sm:border-t-0 sm:p-4 z-50 shrink-0"
+      className="flex flex-row items-center justify-around border-t border-border/50 bg-background/80 backdrop-blur-xl p-2 sm:w-16 sm:flex-col sm:justify-start sm:gap-4 sm:border-r sm:border-t-0 sm:p-4 z-50 shrink-0 relative"
       data-testid="app-nav-rail"
       aria-label="Main Navigation"
     >
@@ -60,12 +61,21 @@ function NavRail() {
 
 function RootLayout() {
   return (
-    <div className="flex h-dvh w-full flex-col-reverse sm:flex-row bg-background text-foreground antialiased selection:bg-primary/20">
-      <NavRail />
-      <main className="flex-1 overflow-hidden relative" data-testid="app-main-content">
-        <Outlet />
-      </main>
-      <Toaster position="bottom-right" theme="dark" richColors />
-    </div>
+    <TooltipProvider delayDuration={300}>
+      <div className="flex h-dvh w-full flex-col-reverse sm:flex-row bg-background text-foreground antialiased selection:bg-primary/20 relative overflow-hidden">
+        {/* Decorative Background */}
+        <div className="absolute inset-0 z-0 pointer-events-none">
+          <div className="absolute -top-[20%] -left-[10%] w-[50%] h-[50%] bg-primary/10 rounded-full blur-[120px] mix-blend-screen" />
+          <div className="absolute bottom-[10%] -right-[10%] w-[40%] h-[60%] bg-indigo-500/10 rounded-full blur-[140px] mix-blend-screen" />
+          <div className="absolute top-[40%] left-[60%] w-[30%] h-[30%] bg-purple-500/10 rounded-full blur-[100px] mix-blend-screen" />
+        </div>
+
+        <NavRail />
+        <main className="flex-1 overflow-hidden relative z-10" data-testid="app-main-content">
+          <Outlet />
+        </main>
+        <Toaster position="bottom-right" theme="dark" richColors />
+      </div>
+    </TooltipProvider>
   );
 }

@@ -1,4 +1,5 @@
 import { createReadStream } from "node:fs";
+import { Readable } from "node:stream";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { Hono } from "hono";
@@ -78,7 +79,8 @@ export function buildApp(db: Db, cas: Cas, services: Services, isProd: boolean) 
 
     // We use Web Streams (or Node streams cast to unknown) as Hono supports streaming natively.
     const stream = createReadStream(cas.blobPath(hash));
-    return c.body(stream as unknown as ReadableStream, 200, {
+    const webStream = Readable.toWeb(stream) as unknown as ReadableStream;
+    return c.body(webStream, 200, {
       "Content-Type": meta.mime,
       "Content-Length": meta.size.toString(),
       "Cache-Control": "public, max-age=31536000, immutable", // it's CAS!

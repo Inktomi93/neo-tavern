@@ -8,8 +8,12 @@ export const Route = createFileRoute("/corpus")({
     // Cast to a typed shape so dot access satisfies both tsc (no index-signature access) and
     // biome (no literal computed keys) — the conventions.md fix for external/dynamic data.
     const s = search as { mode?: unknown; q?: unknown; rerank?: unknown };
+    const validModes = ["chats", "segments", "characters"] as const;
+    const mode = validModes.includes(s.mode as (typeof validModes)[number])
+      ? (s.mode as (typeof validModes)[number])
+      : "chats";
     return {
-      mode: s.mode === "find" ? "find" : "discover",
+      mode,
       q: typeof s.q === "string" ? s.q : "",
       rerank: s.rerank === true || s.rerank === "true",
     };

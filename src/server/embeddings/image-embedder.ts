@@ -2,6 +2,7 @@ import {
   env as hf,
   type ImageFeatureExtractionPipeline,
   pipeline,
+  RawImage,
 } from "@huggingface/transformers";
 import { env } from "../env";
 import { WarmModel } from "./warm-model";
@@ -35,11 +36,9 @@ const warm = new WarmModel<ImageFeatureExtractionPipeline>({
     }),
   unload: (extractor) => extractor.dispose(),
   warm: async (extract) => {
-    // Note: WarmUp requires a real 1x1 image or data URI to avoid crashing the pipeline.
-    // We create a tiny 1x1 transparent PNG data URI for the warm up pass.
-    const tinyPng =
-      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
-    await extract(tinyPng);
+    // We create a tiny 1x1 black RGB image using RawImage to avoid fetch/data-URI bugs in node.
+    const img = new RawImage(new Uint8ClampedArray([0, 0, 0]), 1, 1, 3);
+    await extract(img);
   },
 });
 

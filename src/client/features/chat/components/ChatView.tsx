@@ -3,7 +3,7 @@ import { ChatHeader } from "./ChatHeader";
 import { MessageInput } from "./MessageInput";
 import { MessageList } from "./MessageList";
 
-export function ChatView({ chatId }: { chatId: string }) {
+export function ChatView({ chatId, seq }: { chatId: string; seq?: number | undefined }) {
   const messages = useMessages(chatId);
   const send = useSendMessage(chatId);
 
@@ -28,7 +28,7 @@ export function ChatView({ chatId }: { chatId: string }) {
             <span className="text-muted-foreground animate-pulse">Loading memory...</span>
           </div>
         ) : (
-          <MessageList messages={list} chatId={chatId} />
+          <MessageList messages={list} chatId={chatId} targetSeq={seq} />
         )}
       </div>
       <div

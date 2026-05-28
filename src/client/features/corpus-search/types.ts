@@ -6,8 +6,10 @@ import type { AppRouter } from "../../../server/trpc/router";
 type Outputs = inferRouterOutputs<AppRouter>;
 export type DiscoverCharacter = Outputs["search"]["discover"][number];
 export type FindResult = Outputs["search"]["find"][number];
+export type CorpusHit = Outputs["search"]["corpus"][number];
+export type SegmentSearchHit = Outputs["search"]["segments"][number];
 
-export type SearchMode = "discover" | "find";
+export type SearchMode = "chats" | "segments" | "characters";
 
 /** The submitted search, mirrored into the URL (?mode=&q=&rerank=) so results are shareable. */
 export interface CorpusSearchState {
