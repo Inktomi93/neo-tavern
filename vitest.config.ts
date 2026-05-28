@@ -3,14 +3,38 @@ import { defineConfig } from "vitest/config";
 // Testing doctrine lives in tests/AGENTS.md. When client/component tests land,
 // split this into node + happy-dom `projects` (see that doc for the target config).
 export default defineConfig({
+  resolve: {
+    alias: { "@": new URL("./src/client", import.meta.url).pathname },
+  },
   test: {
-    environment: "node",
-    // Scope to OUR tests only — the default glob would otherwise run the test
-    // suites inside references/ (the cloned SillyTavern/Astra/Marinara repos).
-    // tests/e2e is Playwright's (its own runner), never vitest's.
-    include: ["src/**/*.{test,spec}.{ts,tsx}", "tests/**/*.{test,spec}.{ts,tsx}"],
+    projects: [
+      {
+        test: {
+          name: "server",
+          environment: "node",
+          include: [
+            "src/server/**/*.test.ts",
+            "src/shared/**/*.test.ts",
+            "tests/integration/**/*.test.ts",
+          ],
+        },
+      },
+      {
+        test: {
+          name: "client",
+          environment: "happy-dom",
+          include: ["src/client/**/*.test.{ts,tsx}"],
+          setupFiles: ["tests/support/setup-dom.ts"],
+        },
+      },
+    ],
     exclude: ["**/node_modules/**", "**/dist/**", "references/**", "tests/e2e/**"],
-    // No tests yet (lean boot). Keep `pnpm check` green until Phase 2 adds them.
+    restoreMocks: true,
     passWithNoTests: true,
+    coverage: {
+      provider: "v8",
+      include: ["src/**"],
+      exclude: ["**/*.test.*", "**/routeTree.gen.ts", "src/**/index.ts"],
+    },
   },
 });
