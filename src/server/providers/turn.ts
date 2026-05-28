@@ -117,6 +117,11 @@ export interface RateLimitSnapshot {
   rateLimitType: SDKRateLimitInfo["rateLimitType"];
   resetsAt: number | undefined;
   utilization: number | undefined;
+  /** True when the account is consuming overage beyond the subscription limit.
+   *  This is the ban-risk canary — surface loudly in the UI when true. */
+  isUsingOverage: boolean | undefined;
+  /** The threshold fraction (0–1) that was crossed to trigger this event (e.g. 0.75). */
+  surpassedThreshold: number | undefined;
 }
 
 export type TurnEvent =
@@ -154,6 +159,15 @@ export type TurnEvent =
     }
   | { kind: "auth_status"; at: number; isAuthenticating: boolean; error: string | undefined };
 
+export interface CostDetails {
+  /** Total upstream inference cost (= promptUsd + completionUsd). */
+  totalUsd: number;
+  /** Prompt/input portion of the upstream cost. */
+  promptUsd: number;
+  /** Completion/output portion of the upstream cost. */
+  completionUsd: number;
+}
+
 export interface ChatTurnUsage {
   model: string;
   tokensIn: number;
@@ -167,12 +181,23 @@ export interface ChatTurnUsage {
   /** Cache-creation tokens by TTL bucket (usage.cache_creation) — Anthropic/sdk only; null on openrouter. */
   cacheCreation5mTokens: number | null;
   cacheCreation1hTokens: number | null;
+  /** Tokens used for CoT reasoning/thinking (chat: completionTokensDetails.reasoningTokens;
+   *  responses: outputTokensDetails.reasoningTokens). null when the path doesn't report it. */
+  reasoningTokens: number | null;
   /** Model context window — drives the context-fill meter. sdk reports it; openrouter backfills from
    *  the catalog `contextLength` (null if the model isn't in the catalog). */
   contextWindow: number | null;
   /** Output ceiling. sdk reports the effective cap; openrouter echoes the requested cap (else null). */
   maxOutputTokens: number | null;
+  /** Number of web-search tool calls this turn (sdk-mode only; 0 in our locked config). */
+  webSearchRequests: number;
   costUsd: number;
+  /** Per-phase cost breakdown (prompt vs. completion) from OpenRouter usage.costDetails.
+   *  null on sdk-mode (costUSD is total; Anthropic doesn't split it). */
+  costDetails: CostDetails | null;
+  /** True when this turn was billed against a BYOK (Bring Your Own Key) credential rather
+   *  than our OpenRouter credits. Changes cost interpretation. */
+  isByok: boolean | null;
 }
 
 export interface ChatTurnResult {
@@ -186,6 +211,9 @@ export interface ChatTurnResult {
   finishReason: NormalizedFinishReason | null;
   /** Time-to-first-token (ms), when reported. */
   ttftMs: number | null;
+  /** API-only duration in ms (excludes subprocess spawn overhead). sdk: result.duration_api_ms;
+   *  openrouter: wall-clock from request start to last chunk. null if not available. */
+  durationApiMs: number | null;
   /** Non-null when transient API errors occurred but retries recovered the turn. */
   apiErrorStatus: number | null;
   numTurns: number;

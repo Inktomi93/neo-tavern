@@ -5,19 +5,21 @@ right bones*, not throwaway scaffolding. This is the synthesis of a survey of th
 references (`references/{astra-projecta, marinara-engine, sillytavern}` — all gitignored, so the
 conclusions live here). Roles, settled:
 
-- **Marinara-Engine = the architectural twin** (React + Drizzle/libSQL + Agent SDK). Mirror its
-  frontend patterns most closely. It independently built **our exact preset model** (reorderable
-  sections + markers + a cache `boundary`, versioned config blob, drag-handle editor) — strong
-  validation of `shared/prompt-config.ts`. Its `PresetEditor` is the blueprint for our prompt-manager.
-- **AstraProjecta = the visual skin + the slicing the owner likes.** Its feature-slicing maps 1:1 to
-  ours (and ours is *enforced*, see below). Steal its look: a thin left **icon nav rail** + collapsible
-  panel, and a **2:3 portrait character-card grid** (full-bleed avatar, gradient overlay, name+count).
-- **SillyTavern = the interaction conventions** a migrating user must not lose. Cut its complexity.
+- **Marinara-Engine:** It used the right tools (`Zustand` + `React Query`), but its execution became a monolithic **DOM hell** (e.g., massive 2,200-line components like `ChatArea.tsx` and an 80KB global `ui.store.ts`). We will steal its toolset but strictly avoid its bloated god-components and massive global stores.
+- **AstraProjecta:** It got feature-slicing right (`packages/features`), but it made two fatal architectural mistakes: (1) splitting the app into separate `app/desktop` and `app/mobile` deployments, and (2) using a weird hybrid of Vanilla JS DOM injection wrapped around React islands. We will steal its look and feature-isolation, but stay 100% React and use a single unified deployment.
+- **SillyTavern:** The interaction conventions a migrating user must not lose. Cut its complexity and eliminate its jQuery DOM hell.
 
-## App shell
-Astra's pattern: a thin always-visible **icon nav rail** + a collapsible content panel + the main area.
-The key move for *us* — the rail makes the **two co-equal goals first-class**: `Chat | Corpus | Characters`.
-The corpus search (`/corpus`, already built) is a peer to chat, not buried. One dark theme, no switcher.
+## Architectural Rigor & Enforcements
+To guarantee our frontend doesn't become a nightmare of tangled state:
+1. **No God-Components:** `biome.jsonc` enforces `noExcessiveCognitiveComplexity` as a hard error. If a component gets too large or complex, the build fails.
+2. **Feature Isolation:** `dependency-cruiser` strictly enforces that features in `client/features/` are sealed boxes that cannot import each other's internals.
+3. **Localized State:** Zustand stores must be localized per feature (e.g., `features/chat/store.ts`), NEVER dumped into a massive global `ui.store.ts` unless the state is genuinely global (like the active theme).
+
+## App shell (Single-Deploy Responsive)
+Unlike Astra, we will use a **Single Unified App Shell** powered by Tailwind v4 breakpoints.
+- **Desktop:** A thin always-visible **icon nav rail** (`Chat | Corpus | Characters`) + a collapsible content panel.
+- **Mobile:** The exact same nav rail snaps to the **bottom tab bar** via `md:hidden`, giving a native app feel from the exact same codebase.
+The corpus search (`/corpus`) is a peer to chat, not buried. One dark theme, no switcher.
 
 ## Chat surface (mirror Marinara)
 - Message rows: avatar + name, role styling, **in-house markdown renderer** (both Marinara and Astra
@@ -58,6 +60,33 @@ Astra `packages/{ui-kit, core, features/<f>+index, st-surfaces, app/{desktop,mob
 `dependency-cruiser` rules (`client-feature-front-door`, `client-no-cross-feature`,
 `client-foundations-no-features`) make each feature a **sealed box** (Astra's is convention only). We
 have no `st-surfaces` analog — we own our UI, we don't wrap ST.
+
+### The Concrete Client Folder Structure
+Based on our reference analysis, here is exactly how `src/client/` is organized:
+```text
+src/client/
+├── components/          # Generic foundations (dumb UI)
+│   └── ui/              # shadcn/ui primitives (Button, Dialog)
+├── features/            # Sealed business logic boxes
+│   ├── chat/            # The chat interface
+│   │   ├── components/  # Chat-specific UI (MessageBubble)
+│   │   ├── store.ts     # Feature-local Zustand state
+│   │   └── index.ts     # The ONLY allowed export surface
+│   ├── prompt-manager/  # The Preset editor
+│   ├── character/       # Card library
+│   └── corpus-search/   # RAG analysis
+├── routes/              # TanStack routing & AppShell layout
+├── lib/                 # Core utils (trpc, cn)
+└── hooks/               # Generic React hooks
+```
+
+## Backend-Heavy, Frontend-Light Philosophy
+SillyTavern became a sluggish "DOM Hell" because it forced the browser to do backend work (JS-based `tiktoken` counting, `fuse.js` fuzzy searches, `localforage` offline databases, and `@jimp` image processing). 
+We reject that model. `neo-tavern` is **impossibly fast** because:
+- **Tokenization:** Handled natively in Rust (`@anush008/tokenizers`) on the `hono` backend.
+- **Semantic Search:** Handled by in-process GPU vector searches (`libSQL`) on the backend.
+- **Data Persistence:** Handled securely by SQLite; the client is completely stateless via TanStack Query.
+The React frontend exists *purely* to render state quickly and beautifully using Astra's Radix UI models.
 
 ## Future feature: CardRefinery
 The owner's `SillyTavern-CardRefinery` (cloned to `references/card-refinery`) — the **Score → Rewrite →

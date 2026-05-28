@@ -43,3 +43,7 @@ tools/cuda/.venv/
 # repopulate); the clones themselves are not.
 references/*
 !references/README.md
+
+# Local scratchpad/lab scripts
+scratch/*
+!scratch/.gitkeep

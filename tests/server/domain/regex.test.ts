@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { createRegexService } from "../../../src/server/domain/regex/service";
 import { SimpleMacroRegistry } from "../../../src/shared/macro/registry";
 import type { MacroContext } from "../../../src/shared/macro/types";
 import type { RegexScript } from "../../../src/shared/regex";
+import { createRegexService } from "../../../src/shared/regex-service";
 
 describe("Regex Domain Service", () => {
   const service = createRegexService();
@@ -124,5 +124,86 @@ describe("Regex Domain Service", () => {
     // processMacros will use the `ctx` we pass in. `ctx.char` is "Seraphina".
     // Wait, the global registry defaults for `char` look at `ctx.char`.
     expect(result).toBe("You are Inktomi, and I am Seraphina");
+  });
+  it("handles trimStrings on capture groups", () => {
+    const scripts = [
+      {
+        id: "1",
+        name: "Trim Strings",
+        findRegex: "hello (world|earth)",
+        replaceString: "hi $1",
+        trimStrings: ["world"], // Should completely remove "world"
+        placement: ["AI_OUTPUT"],
+        enabled: true,
+      } as unknown as RegexScript,
+    ];
+
+    const result = service.executeScripts(
+      "hello world, hello earth",
+      scripts,
+      "AI_OUTPUT",
+      mockCtx,
+    );
+    // 1. "hello world" -> $1 is "world", "world" is trimmed to "", "hi " + "" -> "hi "
+    // 2. "hello earth" -> $1 is "earth", "world" is not in "earth", "hi " + "earth" -> "hi earth"
+    expect(result).toBe("hi , hi earth");
+  });
+
+  it("handles substituteRegex RAW", () => {
+    const scripts = [
+      {
+        id: "1",
+        name: "Substitute RAW",
+        findRegex: "hello {{char}}",
+        substituteRegex: 1, // RAW
+        replaceString: "hi Seraphina",
+        placement: ["AI_OUTPUT"],
+        enabled: true,
+      } as unknown as RegexScript,
+    ];
+
+    const result = service.executeScripts("hello Seraphina", scripts, "AI_OUTPUT", mockCtx);
+    // "hello {{char}}" -> "hello Seraphina", which matches "hello Seraphina"
+    expect(result).toBe("hi Seraphina");
+  });
+
+  it("handles substituteRegex ESCAPED", () => {
+    // Escaped substitute should escape regex meta-characters inside the evaluated macro
+    // Let's configure ctx.char to contain meta characters just for this test
+    // Wait, mockCtx.char is hardcoded to "Seraphina", but our evaluator uses the global registry.
+    // In our `mockCtx`, char is "Seraphina". The registry reads `ctx.char`.
+    // We can just temporarily override the registry or create a local variable.
+    // Let's use `{{user}}` and override the `ctx.user`
+    const localCtxWithUser = { ...mockCtx, user: "Inktomi*" };
+
+    const scripts = [
+      {
+        id: "1",
+        name: "Substitute ESCAPED",
+        findRegex: "hello {{user}}",
+        substituteRegex: 2, // ESCAPED
+        replaceString: "hi Inktomi",
+        placement: ["AI_OUTPUT"],
+        enabled: true,
+      } as unknown as RegexScript,
+    ];
+
+    // "Inktomi*" has a "*". ESCAPED should turn it into "Inktomi\*", so it matches literal "Inktomi*"
+    const result1 = service.executeScripts(
+      "hello Inktomi*",
+      scripts,
+      "AI_OUTPUT",
+      localCtxWithUser,
+    );
+    expect(result1).toBe("hi Inktomi");
+
+    // "Inktomi1" shouldn't match because "\*" means literal asterisk, not "zero or more i's"
+    const result2 = service.executeScripts(
+      "hello Inktomi1",
+      scripts,
+      "AI_OUTPUT",
+      localCtxWithUser,
+    );
+    expect(result2).toBe("hello Inktomi1");
   });
 });

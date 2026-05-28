@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "lsp-mcp-server": {
+      "command": "lsp-mcp-server",
+      "args": [],
+      "env": {
+        "LSP_LOG_LEVEL": "error"
+      }
+    }
+  }
+}

@@ -31,6 +31,11 @@ export interface MacroContext {
   evaluateString: (text: string) => string;
   // Evaluate an AST directly (e.g. for block macro children)
   evaluateAST: (ast: MacroAST) => string;
+  // Optional post-processing hook for macro values (e.g. escaping regex chars)
+  postProcess?: (val: string) => string;
+  // Optional warning sink. Server layer injects getLog().warn; tests/client can leave undefined.
+  // Kept as a plain callback (not a Logger import) so shared/ stays isolated from server/.
+  onWarn?: (msg: string, err?: unknown) => void;
 }
 
 export type MacroHandler = (args: string[], ctx: MacroContext, children?: MacroAST) => string;

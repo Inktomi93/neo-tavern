@@ -69,35 +69,9 @@ only ✅-tracking in the repo; keep it one line.
   `includePartialMessages` → `stream_event` deltas (the `onEvent` seam exists); raw-mode Responses
   stream events. Also enables **live-push / multi-device sync** (the auto-refresh half — today it
   converges on refresh). Caddy: disable proxy buffering for `text/event-stream` + keepalives.
-- **#40 — `{{memory}}` marker:** ✅ **DONE** (the SillyTavern `vectors` model — see that extension).
-  First-class `GenerationParams.memory` knob (`enabled` + `queryMessages`/`insert`/`protect`/`minScore`/
-  `chunkChars`/`rerank`, ST defaults 2/3/5/0.25/400). `domain/chat/memory.ts` embeds this chat's
-  messages lazily (entityType `chat_message`, per-message ≤chunkChars), then each turn queries with the
-  recent N and retrieves the top `insert` relevant OLDER messages (exact in-process cosine over just
-  this chat's vectors — not the global ANN; excludes the recent `protect`; ≥`minScore`; optional
-  cross-encoder rerank). The block fills the **placeable `{{memory}}` marker** in the dynamic
-  (cache-safe) half — runner-agnostic, `assemblePrompt` stays pure (`ctx.memory`, like `compactSummary`).
-  Opt-in; the marker's in the default config (renders nothing until the knob is on).
-- **#41 — managed compaction:** ✅ **DONE.** `GenerationParams.compaction` (`shared/generation.ts`):
-  mode `auto` (SDK default; `thresholdPct` → `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`) · `managed`
-  (`DISABLE_AUTO_COMPACT` + the domain auto-fires a steered `/compact` after a turn once context-fill
-  crosses `thresholdPct`, default 0.85) · `off` (disabled; owner triggers `chat.compact` manually).
-  RP-tuned default instructions; agent-sdk only; opt-in (default `auto` = no behavior change).
-  Compactions land in `chat_events`. **Cross-mode portability:** a `/compact` captures the summary +
-  the canon anchor onto `chats.compactSummary`/`compactedAtSeq`; the `{{compact_summary}}` prompt
-  marker injects it and the stateless openrouter runner "picks up from the compaction point" (history
-  from seq > anchor), carried across `forkChat`. Canon (`messages`) is never touched — pre-compaction
-  stays fully viewable. (Owned-context `load()` still optional/deferred.)
-- **#44 — `chats.pinnedPersonaId`** ✅ **DONE** (migration 0017): the card's `{{user}}` resolves
-  against the pinned persona, the persona marker / literal sections against the active `personaId`,
-  so switching who you play mid-chat never rewrites the card's references. `buildAssembleContext`
-  loads them distinctly (pinned null → falls back to active); `forkChat` preserves the pin. The
-  active-persona-switch *API* is still frontend (today both are null/equal at create).
 - **#48 — raw-mode refinements:** (1) granular raw caching — `cache_control` breakpoints at the
   static/dynamic split / history depth (à la ST), beyond the current static-block 5m directive — still
-  deferred (low priority). (2) ✅ **DONE — the persisted `chat_events` table** (migration 0014):
-  every turn's `TurnEvent[]` (compaction/retry/rate-limit/status/auth) is recorded + surfaced in the
-  `/api/_debug/db/chat` inspector.
+  deferred (low priority).
 
 **Infra / corpus:**
 - **#46 — Docker/compose image + Playwright E2E**: one image into the authentik+caddy stack, port

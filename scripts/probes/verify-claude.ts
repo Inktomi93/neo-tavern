@@ -1,6 +1,6 @@
 import process from "node:process";
-import { verifyClaudeAuth } from "../src/server/providers/claude-sdk";
-import { getOpenRouterClient, isOpenRouterConfigured } from "../src/server/providers/openrouter";
+import { verifyClaudeAuth } from "../../src/server/providers/claude-sdk";
+import { getOpenRouterClient, isOpenRouterConfigured } from "../../src/server/providers/openrouter";
 
 // Diagnostic for both chat providers. Run with `pnpm verify:claude`.
 // The Claude check spawns the Agent SDK once against your `claude login` (Max

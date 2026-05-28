@@ -338,18 +338,22 @@ export const worldBooks = sqliteTable("world_books", {
   createdAt: integer("created_at").notNull(),
 });
 
-export const worldEntries = sqliteTable("world_entries", {
-  id: text("id").primaryKey(),
-  worldBookId: text("world_book_id")
-    .notNull()
-    .references(() => worldBooks.id, { onDelete: "cascade" }),
-  title: text("title").notNull(),
-  content: text("content").notNull(),
-  legacyKeys: text("legacy_keys", { mode: "json" }), // ST keyword triggers — import compat only, never scanned
-  enabled: integer("enabled", { mode: "boolean" }).default(true),
-  priority: integer("priority").default(0),
-  metadata: text("metadata", { mode: "json" }),
-});
+export const worldEntries = sqliteTable(
+  "world_entries",
+  {
+    id: text("id").primaryKey(),
+    worldBookId: text("world_book_id")
+      .notNull()
+      .references(() => worldBooks.id, { onDelete: "cascade" }),
+    title: text("title").notNull(),
+    content: text("content").notNull(),
+    legacyKeys: text("legacy_keys", { mode: "json" }), // ST keyword triggers — import compat only, never scanned
+    enabled: integer("enabled", { mode: "boolean" }).default(true),
+    priority: integer("priority").default(0),
+    metadata: text("metadata", { mode: "json" }),
+  },
+  (t) => [index("world_entries_book_idx").on(t.worldBookId)],
+);
 
 export const chatWorldEntries = sqliteTable(
   "chat_world_entries",
@@ -363,7 +367,10 @@ export const chatWorldEntries = sqliteTable(
     scope: text("scope").default("always"),
     pinned: integer("pinned", { mode: "boolean" }).default(true),
   },
-  (t) => [primaryKey({ columns: [t.chatId, t.entryId] })],
+  (t) => [
+    primaryKey({ columns: [t.chatId, t.entryId] }),
+    index("chat_world_entries_entry_idx").on(t.entryId),
+  ],
 );
 
 export const characterVersionWorldEntries = sqliteTable(
@@ -377,7 +384,10 @@ export const characterVersionWorldEntries = sqliteTable(
       .references(() => worldEntries.id, { onDelete: "cascade" }),
     scope: text("scope").default("always"),
   },
-  (t) => [primaryKey({ columns: [t.characterVersionId, t.entryId] })],
+  (t) => [
+    primaryKey({ columns: [t.characterVersionId, t.entryId] }),
+    index("cv_world_entries_entry_idx").on(t.entryId),
+  ],
 );
 
 // ───────────────────────── Config, assets, search, tags ─────────────────────────
@@ -618,7 +628,10 @@ export const characterTags = sqliteTable(
       .notNull()
       .references(() => characters.id, { onDelete: "cascade" }),
   },
-  (t) => [primaryKey({ columns: [t.tagId, t.characterId] })],
+  (t) => [
+    primaryKey({ columns: [t.tagId, t.characterId] }),
+    index("character_tags_char_idx").on(t.characterId),
+  ],
 );
 
 export const chatTags = sqliteTable(
@@ -631,7 +644,7 @@ export const chatTags = sqliteTable(
       .notNull()
       .references(() => chats.id, { onDelete: "cascade" }),
   },
-  (t) => [primaryKey({ columns: [t.tagId, t.chatId] })],
+  (t) => [primaryKey({ columns: [t.tagId, t.chatId] }), index("chat_tags_chat_idx").on(t.chatId)],
 );
 
 export const worldBookTags = sqliteTable(
@@ -644,7 +657,10 @@ export const worldBookTags = sqliteTable(
       .notNull()
       .references(() => worldBooks.id, { onDelete: "cascade" }),
   },
-  (t) => [primaryKey({ columns: [t.tagId, t.worldBookId] })],
+  (t) => [
+    primaryKey({ columns: [t.tagId, t.worldBookId] }),
+    index("world_book_tags_book_idx").on(t.worldBookId),
+  ],
 );
 
 export const personaTags = sqliteTable(
@@ -657,7 +673,10 @@ export const personaTags = sqliteTable(
       .notNull()
       .references(() => personas.id, { onDelete: "cascade" }),
   },
-  (t) => [primaryKey({ columns: [t.tagId, t.personaId] })],
+  (t) => [
+    primaryKey({ columns: [t.tagId, t.personaId] }),
+    index("persona_tags_persona_idx").on(t.personaId),
+  ],
 );
 
 export const presetTags = sqliteTable(
@@ -670,7 +689,10 @@ export const presetTags = sqliteTable(
       .notNull()
       .references(() => presets.id, { onDelete: "cascade" }),
   },
-  (t) => [primaryKey({ columns: [t.tagId, t.presetId] })],
+  (t) => [
+    primaryKey({ columns: [t.tagId, t.presetId] }),
+    index("preset_tags_preset_idx").on(t.presetId),
+  ],
 );
 
 // ───────────────────────── SDK session persistence (the DbSessionStore substrate) ─────────────────────────

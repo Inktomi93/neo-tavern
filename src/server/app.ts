@@ -7,10 +7,10 @@ import { isAssetHash } from "../shared/assets";
 import { processMacros } from "../shared/macro";
 import type { MacroContext } from "../shared/macro/types";
 import type { RegexPlacement, RegexScript } from "../shared/regex";
+import { createRegexService } from "../shared/regex-service";
 import { resolveUsername } from "./auth/trust-header";
 import { createAssetsService } from "./domain/assets";
 import { createDebugService } from "./domain/debug";
-import { createRegexService } from "./domain/regex";
 import { env } from "./env";
 import { registerDebugRoutes } from "./observability/debug";
 import { getLog } from "./observability/logger";
@@ -35,9 +35,10 @@ export function buildApp(db: Db, cas: Cas, services: Services, isProd: boolean) 
     const body = await c.req.json();
     const text = typeof body.text === "string" ? body.text : "";
     const options = typeof body.options === "object" && body.options !== null ? body.options : {};
-
-    // Evaluate via Macro Engine
-    const result = processMacros(text, options);
+    const result = processMacros(text, {
+      ...options,
+      onWarn: (msg, err) => getLog().warn({ err }, msg),
+    });
     return c.json({ result });
   });
 
@@ -54,6 +55,7 @@ export function buildApp(db: Db, cas: Cas, services: Services, isProd: boolean) 
       ...options,
       evaluateAST: () => "",
       evaluateString: () => "",
+      onWarn: (msg: string, err?: unknown) => getLog().warn({ err }, msg),
     };
 
     const result = regexService.executeScripts(

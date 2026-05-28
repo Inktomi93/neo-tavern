@@ -56,9 +56,14 @@ interface Loaded {
 }
 
 // Match the embedder: ORT transformer fusions; on CUDA also pin the physical GPU (default 1).
+// graphOptimizationLevel: CPU stops at "extended" because the fp16 reranker triggers an ORT bug in
+// the "all"-only `SimplifiedLayerNormFusion` (looks up a constant_output_0 by name that the prior
+// InsertedPrecisionFreeCast renamed) — crashes during model init. "extended" already includes the
+// transformer-specific fusions we care about; "all" only adds the unsafe ones here. On CUDA the
+// fusion path is different (CUDA EP-owned), so "all" is fine and validated by the corpus rebuild.
 function sessionOptions(): Record<string, unknown> {
   return {
-    graphOptimizationLevel: "all",
+    graphOptimizationLevel: env.RERANK_DEVICE === "cuda" ? "all" : "extended",
     ...(env.RERANK_DEVICE === "cuda"
       ? { executionProviders: [{ name: "cuda", deviceId: env.RERANK_GPU_ID }] }
       : {}),

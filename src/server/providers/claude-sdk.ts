@@ -10,6 +10,7 @@ import {
   type TerminalReason,
   type ThinkingConfig,
 } from "@anthropic-ai/claude-agent-sdk";
+import type { ChatDeltaEvent } from "../../shared/chat-types";
 import { type GenerationParams, isThinkingOn } from "../../shared/generation";
 import { type ChatModelId, DEFAULT_CHAT_MODEL_ID } from "../../shared/models";
 import { secondsToMs } from "../../shared/time";
@@ -214,9 +215,11 @@ export interface ChatTurnParams {
   generation?: GenerationParams | undefined;
   /** Optional live event sink (compaction/retry/rate-limit/...). The streaming-UI seam:
    *  a future SSE subscription forwards these; default undefined = collect-and-return only.
-   *  (Token-delta streaming via includePartialMessages is deliberately NOT wired yet — no
    *  consumer until the chat UI lands; see docs/sdk-notes.md.) */
   onEvent?: (event: TurnEvent) => void;
+  /** Streaming token-delta callback — discriminated by kind (text|reasoning).
+   *  The Claude agent-sdk path always emits kind="text" (CoT is internal to the SDK). */
+  onDelta?: (event: ChatDeltaEvent) => void;
 }
 
 /**
@@ -282,6 +285,7 @@ export async function runChatTurn(params: ChatTurnParams): Promise<ChatTurnResul
       ...disciplineOptions(params.source, gen.envOverrides),
       ...observabilityOptions(),
       ...gen.options,
+      includePartialMessages: Boolean(params.onDelta),
       model: params.model,
       maxTurns: 1,
       sessionStore: params.sessionStore,
@@ -293,6 +297,7 @@ export async function runChatTurn(params: ChatTurnParams): Promise<ChatTurnResul
     model: params.model,
     resumed: Boolean(params.resume),
     ...(params.onEvent ? { onEvent: params.onEvent } : {}),
+    ...(params.onDelta ? { onDelta: params.onDelta } : {}),
   });
 }
 
@@ -300,6 +305,7 @@ export interface TurnStreamContext {
   model: ChatModelId;
   resumed: boolean;
   onEvent?: (event: TurnEvent) => void;
+  onDelta?: (event: ChatDeltaEvent) => void;
 }
 
 /**
@@ -320,6 +326,7 @@ export async function consumeTurnStream(
   let stopReason: string | null = null;
   let terminalReason: TerminalReason | null = null;
   let ttftMs: number | null = null;
+  let durationApiMs: number | null = null;
   let apiErrorStatus: number | null = null;
   let numTurns = 0;
   let rateLimit: RateLimitSnapshot | null = null;
@@ -336,9 +343,15 @@ export async function consumeTurnStream(
     cacheWriteTokens: 0,
     cacheCreation5mTokens: 0,
     cacheCreation1hTokens: 0,
+    // sdk always reports these; 0 as initial sentinel (not null), filled by result message.
+    reasoningTokens: null, // sdk doesn't expose CoT token count — set null (NA)
     contextWindow: 0,
     maxOutputTokens: 0,
+    webSearchRequests: 0,
     costUsd: 0,
+    // sdk gives a single total costUSD — no prompt/completion split available
+    costDetails: null,
+    isByok: null, // Max sub path — no BYOK concept applies
   };
 
   const emit = (event: TurnEvent) => {
@@ -442,11 +455,18 @@ export async function consumeTurnStream(
           // The SDK reports resetsAt in epoch SECONDS — normalize to our canonical epoch-ms at the
           // boundary so everything downstream (UI countdown, TurnError) is one unit (shared/time.ts).
           const resetsAtMs = secondsToMs(info.resetsAt);
+          // `isUsingOverage` is the ban-risk canary: when true the account has exhausted its
+          // subscription limit and is drawing on overage credits. Alert louder than a plain warning.
+          const infoObj = info as { isUsingOverage?: unknown; surpassedThreshold?: unknown };
+          const isUsingOverage = infoObj.isUsingOverage as boolean | undefined;
+          const surpassedThreshold = infoObj.surpassedThreshold as number | undefined;
           rateLimit = {
             status: info.status,
             rateLimitType: info.rateLimitType,
             resetsAt: resetsAtMs,
             utilization: info.utilization,
+            isUsingOverage,
+            surpassedThreshold,
           };
           emit({
             kind: "rate_limit",
@@ -456,21 +476,24 @@ export async function consumeTurnStream(
             resetsAt: resetsAtMs,
             utilization: info.utilization,
           });
-          // WARN when we're being throttled/rejected; debug when merely "allowed".
-          if (info.status === "allowed") {
+          // WARN when throttled/rejected or on overage; debug when merely "allowed".
+          if (info.status === "allowed" && !isUsingOverage) {
             getLog().debug(
               { rateLimitType: info.rateLimitType, utilization: info.utilization },
               "claude: rate-limit ok",
             );
           } else {
-            getLog().warn(
+            const logLevel = isUsingOverage ? "error" : "warn";
+            getLog()[logLevel](
               {
                 status: info.status,
                 rateLimitType: info.rateLimitType,
                 resetsAt: resetsAtMs,
                 utilization: info.utilization,
+                isUsingOverage: isUsingOverage ?? false,
+                surpassedThreshold,
               },
-              "claude: rate-limited",
+              isUsingOverage ? "claude: RATE LIMIT OVERAGE — ban risk" : "claude: rate-limited",
             );
           }
           break;
@@ -502,6 +525,7 @@ export async function consumeTurnStream(
             usage.cacheReadTokens += modelUsage.cacheReadInputTokens;
             usage.cacheWriteTokens += modelUsage.cacheCreationInputTokens;
             usage.costUsd += modelUsage.costUSD;
+            usage.webSearchRequests += modelUsage.webSearchRequests ?? 0;
             usage.contextWindow = Math.max(usage.contextWindow ?? 0, modelUsage.contextWindow);
             usage.maxOutputTokens = Math.max(
               usage.maxOutputTokens ?? 0,
@@ -519,6 +543,8 @@ export async function consumeTurnStream(
 
           if (message.subtype === "success") {
             ttftMs = message.ttft_ms ?? null;
+            durationApiMs =
+              ((message as { duration_api_ms?: unknown }).duration_api_ms as number | null) ?? null;
             apiErrorStatus = message.api_error_status ?? null;
             if (message.is_error) {
               // Defensive: a "success" subtype flagged is_error — treat as a server error.
@@ -558,8 +584,19 @@ export async function consumeTurnStream(
         // which we don't set yet (full reply comes from the `assistant` message). Tool /
         // task / hook / memory / permission events can't fire with our locked config
         // (tools:[], no MCP, no subagents) — log unexpected ones at debug, never crash.
-        case "stream_event":
+        case "stream_event": {
+          const raw = (
+            message as { event?: { type?: string; delta?: { type?: string; text?: string } } }
+          ).event;
+          if (
+            raw?.type === "content_block_delta" &&
+            raw.delta?.type === "text_delta" &&
+            typeof raw.delta.text === "string"
+          ) {
+            ctx.onDelta?.({ chatId: "", kind: "text", text: raw.delta.text });
+          }
           break;
+        }
         default:
           getLog().debug({ messageType: message.type }, "claude: unhandled sdk message type");
           break;
@@ -606,6 +643,8 @@ export async function consumeTurnStream(
       cacheWriteTokens: usage.cacheWriteTokens,
       cacheCreation5mTokens: usage.cacheCreation5mTokens,
       cacheCreation1hTokens: usage.cacheCreation1hTokens,
+      reasoningTokens: usage.reasoningTokens,
+      webSearchRequests: usage.webSearchRequests,
       contextWindow: usage.contextWindow,
       maxOutputTokens: usage.maxOutputTokens,
       costUsd: usage.costUsd,
@@ -628,6 +667,7 @@ export async function consumeTurnStream(
     // stop_reason is the per-message signal; fall back to the loop-level terminalReason.
     finishReason: normalizeFinishReason(stopReason ?? terminalReason),
     ttftMs,
+    durationApiMs,
     apiErrorStatus,
     numTurns,
     usage,

@@ -1,5 +1,6 @@
 import { processMacros } from "./macro";
 import type { PromptConfig, PromptSection, WorldInfoScope } from "./prompt-config";
+import type { RegexPlacement } from "./regex";
 
 // Pure prompt assembly: render a versioned PromptConfig against a chat's resolved data into the
 // STATIC + DYNAMIC system-prompt halves (split at the config's boundary section). No DB, no infra
@@ -114,6 +115,7 @@ function renderWorldInfo(
   ctx: AssembleContext,
   scope: WorldInfoScope,
   trace: AssembleTrace,
+  executeRegex?: (text: string, placement: RegexPlacement) => string,
 ): string {
   const haystack = ctx.recentMessages.join("\n").toLowerCase();
   const active: AssembleWorldEntry[] = [];
@@ -136,19 +138,28 @@ function renderWorldInfo(
   trace.worldInfoIncluded += active.length;
   // character-attached entries are card-derived (pinned persona); chat-attached use active.
   return active
-    .map((entry) =>
-      renderMacros(
-        entry.content,
+    .map((entry) => {
+      let content = entry.content;
+      if (executeRegex) {
+        content = executeRegex(content, "WORLD_INFO");
+      }
+      return renderMacros(
+        content,
         ctx.character,
         entry.source === "character" ? ctx.pinnedPersona : ctx.activePersona,
-      ),
-    )
+      );
+    })
     .join("\n");
 }
 
 type MarkerSection = Extract<PromptSection, { type: "marker" }>;
 
-function renderMarker(section: MarkerSection, ctx: AssembleContext, trace: AssembleTrace): string {
+function renderMarker(
+  section: MarkerSection,
+  ctx: AssembleContext,
+  trace: AssembleTrace,
+  executeRegex?: (text: string, placement: RegexPlacement) => string,
+): string {
   const character = ctx.character;
   const pinned = ctx.pinnedPersona; // card-derived sections
   switch (section.marker) {
@@ -190,7 +201,7 @@ function renderMarker(section: MarkerSection, ctx: AssembleContext, trace: Assem
           )
         : "";
     case "world_info":
-      return renderWorldInfo(ctx, section.scope ?? "always", trace);
+      return renderWorldInfo(ctx, section.scope ?? "always", trace, executeRegex);
     // The compaction summary stands in for the compacted-away turns (stateless openrouter path).
     // Records into the trace so the caller knows to rebuild history from the compaction anchor.
     case "compact_summary": {
@@ -219,7 +230,12 @@ function renderMarker(section: MarkerSection, ctx: AssembleContext, trace: Assem
   }
 }
 
-function renderSection(section: PromptSection, ctx: AssembleContext, trace: AssembleTrace): string {
+function renderSection(
+  section: PromptSection,
+  ctx: AssembleContext,
+  trace: AssembleTrace,
+  executeRegex?: (text: string, placement: RegexPlacement) => string,
+): string {
   switch (section.type) {
     case "boundary":
       return "";
@@ -227,7 +243,7 @@ function renderSection(section: PromptSection, ctx: AssembleContext, trace: Asse
     case "literal":
       return renderMacros(section.content, ctx.character, ctx.activePersona);
     case "marker":
-      return renderMarker(section, ctx, trace);
+      return renderMarker(section, ctx, trace, executeRegex);
   }
 }
 
@@ -236,7 +252,11 @@ function renderSection(section: PromptSection, ctx: AssembleContext, trace: Asse
  * walked in order; the (optional, at-most-one) boundary section flips the accumulator from
  * static to dynamic. Disabled sections and empty renders are skipped.
  */
-export function assemblePrompt(config: PromptConfig, ctx: AssembleContext): AssembledPrompt {
+export function assemblePrompt(
+  config: PromptConfig,
+  ctx: AssembleContext,
+  executeRegex?: (text: string, placement: RegexPlacement) => string,
+): AssembledPrompt {
   const staticParts: string[] = [];
   const dynamicParts: string[] = [];
   const trace: AssembleTrace = {
@@ -259,7 +279,7 @@ export function assemblePrompt(config: PromptConfig, ctx: AssembleContext): Asse
     if (!section.enabled) {
       continue;
     }
-    const rendered = renderSection(section, ctx, trace).trim();
+    const rendered = renderSection(section, ctx, trace, executeRegex).trim();
     if (rendered.length > 0) {
       bucket.push(rendered);
       bucketSections.push(section.id);

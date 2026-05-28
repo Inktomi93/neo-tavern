@@ -15,6 +15,9 @@ declare module "@tanstack/react-router" {
   }
 }
 
+// import { ReactQueryDevtools } from "@tanstack/react-query-devtools"; // Uncomment for local dev
+// import { TanStackRouterDevtools } from "@tanstack/router-devtools"; // Uncomment for local dev
+
 function App() {
   const [queryClient] = useState(() => new QueryClient());
   const [trpcClient] = useState(() =>
@@ -25,6 +28,8 @@ function App() {
     <trpc.Provider client={trpcClient} queryClient={queryClient}>
       <QueryClientProvider client={queryClient}>
         <RouterProvider router={router} />
+        {/* <ReactQueryDevtools initialIsOpen={false} position="bottom" /> */}
+        {/* <TanStackRouterDevtools position="bottom-right" /> */}
       </QueryClientProvider>
     </trpc.Provider>
   );

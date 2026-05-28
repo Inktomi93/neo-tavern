@@ -9,8 +9,11 @@ function ChatPage() {
   const { id } = Route.useParams();
 
   return (
-    <main className="mx-auto flex min-h-dvh max-w-2xl flex-col">
+    <div
+      className="mx-auto flex h-full w-full max-w-4xl flex-col shadow-sm border-x border-border/50 bg-background"
+      data-testid="chat-page-route"
+    >
       <ChatView chatId={id} />
-    </main>
+    </div>
   );
 }

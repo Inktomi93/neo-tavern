@@ -18,9 +18,10 @@ export function evaluateMacros(ast: MacroAST, registry: MacroRegistry, ctx: Macr
         });
 
         try {
-          result += handler(resolvedArgs, ctx);
+          const val = handler(resolvedArgs, ctx);
+          result += ctx.postProcess ? ctx.postProcess(val) : val;
         } catch (err) {
-          console.warn(`[Macro Engine] Error evaluating macro ${node.name}:`, err);
+          ctx.onWarn?.(`[Macro Engine] Error evaluating macro ${node.name}`, err);
           result += `{{${node.name}}}`;
         }
       } else {
@@ -39,9 +40,10 @@ export function evaluateMacros(ast: MacroAST, registry: MacroRegistry, ctx: Macr
         });
 
         try {
-          result += handler(resolvedArgs, ctx, node.children);
+          const val = handler(resolvedArgs, ctx, node.children);
+          result += ctx.postProcess ? ctx.postProcess(val) : val;
         } catch (err) {
-          console.warn(`[Macro Engine] Error evaluating block ${node.name}:`, err);
+          ctx.onWarn?.(`[Macro Engine] Error evaluating block ${node.name}`, err);
           result += `{{#${node.name}}}`;
         }
       } else {

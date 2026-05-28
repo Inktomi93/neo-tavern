@@ -6,7 +6,21 @@ import type { MacroAST, MacroContext, MacroRegistry } from "./types";
 // A singleton registry for the application, so extensions can register new macros globally
 export const globalMacroRegistry = createDefaultRegistry();
 
-export type ProcessMacroOptions = Omit<MacroContext, "evaluateString" | "evaluateAST">;
+export type ProcessMacroOptions = Omit<MacroContext, "evaluateString" | "evaluateAST"> & {
+  postProcess?: (val: string) => string;
+};
+
+export function createMacroContext(
+  options: ProcessMacroOptions,
+  registry: MacroRegistry = globalMacroRegistry,
+): MacroContext {
+  const ctx: MacroContext = {
+    ...options,
+    evaluateString: (str: string) => evaluateMacros(parseMacros(str), registry, ctx),
+    evaluateAST: (astNode: MacroAST) => evaluateMacros(astNode, registry, ctx),
+  };
+  return ctx;
+}
 
 /**
  * Process macros in a string, replacing them with their evaluated values.
@@ -21,15 +35,8 @@ export function processMacros(
   options: ProcessMacroOptions,
   registry: MacroRegistry = globalMacroRegistry,
 ): string {
-  const evalAST = (astNode: MacroAST) => evaluateMacros(astNode, registry, ctx);
-  const evalString = (str: string) => evalAST(parseMacros(str));
-
-  const ctx: MacroContext = {
-    ...options,
-    evaluateString: evalString,
-    evaluateAST: evalAST,
-  };
+  const ctx = createMacroContext(options, registry);
 
   const ast = parseMacros(text);
-  return evalAST(ast);
+  return ctx.evaluateAST(ast);
 }

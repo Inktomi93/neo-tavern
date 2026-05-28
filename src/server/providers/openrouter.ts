@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { OpenRouter } from "@openrouter/sdk";
+import type { ChatDeltaEvent } from "../../shared/chat-types";
 import { type GenerationParams, isThinkingOn } from "../../shared/generation";
 import { isoToMs } from "../../shared/time";
 import { env } from "../env";
@@ -312,6 +313,8 @@ export async function listOpenRouterEndpoints(model: string): Promise<unknown> {
 export interface RawTurnParams {
   /** OpenRouter "provider/model" id. */
   model: string;
+  /** Chat id — carried through so the onDelta emitter can tag events with the originating chat. */
+  chatId?: string | undefined;
   /** Assembled system prompt; static is the cache-stable prefix, dynamic the per-turn suffix. */
   systemPrompt: { static: string; dynamic: string };
   /** Full conversation from canon, oldest→newest (the last entry is the new user message). */
@@ -323,6 +326,10 @@ export interface RawTurnParams {
   /** OpenRouter provider-routing preferences (order/allowFallbacks/sort/only/ignore/…). Lenient
    *  pass-through (OpenRouter owns the schema); undefined = default routing. From chats.metadata. */
   providerRouting?: Record<string, unknown> | undefined;
+  /** Streaming delta callback — fires once per token chunk, discriminated by kind (text|reasoning).
+   *  Text chunks are the reply content; reasoning chunks are CoT thinking from extended-thinking
+   *  models (e.g. claude-3-7-sonnet with thinking on, or o3-mini). Each should render separately. */
+  onDelta?: (event: ChatDeltaEvent) => void;
 }
 
 // OpenRouter usage doesn't report the model's context window — backfill it from the cached catalog
@@ -431,7 +438,14 @@ interface ChatResultView {
     promptTokens?: number;
     completionTokens?: number;
     cost?: number | null;
+    costDetails?: {
+      upstreamInferenceCost?: number | null;
+      upstreamInferencePromptCost?: number | null;
+      upstreamInferenceCompletionsCost?: number | null;
+    } | null;
     promptTokensDetails?: { cachedTokens?: number; cacheWriteTokens?: number } | null;
+    completionTokensDetails?: { reasoningTokens?: number } | null;
+    isByok?: boolean;
   };
 }
 
@@ -532,10 +546,66 @@ export async function runChatCompletionTurn(params: RawTurnParams): Promise<Chat
 
   let view: ChatResultView;
   try {
-    const result = await getOpenRouterClient().chat.send({
-      chatRequest,
-    } as Parameters<OpenRouter["chat"]["send"]>[0]);
-    view = result as unknown as ChatResultView;
+    if (params.onDelta) {
+      // Streaming mode: iterate the typed EventStream<ChatStreamChunk>. Each chunk carries:
+      //   delta.content     → reply text (may be null when only reasoning arrives)
+      //   delta.reasoning   → CoT thinking from extended-thinking models (e.g. claude-3-7-sonnet
+      //                       extended thinking, o3-mini) — shown separately in the UI
+      //   chunk.error       → in-band provider error (code + message); treat as a thrown TurnError
+      //   chunk.usage       → ONLY present on the final [DONE] sentinel chunk (after all deltas)
+      //   choices[0].finishReason → also only set on the sentinel
+      const stream = await getOpenRouterClient().chat.send({
+        chatRequest: { ...chatRequest, stream: true },
+      } as Parameters<OpenRouter["chat"]["send"]>[0] & { chatRequest: { stream: true } });
+      let replyText = "";
+      let _reasoningText = "";
+      let usage: ChatResultView["usage"];
+      let finishReason: string | null = null;
+      for await (const chunk of stream as AsyncIterable<{
+        choices: Array<{
+          delta: { content?: string | null; reasoning?: string | null };
+          finishReason: string | null;
+        }>;
+        error?: { code: number; message: string } | null;
+        usage?: ChatResultView["usage"];
+      }>) {
+        // In-band error: OpenRouter can embed an error object mid-stream (e.g. billing / rate-limit).
+        // Map it through mapOpenRouterError so the kind/retryable surface is consistent.
+        if (chunk.error != null) {
+          const syntheticErr = Object.assign(new Error(chunk.error.message), {
+            statusCode: chunk.error.code,
+          });
+          throw syntheticErr;
+        }
+        const delta = chunk.choices[0]?.delta;
+        if (delta) {
+          if (typeof delta.content === "string" && delta.content.length > 0) {
+            replyText += delta.content;
+            params.onDelta({ chatId: params.chatId ?? "", kind: "text", text: delta.content });
+          }
+          if (typeof delta.reasoning === "string" && delta.reasoning.length > 0) {
+            _reasoningText += delta.reasoning;
+            params.onDelta({
+              chatId: params.chatId ?? "",
+              kind: "reasoning",
+              text: delta.reasoning,
+            });
+          }
+        }
+        // usage is only present on the sentinel chunk
+        if (chunk.usage !== undefined) usage = chunk.usage;
+        if (chunk.choices[0]?.finishReason) finishReason = chunk.choices[0].finishReason;
+      }
+      view = {
+        choices: [{ finishReason, message: { content: replyText } }],
+        ...(usage !== undefined ? { usage } : {}),
+      };
+    } else {
+      const result = await getOpenRouterClient().chat.send({
+        chatRequest,
+      } as Parameters<OpenRouter["chat"]["send"]>[0]);
+      view = result as unknown as ChatResultView;
+    }
   } catch (error) {
     const mapped = mapOpenRouterError(error, params.model, "chat");
     getLog().error(
@@ -552,6 +622,7 @@ export async function runChatCompletionTurn(params: RawTurnParams): Promise<Chat
   }
 
   const u = view.usage;
+  const uCostDetails = u?.costDetails;
   const usage: ChatTurnUsage = {
     model: params.model,
     tokensIn: u?.promptTokens ?? 0,
@@ -561,9 +632,20 @@ export async function runChatCompletionTurn(params: RawTurnParams): Promise<Chat
     // The 5m/1h split is Anthropic/sdk-internal — openrouter can't report it → null (NA, not 0).
     cacheCreation5mTokens: null,
     cacheCreation1hTokens: null,
+    reasoningTokens: u?.completionTokensDetails?.reasoningTokens ?? null,
     contextWindow: await lookupContextWindow(params.model),
     maxOutputTokens: cfg.maxOutputTokens ?? null, // echo the requested cap; null if none asked
+    webSearchRequests: 0, // chat-completions path has no tool-call reporting
     costUsd: u?.cost ?? 0,
+    costDetails:
+      uCostDetails != null
+        ? {
+            totalUsd: uCostDetails.upstreamInferenceCost ?? 0,
+            promptUsd: uCostDetails.upstreamInferencePromptCost ?? 0,
+            completionUsd: uCostDetails.upstreamInferenceCompletionsCost ?? 0,
+          }
+        : null,
+    isByok: u?.isByok ?? null,
   };
 
   getLog().info(
@@ -588,6 +670,7 @@ export async function runChatCompletionTurn(params: RawTurnParams): Promise<Chat
     terminalReason: null,
     finishReason: normalizeFinishReason(chatFinish),
     ttftMs: null,
+    durationApiMs: Date.now() - startedAt,
     apiErrorStatus: null,
     numTurns: 1,
     usage,
@@ -610,7 +693,14 @@ interface ResponsesView {
     inputTokens?: number;
     outputTokens?: number;
     cost?: number | null;
+    costDetails?: {
+      upstreamInferenceCost?: number | null;
+      upstreamInferenceInputCost?: number | null;
+      upstreamInferenceOutputCost?: number | null;
+    } | null;
     inputTokensDetails?: { cachedTokens?: number };
+    outputTokensDetails?: { reasoningTokens?: number };
+    isByok?: boolean;
   };
 }
 
@@ -678,10 +768,102 @@ export async function runRawTurn(params: RawTurnParams): Promise<ChatTurnResult>
 
   let view: ResponsesView;
   try {
-    const result = await getOpenRouterClient().beta.responses.send({
-      responsesRequest,
-    } as Parameters<OpenRouter["beta"]["responses"]["send"]>[0]);
-    view = result as unknown as ResponsesView;
+    if (params.onDelta) {
+      // Streaming mode for the Responses API. OpenRouter emits typed SSE events discriminated by
+      // `event.type`. The events we handle:
+      //   "response.output_text.delta"            → reply text chunk (event.delta: string)
+      //   "response.reasoning_text.delta"         → CoT reasoning chunk (event.delta: string)
+      //   "response.reasoning_summary_text.delta" → compressed reasoning summary (event.delta: string)
+      //   "response.completed"                    → final snapshot (event.response has full usage)
+      //   "response.incomplete"                   → same shape, but truncated
+      //   "response.failed"                       → server-side failure (event.response.error)
+      //   "error"                                 → in-band stream error (event.code, event.message)
+      const stream = await getOpenRouterClient().beta.responses.send({
+        responsesRequest: { ...responsesRequest, stream: true },
+      } as Parameters<OpenRouter["beta"]["responses"]["send"]>[0] & {
+        responsesRequest: { stream: true };
+      });
+      let replyText = "";
+      let usage: ResponsesView["usage"];
+      let status: string | undefined;
+      let incompleteDetails: { reason?: string } | null | undefined;
+      for await (const event of stream as AsyncIterable<{
+        type: string;
+        delta?: string;
+        response?: {
+          status?: string;
+          incompleteDetails?: { reason?: string } | null;
+          usage?: ResponsesView["usage"];
+          error?: { code: number | string | null; message: string } | null;
+        };
+        code?: string | null;
+        message?: string;
+      }>) {
+        switch (event.type) {
+          case "response.output_text.delta":
+            if (typeof event.delta === "string" && event.delta.length > 0) {
+              replyText += event.delta;
+              params.onDelta({ chatId: params.chatId ?? "", kind: "text", text: event.delta });
+            }
+            break;
+          case "response.reasoning_text.delta":
+          case "response.reasoning_summary_text.delta":
+            if (typeof event.delta === "string" && event.delta.length > 0) {
+              params.onDelta({ chatId: params.chatId ?? "", kind: "reasoning", text: event.delta });
+            }
+            break;
+          case "response.completed":
+          case "response.incomplete": {
+            const resp = event.response;
+            if (resp) {
+              if (resp.status !== undefined) status = resp.status;
+              if (resp.incompleteDetails !== undefined) incompleteDetails = resp.incompleteDetails;
+              if (resp.usage !== undefined) usage = resp.usage;
+            }
+            break;
+          }
+          case "response.failed": {
+            // Provider-level failure embedded in the stream. Promote to a thrown error so
+            // mapOpenRouterError can classify it and the turn records the correct kind.
+            const resp = event.response;
+            const errMsg = resp?.error?.message ?? "responses stream: response.failed";
+            const errCode = resp?.error?.code;
+            const syntheticErr = Object.assign(new Error(errMsg), {
+              statusCode: typeof errCode === "number" ? errCode : undefined,
+            });
+            throw syntheticErr;
+          }
+          case "error": {
+            // In-band SSE error — code is a string like "server_error", not an HTTP status;
+            // wrap and let mapOpenRouterError fall through to the message-heuristic path.
+            const syntheticErr = Object.assign(
+              new Error(event.message ?? "responses stream error"),
+              {
+                statusCode: undefined,
+              },
+            );
+            throw syntheticErr;
+          }
+          default:
+            // lifecycle events (response.created, response.in_progress, content_part.added/done,
+            // web_search_call.*, image_gen_call.*, function_call_args.*, annotation_added, …)
+            break;
+        }
+      }
+      view = {
+        outputText: replyText,
+        ...(usage !== undefined ? { usage } : {}),
+        ...(status !== undefined ? { status } : {}),
+        ...(incompleteDetails !== null && incompleteDetails !== undefined
+          ? { incompleteDetails }
+          : {}),
+      };
+    } else {
+      const result = await getOpenRouterClient().beta.responses.send({
+        responsesRequest,
+      } as Parameters<OpenRouter["beta"]["responses"]["send"]>[0]);
+      view = result as unknown as ResponsesView;
+    }
   } catch (error) {
     const mapped = mapOpenRouterError(error, params.model, "responses");
     getLog().error(
@@ -698,6 +880,7 @@ export async function runRawTurn(params: RawTurnParams): Promise<ChatTurnResult>
   }
 
   const u = view.usage;
+  const uCostDetails = u?.costDetails;
   const usage: ChatTurnUsage = {
     model: params.model,
     tokensIn: u?.inputTokens ?? 0,
@@ -707,9 +890,20 @@ export async function runRawTurn(params: RawTurnParams): Promise<ChatTurnResult>
     // 5m/1h split is Anthropic/sdk-internal; null (NA) not 0. contextWindow ← catalog; maxOutput ← request.
     cacheCreation5mTokens: null,
     cacheCreation1hTokens: null,
+    reasoningTokens: u?.outputTokensDetails?.reasoningTokens ?? null,
     contextWindow: await lookupContextWindow(params.model),
     maxOutputTokens: cfg.maxOutputTokens ?? null,
+    webSearchRequests: 0,
     costUsd: u?.cost ?? 0,
+    costDetails:
+      uCostDetails != null
+        ? {
+            totalUsd: uCostDetails.upstreamInferenceCost ?? 0,
+            promptUsd: uCostDetails.upstreamInferenceInputCost ?? 0,
+            completionUsd: uCostDetails.upstreamInferenceOutputCost ?? 0,
+          }
+        : null,
+    isByok: u?.isByok ?? null,
   };
 
   getLog().info(
@@ -734,6 +928,7 @@ export async function runRawTurn(params: RawTurnParams): Promise<ChatTurnResult>
     terminalReason: null,
     finishReason: normalizeFinishReason(responsesFinish),
     ttftMs: null,
+    durationApiMs: Date.now() - startedAt,
     apiErrorStatus: null,
     numTurns: 1,
     usage,

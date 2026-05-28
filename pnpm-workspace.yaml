@@ -5,6 +5,7 @@ allowBuilds:
   # beta.responses.send works without it), so skip the build + silence the prompt.
   '@openrouter/sdk': false
   esbuild: true
+  msw: true
   # Prebuilt CUDA binary ships via @node-llama-cpp/linux-x64-cuda; the postinstall isn't
   # needed (verified: `inspect gpu` + embed probe run without it), so skip + silence.
   node-llama-cpp: false

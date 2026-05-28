@@ -1,6 +1,41 @@
-import { processMacros } from "../../../shared/macro/index";
-import type { MacroContext } from "../../../shared/macro/types";
-import type { RegexPlacement, RegexScript } from "../../../shared/regex";
+import { processMacros } from "./macro/index";
+import type { MacroContext } from "./macro/types";
+import type { RegexPlacement, RegexScript } from "./regex";
+import { SubstituteFindRegex } from "./regex";
+
+function sanitizeRegexMacro(x: string): string {
+  // FIXED: Restored the proper regex syntax and added curly braces around the switch block
+  return x.replace(/[\n\r\t\v\f\0.^$*+?{}[\]\\/|()]/gs, (s) => {
+    switch (s) {
+      case "\n":
+        return "\\n";
+      case "\r":
+        return "\\r";
+      case "\t":
+        return "\\t";
+      case "\v":
+        return "\\v";
+      case "\f":
+        return "\\f";
+      case "\0":
+        return "\\0";
+      default:
+        return `\\${s}`;
+    }
+  });
+}
+
+function filterString(rawString: string, trimStrings: string[], ctx: MacroContext): string {
+  let finalString = rawString;
+  for (const trimString of trimStrings) {
+    if (!trimString) continue;
+    const subTrimString = processMacros(trimString, ctx);
+    if (subTrimString) {
+      finalString = finalString.split(subTrimString).join("");
+    }
+  }
+  return finalString;
+}
 
 export interface RegexService {
   executeScripts(
@@ -19,6 +54,7 @@ export function createRegexService(): RegexService {
       placement: RegexPlacement,
       ctx: MacroContext,
     ): string {
+      // FIXED: Changed const to let so we can modify it
       let result = text;
 
       for (const script of scripts) {
@@ -26,13 +62,15 @@ export function createRegexService(): RegexService {
         if (!script.placement.includes(placement)) continue;
 
         try {
-          // SillyTavern usually appends 'g' to findRegex unless 'i' or 'm' etc are provided,
-          // but many users write just the pattern.
-          // In ST regex engine: `new RegExp(script.findRegex, 'gm')` or similar.
-          // We will use 'g' by default unless it looks like a regex literal with flags (e.g. /pattern/flags)
-
           let pattern = script.findRegex;
-          let flags = "gm"; // ST default for raw strings
+
+          if (script.substituteRegex === SubstituteFindRegex.raw) {
+            pattern = processMacros(pattern, ctx);
+          } else if (script.substituteRegex === SubstituteFindRegex.escaped) {
+            pattern = processMacros(pattern, { ...ctx, postProcess: sanitizeRegexMacro });
+          }
+
+          let flags = "gm";
 
           if (pattern.startsWith("/") && pattern.lastIndexOf("/") > 0) {
             const lastSlash = pattern.lastIndexOf("/");
@@ -44,15 +82,6 @@ export function createRegexService(): RegexService {
           const regex = new RegExp(pattern, flags);
 
           result = result.replace(regex, (...args) => {
-            // JS replace with regex passes:
-            // arg0 = matched string
-            // arg1..N = capture groups
-            // argN+1 = offset
-            // argN+2 = full string
-            // We want to simulate ST's behavior:
-            // The replacement string might have $1, $2, etc., OR macro syntax.
-
-            // ST allows {{match}} to mean $0
             let replacement = script.replaceString.replace(/{{match}}/gi, "$0");
 
             replacement = replacement.replace(
@@ -70,16 +99,20 @@ export function createRegexService(): RegexService {
                   }
                 }
 
-                return matchText ?? "";
+                if (!matchText) return "";
+
+                if (script.trimStrings && script.trimStrings.length > 0) {
+                  matchText = filterString(matchText, script.trimStrings, ctx);
+                }
+
+                return matchText;
               },
             );
 
-            // 2. Then, run the resulting string through the Macro Engine
             return processMacros(replacement, ctx);
           });
         } catch (_err) {
           // If the regex is invalid, skip it rather than crashing the chat
-          // TODO: Log the error using standard logging
         }
       }
 

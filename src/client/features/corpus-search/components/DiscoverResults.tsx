@@ -4,9 +4,24 @@ function CharacterCard({ character }: { character: DiscoverCharacter }) {
   const matches = `${character.matchCount} match${character.matchCount === 1 ? "" : "es"}`;
   return (
     <li className="rounded-lg border border-border bg-card p-4">
-      <div className="flex items-baseline gap-2">
-        <h3 className="font-medium">{character.name}</h3>
-        <span className="text-muted-foreground text-xs">{matches}</span>
+      <div className="flex items-center gap-3 mb-2">
+        {character.avatarHash ? (
+          <img
+            src={`/api/blob/${character.avatarHash}`}
+            alt={character.name}
+            className="size-12 rounded-full object-cover shrink-0 ring-1 ring-border shadow-sm"
+          />
+        ) : (
+          <div className="size-12 rounded-full bg-muted shrink-0 flex items-center justify-center text-muted-foreground font-medium ring-1 ring-border">
+            {character.name.charAt(0).toUpperCase()}
+          </div>
+        )}
+        <div className="flex flex-col">
+          <div className="flex items-baseline gap-2">
+            <h3 className="font-medium">{character.name}</h3>
+            <span className="text-muted-foreground text-xs">{matches}</span>
+          </div>
+        </div>
       </div>
       {character.tags.length > 0 && (
         <div className="mt-1 flex flex-wrap gap-1">

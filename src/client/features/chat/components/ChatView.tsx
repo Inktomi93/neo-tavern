@@ -1,4 +1,5 @@
 import { useMessages, useSendMessage } from "../hooks/use-chat";
+import { ChatHeader } from "./ChatHeader";
 import { MessageInput } from "./MessageInput";
 import { MessageList } from "./MessageList";
 
@@ -9,30 +10,33 @@ export function ChatView({ chatId }: { chatId: string }) {
   const list = messages.data ?? [];
   // The optimistic-concurrency tip the server checks: our last-seen seq (0 = empty).
   const expectedSeq = list.at(-1)?.seq ?? 0;
-  const isStale = send.data?.status === "stale";
 
   function handleSend(content: string) {
     send.mutate({ chatId, expectedSeq, content });
   }
 
   return (
-    <div className="flex min-h-dvh flex-col">
-      <div className="flex-1 overflow-y-auto">
+    <section
+      className="flex h-full flex-col relative"
+      data-testid="chat-view-container"
+      aria-label="Active Chat Session"
+    >
+      <ChatHeader chatId={chatId} />
+      <div className="flex-1 overflow-hidden" data-testid="chat-history-region">
         {messages.isLoading ? (
-          <p className="p-4 text-muted-foreground text-sm">loading…</p>
+          <div className="flex h-full items-center justify-center">
+            <span className="text-muted-foreground animate-pulse">Loading memory...</span>
+          </div>
         ) : (
-          <MessageList messages={list} />
+          <MessageList messages={list} chatId={chatId} />
         )}
-        {isStale ? (
-          <p className="px-4 text-amber-400 text-sm">
-            This chat advanced elsewhere — your view was re-synced; resend your message.
-          </p>
-        ) : null}
-        {send.isError ? (
-          <p className="px-4 text-sm text-red-400">Turn failed — try again.</p>
-        ) : null}
       </div>
-      <MessageInput disabled={send.isPending} onSend={handleSend} />
-    </div>
+      <div
+        className="shrink-0 p-4 border-t bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60"
+        data-testid="chat-input-region"
+      >
+        <MessageInput disabled={send.isPending} onSend={handleSend} />
+      </div>
+    </section>
   );
 }

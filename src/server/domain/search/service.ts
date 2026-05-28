@@ -1,6 +1,6 @@
 import { and, eq, inArray, sql } from "drizzle-orm";
 import type { Db } from "../../../db/client";
-import { characters, characterVersions, chatSegments } from "../../../db/schema";
+import { assets, characters, characterVersions, chatSegments } from "../../../db/schema";
 import { createEmbedder, type Embedder } from "../../embeddings/embedder";
 import { createReranker, type Reranker } from "../../embeddings/reranker";
 import { getLog } from "../../observability/logger";
@@ -33,6 +33,7 @@ export interface DiscoverCharacter {
   name: string;
   tags: string[];
   description: string;
+  avatarHash: string | null;
   /** How many pool segments matched this character. */
   matchCount: number;
   /** Raw cosine distance of the best matching segment (results are ordered by rank, which
@@ -198,6 +199,7 @@ interface SegmentDisplay {
   name: string;
   tags: string[];
   description: string;
+  avatarHash: string | null;
   chatId: string;
   segIndex: number;
   snippet: string;
@@ -274,8 +276,10 @@ export function createSearchService(db: Db, deps: SearchServiceDeps = {}): Searc
         name: characterVersions.name,
         tags: characterVersions.tags,
         description: characterVersions.description,
+        avatarHash: assets.hash,
       })
       .from(characterVersions)
+      .leftJoin(assets, eq(characterVersions.avatarAssetId, assets.id))
       .where(inArray(characterVersions.id, cvIds));
     const cvById = new Map(cvRows.map((r) => [r.id, r]));
     for (const r of segRows) {
@@ -286,6 +290,7 @@ export function createSearchService(db: Db, deps: SearchServiceDeps = {}): Searc
         name: cv.name,
         tags: asStringArray(cv.tags),
         description: cv.description,
+        avatarHash: cv.avatarHash,
         chatId: r.chatId,
         segIndex: r.blockIdx,
         snippet: (r.text ?? "").slice(0, SNIPPET_CHARS),
@@ -297,8 +302,8 @@ export function createSearchService(db: Db, deps: SearchServiceDeps = {}): Searc
   // Resolve characterIds → their CURRENT-version card (name + tags) for find's character rows.
   async function resolveCharacterDisplay(
     charIds: string[],
-  ): Promise<Map<string, { name: string; tags: string[] }>> {
-    const out = new Map<string, { name: string; tags: string[] }>();
+  ): Promise<Map<string, { name: string; tags: string[]; avatarHash: string | null }>> {
+    const out = new Map<string, { name: string; tags: string[]; avatarHash: string | null }>();
     if (charIds.length === 0) return out;
     const charRows = await db
       .select({ id: characters.id, cvId: characters.currentVersionId })
@@ -311,14 +316,17 @@ export function createSearchService(db: Db, deps: SearchServiceDeps = {}): Searc
         id: characterVersions.id,
         name: characterVersions.name,
         tags: characterVersions.tags,
+        avatarHash: assets.hash,
       })
       .from(characterVersions)
+      .leftJoin(assets, eq(characterVersions.avatarAssetId, assets.id))
       .where(inArray(characterVersions.id, cvIds));
     const cvById = new Map(cvRows.map((r) => [r.id, r]));
     for (const c of charRows) {
       if (c.cvId === null) continue;
       const cv = cvById.get(c.cvId);
-      if (cv) out.set(c.id, { name: cv.name, tags: asStringArray(cv.tags) });
+      if (cv)
+        out.set(c.id, { name: cv.name, tags: asStringArray(cv.tags), avatarHash: cv.avatarHash });
     }
     return out;
   }
@@ -527,6 +535,7 @@ export function createSearchService(db: Db, deps: SearchServiceDeps = {}): Searc
           name: d.name,
           tags: d.tags,
           description: d.description,
+          avatarHash: d.avatarHash,
           matchCount: 1,
           bestDistance: c.distance,
           segments: [seg],
