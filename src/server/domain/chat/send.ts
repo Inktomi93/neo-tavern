@@ -31,6 +31,7 @@ export function createSend(ctx: ChatContext, ops: { runCompaction: RunCompaction
   const { db, loadOwnedChat, maxSeq, listByChat, openRouterRunner, runTurn, recordTurnEvents } =
     ctx;
   const { buildAssembleContext, resolveConfig, loadCanonHistory, embedder, summarizer } = ctx;
+  const { retrieveMemory } = ctx;
   const { runCompaction } = ops;
 
   async function send(params: SendParams): Promise<SendResult> {
@@ -53,13 +54,21 @@ export function createSend(ctx: ChatContext, ops: { runCompaction: RunCompaction
       const userSeq = currentMax + 1;
 
       // Assemble the character/system prompt from the chat's pinned preset + its character,
-      // persona, and attached world-info. Built fresh each turn (the recent-message scan for
-      // keyword-WI includes the message just inserted above). static → cached prefix; dynamic →
-      // after the boundary. The chat had NO character prompt before this.
+      // persona, and attached world-info. Built fresh each turn; the recent-message scan for
+      // keyword-WI includes the regex-processed turn appended below. static → cached prefix;
+      // dynamic → after the boundary. The chat had NO character prompt before this.
+      // Defer memory retrieval: it must run with the regex-processed user turn (computed below), so
+      // the {{memory}} query reflects the message being answered.
       const [assembleCtx, promptConfig] = await Promise.all([
-        buildAssembleContext(chat),
+        buildAssembleContext(chat, { deferMemory: true }),
         resolveConfig(chat),
       ]);
+
+      // The {{memory}} gate (shared by retrieval here + background digest generation later).
+      const memCfg = promptConfig.params.memory;
+      const hasMemoryMarker = promptConfig.sections.some(
+        (s) => s.type === "marker" && s.marker === "memory" && s.enabled,
+      );
 
       const macroCtx = createMacroContext({
         char: assembleCtx.character.name,
@@ -82,6 +91,13 @@ export function createSend(ctx: ChatContext, ops: { runCompaction: RunCompaction
 
       // Append to recentMessages so World Info matches keywords on the regex-processed text
       assembleCtx.recentMessages.push(params.content);
+
+      // Now retrieve memory, folding in the just-typed (regex-processed) turn so the {{memory}} query
+      // is the message being answered, not the previous exchange. (retrieveMemory self-gates on
+      // enabled/mode + presence of digests; the marker gate is ours.)
+      if (memCfg?.enabled === true && hasMemoryMarker) {
+        assembleCtx.memory = await retrieveMemory(params.chatId, memCfg, params.content);
+      }
 
       await db.insert(messages).values({
         id: newId(),
@@ -261,10 +277,6 @@ export function createSend(ctx: ChatContext, ops: { runCompaction: RunCompaction
       // memory marker. Idempotent/incremental; only OLDER messages (below verbatimWindow) digest,
       // so the turn just saved is untouched. Lock-free on purpose (taking the chat lock would make
       // the next send wait on summarization).
-      const memCfg = promptConfig.params.memory;
-      const hasMemoryMarker = promptConfig.sections.some(
-        (s) => s.type === "marker" && s.marker === "memory" && s.enabled,
-      );
       if (memCfg?.enabled === true && hasMemoryMarker) {
         void generateDigests(
           db,

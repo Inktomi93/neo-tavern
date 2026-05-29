@@ -72,6 +72,11 @@ export async function buildAssembleContext(
   embedder: Embedder,
   reranker: Reranker,
   chat: typeof chats.$inferSelect,
+  // `send` defers memory retrieval to AFTER it appends the regex-processed in-flight user turn, so
+  // the query reflects the message being answered (it can't reorder the insert — the stored content
+  // depends on macroCtx → this context). Other callers (swipe/read/compaction) have no in-flight
+  // turn, so they retrieve inline against committed rows here.
+  opts: { deferMemory?: boolean } = {},
 ): Promise<AssembleContext> {
   const cvRows = await db
     .select()
@@ -123,7 +128,7 @@ export async function buildAssembleContext(
   const hasMemoryMarker = config.sections.some(
     (s) => s.type === "marker" && s.marker === "memory" && s.enabled,
   );
-  if (memCfg?.enabled === true && hasMemoryMarker) {
+  if (!opts.deferMemory && memCfg?.enabled === true && hasMemoryMarker) {
     memory = await retrieveMemory(db, { embedder, reranker }, { chatId: chat.id, params: memCfg });
   }
 

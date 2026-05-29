@@ -4,11 +4,42 @@ import type { Embedder } from "../../../embeddings/embedder";
 import { getLog } from "../../../observability/logger";
 import { newId } from "../../_shared/ids";
 import { CONSOLIDATE_SYSTEM, DEFAULTS, DIGEST_SCHEMA, TIER0_SYSTEM } from "./constants";
-import { embedAndUpsert, loadChatMeta, loadDigests, loadHistory, loadSegments } from "./db";
+import {
+  embedAndUpsert,
+  loadChatMeta,
+  loadDigests,
+  loadHistory,
+  loadSegments,
+  pruneDigestOrphans,
+  pruneDigestTiersAbove,
+  pruneSegmentOrphans,
+} from "./db";
 import type { GenerateDigestsDeps, MemoryConfig, PendingDigest } from "./types";
 import { chunk, parseDigest, renderTranscript, resolveCfg } from "./utils";
 
+// Non-blocking self-guard (#4): background generation is fire-and-forget (it outlives the send
+// lock), so two rapid sends can overlap for one chat — both reading the same staleness snapshot and
+// both calling the summarizer (double spend). A chat already generating skips the duplicate. Per-chat
+// and NOT the send lock (taking that would make the next send wait on summarization); cleared in
+// `finally` so a throw never wedges the chat. Digests + segments use independent guards.
+const digestGenerationInFlight = new Set<string>();
+const segmentGenerationInFlight = new Set<string>();
+
 export async function generateDigests(
+  db: Db,
+  deps: GenerateDigestsDeps,
+  opts: { chatId: string; params: MemoryConfig },
+): Promise<{ written: number }> {
+  if (digestGenerationInFlight.has(opts.chatId)) return { written: 0 };
+  digestGenerationInFlight.add(opts.chatId);
+  try {
+    return await generateDigestsInner(db, deps, opts);
+  } finally {
+    digestGenerationInFlight.delete(opts.chatId);
+  }
+}
+
+async function generateDigestsInner(
   db: Db,
   deps: GenerateDigestsDeps,
   opts: { chatId: string; params: MemoryConfig },
@@ -75,6 +106,10 @@ export async function generateDigests(
     existing = await loadDigests(db, opts.chatId);
     pending = [];
   }
+  // #2: prune tier-0 digests whose block no longer exists (grid shrank). BEFORE consolidation, so the
+  // tier counts that drive `groups` reflect the live grid rather than counting orphans as children.
+  await pruneDigestOrphans(db, opts.chatId, 0, blocks.length);
+  existing = await loadDigests(db, opts.chatId);
 
   // tiers 1..maxTier — consolidate `fanOut` lower-tier digests into one coarser digest. Deterministic
   // by blockIdx: parent block i covers children [i*fanOut, (i+1)*fanOut). A parent is stale if any
@@ -131,7 +166,13 @@ export async function generateDigests(
       existing = await loadDigests(db, opts.chatId);
       pending = [];
     }
+    // #2: prune this tier's orphaned consolidations (fewer groups now) so the NEXT tier reads a
+    // clean child count. groups === 0 prunes the whole tier (it no longer consolidates).
+    await pruneDigestOrphans(db, opts.chatId, k + 1, groups);
+    existing = await loadDigests(db, opts.chatId);
   }
+  // #2: drop any tiers entirely above the configured maxTier (it was lowered).
+  await pruneDigestTiersAbove(db, opts.chatId, cfg.maxTier);
 
   getLog().debug(
     { chatId: opts.chatId, tier0Blocks: blocks.length, written: totalWritten },
@@ -149,6 +190,20 @@ export async function generateDigests(
  * stale/missing blocks re-embed (span changed, or a contained message edited after the segment).
  */
 export async function generateSegments(
+  db: Db,
+  deps: { embedder: Embedder },
+  opts: { chatId: string; blockSize?: number | undefined },
+): Promise<{ written: number }> {
+  if (segmentGenerationInFlight.has(opts.chatId)) return { written: 0 };
+  segmentGenerationInFlight.add(opts.chatId);
+  try {
+    return await generateSegmentsInner(db, deps, opts);
+  } finally {
+    segmentGenerationInFlight.delete(opts.chatId);
+  }
+}
+
+async function generateSegmentsInner(
   db: Db,
   deps: { embedder: Embedder },
   opts: { chatId: string; blockSize?: number | undefined },
@@ -181,6 +236,9 @@ export async function generateSegments(
     if (!stale) continue;
     pending.push({ blockIdx: i, seqStart: first.seq, seqEnd: last.seq, text });
   }
+  // #2: prune segment blocks past the live grid (grid shrank). Runs even when nothing is stale —
+  // an orphan can exist with no current block dirty (e.g. only the tail blocks dropped).
+  await pruneSegmentOrphans(db, opts.chatId, blocks.length);
   if (pending.length === 0) return { written: 0 };
 
   const vecs = await deps.embedder.embedBatch(pending.map((p) => p.text));

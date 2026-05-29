@@ -1,4 +1,4 @@
-import { asc, eq } from "drizzle-orm";
+import { and, asc, eq, gt, gte } from "drizzle-orm";
 import type { Db } from "../../../../db/client";
 import {
   characterVersions,
@@ -106,6 +106,52 @@ export async function loadSegments(
     .where(eq(chatSegments.chatId, chatId));
 }
 
+// ── orphan reconcile (#2) ──────────────────────────────────────────────────────
+// The block grid can SHRINK — a larger `blockSize`, or a message edited to empty (it drops from
+// `loadHistory`) — leaving trailing high-`blockIdx` rows that map to no current block. Left alone
+// they're injected into prompts / searched forever. These targeted DELETE WHEREs prune them (safe
+// for the libsql vector index; only an unscoped bulk empty triggers the shadow-row footgun).
+
+/** Drop digests in `tier` whose blockIdx is past the live grid (blockIdx >= validBlockCount). */
+export async function pruneDigestOrphans(
+  db: Db,
+  chatId: string,
+  tier: number,
+  validBlockCount: number,
+): Promise<void> {
+  await db
+    .delete(chatDigests)
+    .where(
+      and(
+        eq(chatDigests.chatId, chatId),
+        eq(chatDigests.tier, tier),
+        gte(chatDigests.blockIdx, validBlockCount),
+      ),
+    );
+}
+
+/** Drop digests in tiers above the configured maxTier (it was lowered). */
+export async function pruneDigestTiersAbove(
+  db: Db,
+  chatId: string,
+  maxTier: number,
+): Promise<void> {
+  await db
+    .delete(chatDigests)
+    .where(and(eq(chatDigests.chatId, chatId), gt(chatDigests.tier, maxTier)));
+}
+
+/** Drop segments whose blockIdx is past the live grid (blockIdx >= validBlockCount). */
+export async function pruneSegmentOrphans(
+  db: Db,
+  chatId: string,
+  validBlockCount: number,
+): Promise<void> {
+  await db
+    .delete(chatSegments)
+    .where(and(eq(chatSegments.chatId, chatId), gte(chatSegments.blockIdx, validBlockCount)));
+}
+
 // Embed the staged digests in ONE batched GPU pass, then upsert (idempotent on the unique
 // (chatId,tier,blockIdx) — a regenerated block overwrites in place). Returns how many were written.
 export async function embedAndUpsert(
@@ -166,11 +212,18 @@ export async function embedAndUpsert(
  * written (`editedAt > createdAt`); a regenerated child marks its parent stale (bounded vertical
  * cascade). Returns how many digests were (re)written. Used live (post-turn) and for bulk backfill.
  */
-export async function recentQueryText(db: Db, chatId: string, window: number): Promise<string> {
-  const hist = await loadHistory(db, chatId);
-  return hist
-    .slice(-window)
-    .map((m) => m.content)
-    .join("\n")
-    .trim();
+export async function recentQueryText(
+  db: Db,
+  chatId: string,
+  window: number,
+  pendingUserText?: string,
+): Promise<string> {
+  const hist = await loadHistory(db, chatId); // filtered: no system rows, no empty content
+  const contents = hist.map((m) => m.content);
+  // The in-flight user turn isn't committed yet at assembly time; append it (subject to the same
+  // non-empty rule) so a `send`'s query reflects the message being answered, not the prior exchange.
+  if (pendingUserText !== undefined && pendingUserText.trim().length > 0) {
+    contents.push(pendingUserText);
+  }
+  return contents.slice(-window).join("\n").trim();
 }

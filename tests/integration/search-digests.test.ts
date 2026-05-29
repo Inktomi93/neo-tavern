@@ -1,6 +1,7 @@
+import { eq } from "drizzle-orm";
 import { expect, test } from "vitest";
 import type { Db } from "../../src/db/client";
-import { messages } from "../../src/db/schema";
+import { chatDigests, chats, messages } from "../../src/db/schema";
 import { newId } from "../../src/server/domain/_shared/ids";
 import { createChatService } from "../../src/server/domain/chat";
 import { generateDigests } from "../../src/server/domain/chat/memory/generate";
@@ -135,4 +136,144 @@ test("digest search is scoped to the owner — never returns another user's dige
   });
   expect(hits.every((h) => h.chatId === ownerChat)).toBe(true);
   expect(hits.some((h) => h.chatId === otherChat)).toBe(false);
+});
+
+// ── corpus digest search: tier coverage, CSLS hubness reorder, rerank, empty ──
+// These insert digest rows directly (precise control over tier, embedding, hub_score) — the ANN
+// index auto-maintains on insert, so vector_top_k finds them.
+
+async function chatIds(
+  db: Db,
+  username: string,
+): Promise<{ chatId: string; ownerId: string; cvId: string }> {
+  const chat = createChatService(db, { embedder: fakeEmbedder });
+  const { chatId } = await chat.create({
+    username,
+    title: "t",
+    characterName: "V",
+    characterDescription: "d",
+  });
+  const row = (await db.select().from(chats).where(eq(chats.id, chatId)))[0];
+  if (!row) throw new Error("chat row missing");
+  return { chatId, ownerId: row.ownerId, cvId: row.characterVersionId };
+}
+
+async function insertDigestRow(
+  db: Db,
+  ids: { chatId: string; ownerId: string; cvId: string },
+  d: {
+    tier?: number;
+    blockIdx: number;
+    seqStart: number;
+    seqEnd: number;
+    text: string;
+    hubScore?: number | null;
+  },
+): Promise<void> {
+  await db.insert(chatDigests).values({
+    id: newId(),
+    chatId: ids.chatId,
+    ownerId: ids.ownerId,
+    characterVersionId: ids.cvId,
+    tier: d.tier ?? 0,
+    blockIdx: d.blockIdx,
+    seqStart: d.seqStart,
+    seqEnd: d.seqEnd,
+    text: d.text,
+    keywords: [],
+    model: "fake",
+    embedding: bow(d.text),
+    hubScore: d.hubScore ?? null,
+    createdAt: Date.now(),
+  });
+}
+
+test("corpus digest search returns tier-1 arc digests, not only tier-0", async () => {
+  const db = await freshDb();
+  const chat = createChatService(db, { embedder: fakeEmbedder });
+  const { chatId } = await chat.create({
+    username: "owner",
+    title: "t",
+    characterName: "Vermithrax",
+    characterDescription: "d",
+  });
+  const now = Date.now();
+  for (const [i, m] of DRAGON.entries())
+    await db
+      .insert(messages)
+      .values({ id: newId(), chatId, seq: i, role: m.role, content: m.content, createdAt: now });
+  // fanOut 2 → 3 tier-0 blocks consolidate into a tier-1 arc.
+  await generateDigests(
+    db,
+    { embedder: fakeEmbedder, summarizer: fakeSummarizer },
+    { chatId, params: { ...memParams, fanOut: 2, maxTier: 1 } },
+  );
+
+  const search = createSearchService(db, { embedder: fakeEmbedder, reranker: fakeReranker });
+  const hits = await search.digests({
+    queryText: "emeralds village dragon",
+    username: "owner",
+    k: 10,
+  });
+
+  expect(hits.some((h) => h.tier === 1)).toBe(true); // the arc-level digest is searchable, not filtered out
+});
+
+test("CSLS hub_score reorders results: a low-hub digest outranks a high-hub one at equal distance", async () => {
+  const db = await freshDb();
+  const ids = await chatIds(db, "owner");
+  await insertDigestRow(db, ids, {
+    blockIdx: 0,
+    seqStart: 0,
+    seqEnd: 1,
+    text: "shared term raretoken",
+    hubScore: 0.1,
+  });
+  await insertDigestRow(db, ids, {
+    blockIdx: 1,
+    seqStart: 2,
+    seqEnd: 3,
+    text: "shared term hubtoken",
+    hubScore: 0.9,
+  });
+
+  const search = createSearchService(db, { embedder: fakeEmbedder, reranker: fakeReranker });
+  const hits = await search.digests({ queryText: "shared term", username: "owner", k: 2 });
+
+  expect(hits[0]?.snippet).toContain("raretoken"); // lower hub_score → better adjusted rank
+});
+
+test("corpus digest search rerank=true lets the cross-encoder override distance order", async () => {
+  const db = await freshDb();
+  const ids = await chatIds(db, "owner");
+  await insertDigestRow(db, ids, {
+    blockIdx: 0,
+    seqStart: 0,
+    seqEnd: 1,
+    text: "common common closer",
+  }); // nearest by cosine
+  await insertDigestRow(db, ids, { blockIdx: 1, seqStart: 2, seqEnd: 3, text: "common WINNER" }); // farther, but promoted
+
+  const winnerReranker: Reranker = {
+    model: "fake",
+    rerank: (_q, docs) =>
+      Promise.resolve(
+        [...docs]
+          .sort((a, b) => (b.text.includes("WINNER") ? 1 : 0) - (a.text.includes("WINNER") ? 1 : 0))
+          .map((d) => ({ id: d.id, score: 1 })),
+      ),
+  };
+  const search = createSearchService(db, { embedder: fakeEmbedder, reranker: winnerReranker });
+  const hits = await search.digests({ queryText: "common", username: "owner", k: 5, rerank: true });
+
+  expect(hits[0]?.snippet).toContain("WINNER"); // rerank promoted it above the closer-by-cosine digest
+});
+
+test("corpus digest search over an empty corpus returns no hits", async () => {
+  const db = await freshDb();
+  await chatIds(db, "owner"); // user exists, but no digests
+  const search = createSearchService(db, { embedder: fakeEmbedder, reranker: fakeReranker });
+
+  const hits = await search.digests({ queryText: "anything", username: "owner", k: 5 });
+  expect(hits).toEqual([]);
 });
