@@ -126,12 +126,36 @@ app containers are only reachable through caddy (internal docker network), and `
 via JWKS when present (`FORWARD_AUTH_VERIFY_JWT=true`, default on); falls back to network-trust if
 absent. Update CLAUDE.md's auth paragraph to match (§14).
 
-### 1d. The neo-tavern caddy block (to add; mirror the in-stack patterns)
-- `forward-header` mode → like `@uptime`/`@backrest`: `route { import authentik; reverse_proxy
-  neo-tavern:8788 }` under `@neotavern host neo-tavern.inktomi.tech`.
-- `oidc` mode → like `@openwebui`/`@grafana`/`@forgejo`: **no** `import authentik`, just
-  `reverse_proxy neo-tavern:8788` (the app does its own OIDC) + `flush_interval -1` and long
-  read/write timeouts for SSE (copy the Open WebUI block's transport settings).
+### 1d. The neo-tavern caddy block — CLEAN by design (none of the SillyTavern asset bullshittery)
+The live `@sillytavern` block is forced into three hacks; **neo-tavern needs none of them**, and the
+build must NOT reintroduce them. Why each disappears:
+1. **No hand-maintained static-asset allowlist that skips forward-auth.** ST enumerates
+   `/img/* /css/* /js/* /scripts/* /lib/* …` ("ST's actual JS paths") to keep forward-auth's cookie
+   dance off parallel asset loads — fragile, breaks on ST updates. neo-tavern splits by a **single
+   stable prefix**: `/api/*` is the dynamic surface; **everything else is the SPA bundle**, and
+   `/blob/*` is the immutable CAS. Gate by prefix, never by enumerating asset paths.
+2. **No `email→username` map / `header_up X-Authentik-Username` rewrite.** ST stores each user's data
+   in a **filesystem directory named after the user**, so it must map the authentik identity → a
+   stable dir name. neo-tavern has **no per-user directories**: per-user data = `ownerId`-scoped DB
+   rows; assets = a **global content-addressed CAS (no `ownerId`, dedup by hash)**. Identity keys on
+   the stable `externalId` (`sub`/uid). That entire `map { … }` block is *gone* — structurally.
+3. **No `-Clear-Site-Data` ES-module workaround** on our origin: the SPA bundle is served **outside**
+   forward-auth (and `oidc` uses bearers, no authentik app-cookie on our origin), so the
+   callback-cache-bust never races our module loads.
+
+**The blocks:**
+- **`oidc` mode** (like `@openwebui`/`@grafana`): **no `import authentik`** — the app owns auth. Serve
+  everything to `neo-tavern:8788`; the app makes the SPA + `/blob/*` + `/api/auth/*` + `/api/healthz`
+  public and requires the bearer only on `/api/trpc/*`. Add `flush_interval -1` + long read/write
+  timeouts for SSE (copy the Open WebUI transport block).
+- **`forward-header` mode**: run the authentik outpost, but **scope forward-auth to `/api/*` only** —
+  serve the SPA bundle + `/blob/*` without it (`handle /api/* { import authentik; reverse_proxy … }`
+  then `handle { reverse_proxy … }`). One prefix, stable; no asset-path race, no enumeration.
+- **Assets:** `/blob/:hash` is content-addressed, immutable, `Cache-Control: immutable` for a year —
+  **capability-by-unguessable-hash**, so it's served publicly (no per-request auth) like a CDN URL;
+  acceptable under the homelab trust model (a global blob isn't owned — it's deduped across users).
+  No per-user avatar/thumbnail dirs, no thumbnailing config (JIT resize via `sharp` in-app, already
+  built: `/api/blob/:hash?w=…&f=webp`). vs ST's per-user `/thumbnails` `/avatars` `/backgrounds`.
 
 Sources: [authentik OAuth2 provider](https://docs.goauthentik.io/add-secure-apps/providers/oauth2/) ·
 [forward-auth](https://docs.goauthentik.io/add-secure-apps/providers/proxy/forward_auth/) ·
