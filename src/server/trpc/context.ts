@@ -7,6 +7,7 @@ import type { ModelsService } from "../domain/models";
 import type { PersonaService } from "../domain/persona";
 import type { PresetService } from "../domain/preset";
 import type { SearchService } from "../domain/search";
+import type { SessionsService } from "../domain/sessions";
 import type { SettingsService } from "../domain/settings";
 import type { TagService } from "../domain/tag";
 import type { WorldInfoService } from "../domain/world-info";
@@ -27,6 +28,7 @@ export interface Services {
   persona: PersonaService;
   preset: PresetService;
   search: SearchService;
+  sessions: SessionsService;
   settings: SettingsService;
   tag: TagService;
   worldInfo: WorldInfoService;

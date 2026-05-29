@@ -10,6 +10,7 @@ import { createModelsService } from "./domain/models";
 import { createPersonaService } from "./domain/persona";
 import { createPresetService } from "./domain/preset";
 import { createSearchService } from "./domain/search";
+import { createSessionsService } from "./domain/sessions";
 import { createSettingsService } from "./domain/settings";
 import { createTagService } from "./domain/tag";
 import { createWorldInfoService } from "./domain/world-info";
@@ -34,8 +35,9 @@ await runMigrations(db);
 // hot paths (send/embedder) read resolved values, not just env defaults. See config/app-config.ts.
 await reloadAppConfig(db);
 const cas = createCas(env.ASSETS_DIR);
+const sessionsService = createSessionsService(db);
 const services: Services = {
-  admin: createAdminService(db),
+  admin: createAdminService(db, sessionsService),
   character: createCharacterService(db),
   chat: createChatService(db),
   corpus: createCorpusService(db),
@@ -43,6 +45,7 @@ const services: Services = {
   persona: createPersonaService(db),
   preset: createPresetService(db),
   search: createSearchService(db),
+  sessions: sessionsService,
   settings: createSettingsService(db),
   tag: createTagService(db),
   worldInfo: createWorldInfoService(db),

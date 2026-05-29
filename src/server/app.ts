@@ -195,12 +195,15 @@ export function buildApp(db: Db, cas: Cas, services: Services, isProd: boolean) 
   //     path is the owner by definition, not a revocable user — plan §2).
   //   • SSO identity (cookie/forward-header) → provisionIdentity resolves role + the enabled gate
   //     (disabled → dropped to unauthenticated).
-  // (validateSessionCookie is injected here in commit 4 once the sessions service exists; until then
-  // the cookie layer is inert and oidc falls through to the fallback.)
+  // The cookie layer (oidc) validates the neo_session token against the sessions service, which
+  // enforces revoke/expiry/users.enabled every request.
   async function buildAuthContext(headers: Headers): Promise<AuthContext> {
     const { identity, viaCookie, viaFallback } = await resolveIdentity(
       headers,
       authConfigFromEnv(),
+      {
+        validateSessionCookie: (token) => services.sessions.validate(token),
+      },
     );
     const hasCsrf = hasCsrfHeader(headers);
     if (identity === null) {

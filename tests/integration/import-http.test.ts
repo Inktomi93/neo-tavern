@@ -14,6 +14,7 @@ import { createModelsService } from "../../src/server/domain/models";
 import { createPersonaService } from "../../src/server/domain/persona";
 import { createPresetService } from "../../src/server/domain/preset";
 import { createSearchService } from "../../src/server/domain/search";
+import { createSessionsService } from "../../src/server/domain/sessions";
 import { createSettingsService } from "../../src/server/domain/settings";
 import { createTagService } from "../../src/server/domain/tag";
 import { createWorldInfoService } from "../../src/server/domain/world-info";
@@ -35,8 +36,10 @@ afterEach(async () => {
 async function setupApp() {
   const db = await freshDb();
   const cas = createCas(casRoot);
+  const sessions = createSessionsService(db);
   const services = {
-    admin: createAdminService(db),
+    admin: createAdminService(db, sessions),
+    sessions,
     character: createCharacterService(db),
     chat: createChatService(db),
     corpus: createCorpusService(db),

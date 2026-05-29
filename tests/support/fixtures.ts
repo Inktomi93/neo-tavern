@@ -8,6 +8,7 @@ import { createModelsService } from "../../src/server/domain/models";
 import { createPersonaService } from "../../src/server/domain/persona";
 import { createPresetService } from "../../src/server/domain/preset";
 import { createSearchService } from "../../src/server/domain/search";
+import { createSessionsService } from "../../src/server/domain/sessions";
 import { createSettingsService } from "../../src/server/domain/settings";
 import { createTagService } from "../../src/server/domain/tag";
 import { createWorldInfoService } from "../../src/server/domain/world-info";
@@ -24,6 +25,7 @@ export interface AppServices {
   persona: ReturnType<typeof createPersonaService>;
   preset: ReturnType<typeof createPresetService>;
   search: ReturnType<typeof createSearchService>;
+  sessions: ReturnType<typeof createSessionsService>;
   settings: ReturnType<typeof createSettingsService>;
   tag: ReturnType<typeof createTagService>;
   worldInfo: ReturnType<typeof createWorldInfoService>;
@@ -43,8 +45,9 @@ export const test = baseTest.extend<IntegrationFixtures>({
     await use(dbInstance);
   },
   services: async ({ db }, use) => {
+    const sessions = createSessionsService(db);
     const services: AppServices = {
-      admin: createAdminService(db),
+      admin: createAdminService(db, sessions),
       character: createCharacterService(db),
       chat: createChatService(db),
       corpus: createCorpusService(db),
@@ -52,6 +55,7 @@ export const test = baseTest.extend<IntegrationFixtures>({
       persona: createPersonaService(db),
       preset: createPresetService(db),
       search: createSearchService(db),
+      sessions,
       settings: createSettingsService(db),
       tag: createTagService(db),
       worldInfo: createWorldInfoService(db),
