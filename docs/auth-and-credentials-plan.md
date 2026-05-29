@@ -428,9 +428,11 @@ null, enabled true, role already admin from migration 0025; no sessions until fi
    Behavior-changing core; guard with existing send/swipe/chat-start tests + new resolver tests.
 3. **D** — OIDC server routes + the real `oidc` strategy backed by the `sessions` table (mint on
    callback, validate-by-hash per request, sliding expiry, revoke on logout/disable). Frontend deferred.
-4. **Docs** — new `docs/auth.md` (full model + verbatim caddy snippet + both neo block shapes),
-   CLAUDE.md (already reconciled this pass), `docs/data-model.md` (externalId/enabled/user_credentials/
-   sessions — partly done this pass; finish when built).
+4. **Docs** — `docs/auth.md` **already written** (paste-ready Caddy block for both modes + the
+   authentik setup checklist + env table — the deploy recipe); CLAUDE.md + `docs/data-model.md` already
+   reconciled to the cookie/BFF model this pass. At build: finish the data-model rows
+   (externalId/enabled/user_credentials/sessions) + resolve the 2 CONFIRM-AT-BUILD notes in `docs/auth.md`
+   (the `/blob` path + the exact SSE-encode scope).
 
 ## §15. Risk register
 - Turn-path resolver refactor on the hot path → owner resolution byte-identical; existing
