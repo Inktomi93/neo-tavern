@@ -116,11 +116,16 @@ export async function buildAssembleContext(
     .where(eq(characterVersionWorldEntries.characterVersionId, chat.characterVersionId));
 
   const recent = await db
-    .select({ content: messages.content })
+    .select({ role: messages.role, content: messages.content })
     .from(messages)
     .where(eq(messages.chatId, chat.id))
     .orderBy(desc(messages.seq))
     .limit(RECENT_MESSAGE_WINDOW);
+  // `recent` is newest-first → derive the {{lastMessage}}/{{lastUserMessage}}/{{lastCharMessage}}
+  // macro inputs from the committed tail (the in-flight turn is set as currentInput by `send`).
+  const lastMessage = recent[0]?.content;
+  const lastUserMessage = recent.find((r) => r.role === "user")?.content;
+  const lastCharMessage = recent.find((r) => r.role === "assistant")?.content;
 
   let memory: string | null = null;
   const config = await resolveConfig(db, chat);
@@ -151,6 +156,9 @@ export async function buildAssembleContext(
       ...cvWi.map((r) => toWorldEntry(r, "character")),
     ],
     recentMessages: recent.map((r) => r.content).reverse(),
+    lastMessage,
+    lastUserMessage,
+    lastCharMessage,
     compactSummary: chat.api === "agent-sdk" ? null : chat.compactSummary,
     memory,
   };

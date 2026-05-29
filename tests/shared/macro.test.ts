@@ -150,3 +150,68 @@ describe("Macro Engine — edge & error branches", () => {
     expect(processMacros("{{join::{{echo::1::2}}::b}}", ctx, registry)).toBe("12|b");
   });
 });
+
+// The vocabulary added in the "completeness" batch: formatting, dice, clock, comments, and the
+// conversation-context macros ({{input}}/{{lastMessage}}/…).
+describe("Macro Engine — new vocabulary", () => {
+  const base: ProcessMacroOptions = {
+    char: "Alice",
+    user: "Bob",
+    persona: "",
+    scenario: "",
+    env: {},
+  };
+
+  it("{{newline}} → a literal newline", () => {
+    expect(processMacros("a{{newline}}b", base)).toBe("a\nb");
+  });
+
+  it("{{#trim}} strips surrounding whitespace from the evaluated body", () => {
+    expect(processMacros("[{{#trim}}  {{char}}  {{/trim}}]", base)).toBe("[Alice]");
+  });
+
+  it("{{roll::NdM}} sums dice (deterministic for d1) and stays in range", () => {
+    expect(processMacros("{{roll::3d1}}", base)).toBe("3"); // 3 × d1 = 3
+    expect(processMacros("{{roll::1d1}}", base)).toBe("1");
+    const n = Number(processMacros("{{roll::2d6}}", base));
+    expect(n).toBeGreaterThanOrEqual(2);
+    expect(n).toBeLessThanOrEqual(12);
+    const m = Number(processMacros("{{roll::6}}", base));
+    expect(m).toBeGreaterThanOrEqual(1);
+    expect(m).toBeLessThanOrEqual(6);
+    expect(processMacros("{{roll::nonsense}}", base)).toBe(""); // invalid → empty
+  });
+
+  it("{{time}} and {{date}} render locale-independent formats", () => {
+    expect(processMacros("{{time}}", base)).toMatch(/^\d{2}:\d{2}:\d{2}$/);
+    expect(processMacros("{{date}}", base)).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+
+  it("{{// comment}} is stripped (and survives a nested {{macro}} inside it)", () => {
+    expect(processMacros("x {{// a note}} y", base)).toBe("x  y");
+    expect(processMacros("x {{// has {{char}} inside}} y", base)).toBe("x  y");
+  });
+
+  it("an unclosed {{// comment is preserved as literal text", () => {
+    expect(processMacros("a {{// unclosed", base)).toBe("a {{// unclosed");
+  });
+
+  it("{{input}}/{{lastMessage}}/{{lastUserMessage}}/{{lastCharMessage}} resolve from context", () => {
+    const ctx: ProcessMacroOptions = {
+      ...base,
+      input: "what about the key",
+      lastMessage: "the pass, always",
+      lastUserMessage: "what do you guard",
+      lastCharMessage: "the pass, always",
+    };
+    expect(processMacros("{{input}}", ctx)).toBe("what about the key");
+    expect(processMacros("{{lastUserMessage}}", ctx)).toBe("what do you guard");
+    expect(processMacros("{{lastMessage}}|{{lastCharMessage}}", ctx)).toBe(
+      "the pass, always|the pass, always",
+    );
+  });
+
+  it("conversation macros resolve to empty when the context lacks them", () => {
+    expect(processMacros("[{{input}}][{{lastMessage}}]", base)).toBe("[][]");
+  });
+});

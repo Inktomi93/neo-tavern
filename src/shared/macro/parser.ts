@@ -22,6 +22,30 @@ export function parseMacros(text: string): MacroAST {
 
     pos = nextMacroStart + 2;
 
+    // Comment macro: {{// … }} — consumed whole, emits nothing. Scanned depth-aware (mirroring the
+    // arg reader) so a nested {{…}} inside the comment doesn't close it early.
+    if (text.startsWith("//", pos)) {
+      let cDepth = 1;
+      let j = pos + 2;
+      for (; j < text.length; j++) {
+        if (text.startsWith("{{", j)) {
+          cDepth++;
+          j++;
+        } else if (text.startsWith("}}", j)) {
+          cDepth--;
+          if (cDepth === 0) break;
+          j++;
+        }
+      }
+      if (j >= text.length) {
+        // Unclosed comment → preserve from the `{{` as literal text (matches unclosed-macro handling).
+        flatAst.push({ type: "text", value: text.slice(nextMacroStart) });
+        break;
+      }
+      pos = j + 2; // skip the closing }}
+      continue;
+    }
+
     let isBlock = false;
     let isBlockClose = false;
 

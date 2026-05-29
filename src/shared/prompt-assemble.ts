@@ -55,6 +55,12 @@ export interface AssembleContext {
   worldEntries: AssembleWorldEntry[];
   /** Recent message texts, for keyword-WI matching. */
   recentMessages: string[];
+  /** Conversation-derived macro inputs ({{input}}/{{lastMessage}}/…). Optional — absent on paths
+   *  that don't have them (macros then resolve to ""). */
+  currentInput?: string | undefined;
+  lastMessage?: string | undefined;
+  lastUserMessage?: string | undefined;
+  lastCharMessage?: string | undefined;
   /** The chat's compaction summary, when in a mode that injects it (the stateless openrouter path).
    *  Rendered by the {{compact_summary}} marker; null/absent → nothing rendered. */
   compactSummary?: string | null;
@@ -96,14 +102,19 @@ function escapeRegExp(value: string): string {
 // Resolve {{macros}} against the character + the section-appropriate persona (pinned or active).
 function renderMacros(
   text: string,
-  character: AssembleCharacter,
+  ctx: AssembleContext,
   persona: AssemblePersona | null | undefined,
 ): string {
   return processMacros(text, {
-    char: character.name,
+    char: ctx.character.name,
     user: persona?.name ?? "User",
     persona: persona?.description ?? "",
-    scenario: character.scenario ?? "",
+    scenario: ctx.character.scenario ?? "",
+    // Conversation-derived inputs for {{input}}/{{lastMessage}}/… (undefined → "" in the macro).
+    input: ctx.currentInput,
+    lastMessage: ctx.lastMessage,
+    lastUserMessage: ctx.lastUserMessage,
+    lastCharMessage: ctx.lastCharMessage,
     env: {},
   });
 }
@@ -145,7 +156,7 @@ function renderWorldInfo(
       }
       return renderMacros(
         content,
-        ctx.character,
+        ctx,
         entry.source === "character" ? ctx.pinnedPersona : ctx.activePersona,
       );
     })
@@ -164,39 +175,29 @@ function renderMarker(
   const pinned = ctx.pinnedPersona; // card-derived sections
   switch (section.marker) {
     case "char_description":
-      return renderMacros(
-        `${character.name}'s description: ${character.description}`,
-        character,
-        pinned,
-      );
+      return renderMacros(`${character.name}'s description: ${character.description}`, ctx, pinned);
     case "char_personality":
       return character.personality
-        ? renderMacros(
-            `${character.name}'s personality: ${character.personality}`,
-            character,
-            pinned,
-          )
+        ? renderMacros(`${character.name}'s personality: ${character.personality}`, ctx, pinned)
         : "";
     case "scenario":
-      return character.scenario
-        ? renderMacros(`Scenario: ${character.scenario}`, character, pinned)
-        : "";
+      return character.scenario ? renderMacros(`Scenario: ${character.scenario}`, ctx, pinned) : "";
     case "dialogue_examples":
       return character.exampleMessages
-        ? renderMacros(`Example dialogue:\n${character.exampleMessages}`, character, pinned)
+        ? renderMacros(`Example dialogue:\n${character.exampleMessages}`, ctx, pinned)
         : "";
     case "char_system":
-      return character.systemPrompt ? renderMacros(character.systemPrompt, character, pinned) : "";
+      return character.systemPrompt ? renderMacros(character.systemPrompt, ctx, pinned) : "";
     case "post_history":
       return character.postHistoryInstructions
-        ? renderMacros(character.postHistoryInstructions, character, pinned)
+        ? renderMacros(character.postHistoryInstructions, ctx, pinned)
         : "";
     // The persona marker describes the CURRENT user identity → active persona.
     case "persona":
       return ctx.activePersona
         ? renderMacros(
             `${ctx.activePersona.name}: ${ctx.activePersona.description}`,
-            character,
+            ctx,
             ctx.activePersona,
           )
         : "";
@@ -241,7 +242,7 @@ function renderSection(
       return "";
     // Literal blocks are USER-authored → active persona.
     case "literal":
-      return renderMacros(section.content, ctx.character, ctx.activePersona);
+      return renderMacros(section.content, ctx, ctx.activePersona);
     case "marker":
       return renderMarker(section, ctx, trace, executeRegex);
   }

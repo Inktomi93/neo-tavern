@@ -65,10 +65,12 @@ only ✅-tracking in the repo; keep it one line.
   `DEFAULT_PROMPT_CONFIG`; the service + read path are ready for it).
 
 **Runtime / engine:**
-- **#42 — streaming → SSE** (token deltas over a tRPC v11 subscription): sdk-mode
-  `includePartialMessages` → `stream_event` deltas (the `onEvent` seam exists); raw-mode Responses
-  stream events. Also enables **live-push / multi-device sync** (the auto-refresh half — today it
-  converges on refresh). Caddy: disable proxy buffering for `text/event-stream` + keepalives.
+- **#42 — streaming: backend BUILT; client + push remain.** Token deltas are wired end-to-end —
+  all three runners (sdk `includePartialMessages`/`stream_event`; openrouter chat-completions +
+  responses) → `onDelta` → `chatStreamEmitter` → the tRPC `streamMessages` subscription. **Left:**
+  the *client* streaming UI that renders the deltas (frontend); **cross-client live-push fan-out**
+  (the auto-refresh half — today it converges on refresh); and the Caddy config (disable proxy
+  buffering for `text/event-stream` + keepalives).
 - **#48 — raw-mode refinements:** (1) granular raw caching — `cache_control` breakpoints at the
   static/dynamic split / history depth (à la ST), beyond the current static-block 5m directive — still
   deferred (low priority).

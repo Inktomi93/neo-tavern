@@ -24,8 +24,9 @@ The corpus search (`/corpus`) is a peer to chat, not buried. One dark theme, no 
 ## Chat surface (mirror Marinara)
 - Message rows: avatar + name, role styling, **in-house markdown renderer** (both Marinara and Astra
   roll their own — skip heavy remark/MDX; `*italics* = narration` is load-bearing RP convention).
-- **Per-chat streaming buffers** in client state (switching chats mid-stream must not lose text) — lands
-  with the SSE work (#42).
+- **Per-chat streaming buffers** in client state (switching chats mid-stream must not lose text) — the
+  backend already streams token deltas over the tRPC `streamMessages` subscription; this is the client
+  half (frontend, #42).
 - Input: multiline auto-resize, Enter sends / Shift+Enter newline.
 - A **context-fill meter** off `messages.contextWindow` (sdk reports it accurately; raw needs the
   catalog `contextLength` — the known gap). Opus now reports 200k (we capped the 1M default).

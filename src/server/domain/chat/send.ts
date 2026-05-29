@@ -75,6 +75,11 @@ export function createSend(ctx: ChatContext, ops: { runCompaction: RunCompaction
         user: assembleCtx.activePersona?.name ?? "User",
         persona: assembleCtx.activePersona?.description ?? "",
         scenario: assembleCtx.character.scenario ?? "",
+        // Conversation-derived inputs so USER_INPUT regex replace-strings can use {{input}}/{{lastMessage}}.
+        input: params.content,
+        lastMessage: assembleCtx.lastMessage,
+        lastUserMessage: assembleCtx.lastUserMessage,
+        lastCharMessage: assembleCtx.lastCharMessage,
         env: {},
         onWarn: (msg, err) => getLog().warn({ err }, msg),
       });
@@ -89,8 +94,10 @@ export function createSend(ctx: ChatContext, ops: { runCompaction: RunCompaction
         macroCtx,
       );
 
-      // Append to recentMessages so World Info matches keywords on the regex-processed text
+      // Append to recentMessages so World Info matches keywords on the regex-processed text; expose
+      // the in-flight turn to {{input}} in prompt sections.
       assembleCtx.recentMessages.push(params.content);
+      assembleCtx.currentInput = params.content;
 
       // Now retrieve memory, folding in the just-typed (regex-processed) turn so the {{memory}} query
       // is the message being answered, not the previous exchange. (retrieveMemory self-gates on

@@ -327,10 +327,12 @@ with `parentUuid` chains), not just user/assistant turns.
 (Separately, the store test pinned a real bug: the uuid-dedup unique index is defeated by a NULL
 `subpath` because SQLite treats NULLs as distinct, so the main transcript now stores `""` not NULL.)
 
-**Deferred (no consumer yet):** token-delta streaming (`includePartialMessages` +
-`stream_event` parsing) — the `onEvent` sink is wired as the seam, but delta-forwarding
-lands with the SSE chat UI (#42). (The persisted `chat_events` table that was parked here is
-now **BUILT** — migration 0014, written after each turn, surfaced in `/api/_debug/db/chat`.)
+**Built:** token-delta streaming is wired end-to-end — `includePartialMessages` + `stream_event`
+parsing (sdk) plus the openrouter chat-completions/responses delta paths all call `onDelta` →
+`chatStreamEmitter` → the tRPC `streamMessages` subscription. The only remaining consumer is the
+*client* UI that renders the deltas (frontend, #42); cross-device live-push fan-out is still deferred.
+(The persisted `chat_events` table parked here is also **BUILT** — migration 0014, written after each
+turn, surfaced in `/api/_debug/db/chat`.)
 
 ## Observed shapes & the compaction control surface (measured — `pnpm sdk:compaction`)
 

@@ -55,8 +55,9 @@ Append-only linear `messages` is the source of truth; the DB is canon.
 - **Session/runtime model (agent-sdk runner): STATELESS — one `query({resume})` per message.**
   Cold spawn ≈0.8s (measured); no long-lived subprocess to babysit, and editing stays trivial
   (every turn already resumes from a branch point). The DB-backed SessionStore is canon; the
-  SDK's local JSONL is transient scratch. A warm streaming session (~5ms/msg, proven) is a
-  future toggle, not built.
+  SDK's local JSONL is transient scratch. A warm (long-lived) SDK subprocess (~5ms/msg, proven)
+  is a future toggle, not built — the runner cold-spawns per message. (Token-delta *streaming*
+  itself IS wired: each runner → `chatStreamEmitter` → the tRPC `streamMessages` subscription.)
 - **Multi-device by design (stateless → DB-is-truth).** No server-held chat state, so the same
   chat open on a PC and a phone **converges on reconnect/refresh** — that's intended, and works
   today. *Automatic* push (the other device updating live, no manual refresh, via an SSE

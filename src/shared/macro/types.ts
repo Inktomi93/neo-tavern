@@ -25,6 +25,12 @@ export interface MacroContext {
   user: string;
   persona: string;
   scenario: string;
+  // Conversation-derived fields (optional — set by the chat send/assembly path, undefined elsewhere
+  // so `{{input}}`/`{{lastMessage}}` degrade to "" rather than throwing in contexts that lack them).
+  input?: string | undefined; // the in-flight user turn being answered
+  lastMessage?: string | undefined; // most recent message of any role (excl. the in-flight one)
+  lastUserMessage?: string | undefined;
+  lastCharMessage?: string | undefined;
   // Allows extensions (like Regex) or future features to pass arbitrary runtime state
   env: Record<string, unknown>;
   // Recursively evaluate strings (e.g. for nested macros in args)
