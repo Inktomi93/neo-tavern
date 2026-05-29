@@ -15,6 +15,7 @@ import { createAssetsService } from "./domain/assets";
 import { createDebugService } from "./domain/debug";
 import { createExportService } from "./domain/export";
 import { env } from "./env";
+import { registerImportRoutes } from "./import-http";
 import { debugAuthMiddleware, registerDebugRoutes } from "./observability/debug";
 import { getLog } from "./observability/logger";
 import { observability } from "./observability/middleware";
@@ -78,6 +79,7 @@ export function buildApp(db: Db, cas: Cas, services: Services, isProd: boolean) 
   const assetsService = createAssetsService(db, cas);
   const exportService = createExportService(db, cas);
   registerDebugRoutes(app, createDebugService(db), assetsService);
+  registerImportRoutes(app, db, assetsService);
 
   const debugRouter = new Hono();
   debugRouter.use("/*", debugAuthMiddleware);

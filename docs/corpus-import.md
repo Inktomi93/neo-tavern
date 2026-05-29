@@ -163,8 +163,12 @@ reusable core. **`IMPORT_SKIP_CHARACTERS` is now a runtime AppSetting** (`docs/s
 not just env — the CLI reads it via `getAppConfig().importSkipCharacters` (after `reloadAppConfig`),
 so an admin's stored skip-list applies to imports without redeploying.
 
-**First-class import** (planned) exposes the domain over HTTP (owner-scoped, mirroring the export
-routes): individual PNG/JSON cards, individual JSONL chats (matched to an existing character by
-`slugifyHandle`), and a **zip** of an ST profile (unzip → `collectBundlesFromDir`). Real test
-fixtures live in `tests/fixtures/sillytavern/` (a true ST export — V2+V3 card + 7 chats incl. a
-branch+checkpoint) so the suite tests against the actual on-disk format.
+**First-class import** (built — `src/server/import-http.ts`, owner-scoped, mirroring the export
+routes): `POST /api/import/cards` (one+ PNG/JSON cards), `POST /api/import/chats` (loose JSONL into an
+**explicitly chosen** existing character — ST chat headers don't carry a reliable name, so no
+auto-match for a loose file; via `importService.importChats`), and `POST /api/import/zip` (unzip →
+`collectBundlesFromDir` → the exact CLI pipeline, so pairing/branch-linking/idempotency/skip-list all
+come free). The import service's chat-loop is factored into `importChatsIntoVersion`, shared by
+`importCharacter` and `importChats`. Real test fixtures live in `tests/fixtures/sillytavern/` (a true
+ST export — V2+V3 card + 7 chats incl. a branch+checkpoint) so the suite tests the actual on-disk
+format end-to-end (`import-fixtures.test.ts` domain + `import-http.test.ts` routes).

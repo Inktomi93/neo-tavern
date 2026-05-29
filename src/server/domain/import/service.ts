@@ -26,6 +26,7 @@ import {
   worldEntries,
 } from "../../../db/schema";
 import { getLog } from "../../observability/logger";
+import { DomainNotFoundError } from "../_shared/errors";
 import { newId } from "../_shared/ids";
 import { ensureUser } from "../_shared/users";
 import type { ParsedCard } from "./card";
@@ -80,8 +81,25 @@ export interface ImportCharacterResult {
   worldEntriesImported: number;
   branchesLinked: number;
 }
+// Standalone chat import: attach loose JSONL chats to an EXISTING character (chosen explicitly — ST
+// chat headers don't reliably carry the character name, so there's no safe auto-match for a loose file).
+export interface ImportChatsInput {
+  characterId: string;
+  chats: ImportChatInput[];
+}
+export interface ImportChatsResult {
+  characterId: string;
+  versionId: string;
+  chatsImported: number;
+  chatsSkipped: number;
+  messagesImported: number;
+  variantsImported: number;
+  branchesLinked: number;
+}
 export interface ImportService {
   importCharacter(input: ImportCharacterInput): Promise<ImportCharacterResult>;
+  /** Import loose chats into an existing character's current version (the standalone-JSONL path). */
+  importChats(input: ImportChatsInput): Promise<ImportChatsResult>;
 }
 export interface ImportServiceDeps {
   ownerHandle: string; // the import owner (DEFAULT_USER_HANDLE) — ensured lazily, once
@@ -219,133 +237,19 @@ export function createImportService(db: Db, deps: ImportServiceDeps): ImportServ
         }
       }
 
-      // ── Chats → messages → variants (pass 1) ──────────────────────────────
-      let chatsImported = 0;
-      let chatsSkipped = 0;
-      let messagesImported = 0;
-      let variantsImported = 0;
-      const pendingParents: { chatId: string; parentRef: string; forkedAt: number }[] = [];
-
-      for (const ci of input.chats) {
-        const dup = (
-          await db
-            .select({ id: chats.id })
-            .from(chats)
-            .where(and(eq(chats.ownerId, ownerId), eq(chats.importHash, ci.importHash)))
-            .limit(1)
-        )[0];
-        if (dup) {
-          chatsSkipped++;
-          continue; // true idempotent skip — messages already written
-        }
-
-        const pc = ci.parsed;
-        const created =
-          pc.createDate ?? pc.messages.find((m) => m.sendDate !== null)?.sendDate ?? now;
-        const chatId = newId();
-        await db.insert(chats).values({
-          id: chatId,
-          ownerId,
-          title: ci.importedFrom.replace(/\.jsonl$/, ""),
-          characterVersionId: versionId,
-          // Imported ST chats are continuable Claude chats: agent-sdk on the Max sub (seedable from
-          // canon on demand). sessionId stays null until the first send seeds/resumes a session.
-          api: "agent-sdk",
-          source: "max-pro-sub",
-          sessionId: null,
-          importedFrom: ci.importedFrom,
-          importHash: ci.importHash,
-          messageCount: pc.messages.length,
-          metadata: { bucket: pc.bucket, isBranch: pc.isBranch, notePrompt: pc.notePrompt },
-          createdAt: created,
-          updatedAt: now,
-        });
-        if (pc.parentRef)
-          pendingParents.push({ chatId, parentRef: pc.parentRef, forkedAt: created });
-
-        let seq = 0;
-        for (const m of pc.messages) {
-          const msgId = newId();
-          await db.insert(messages).values({
-            id: msgId,
-            chatId,
-            seq,
-            role: m.role,
-            content: m.content,
-            model: m.model,
-            provider: m.provider,
-            tokensOut: m.tokensOut,
-            genStarted: m.genStarted,
-            genFinished: m.genFinished,
-            activeVariantIdx: m.activeVariantIdx,
-            createdAt: m.sendDate ?? created,
-          });
-          messagesImported++;
-          for (const v of m.variants) {
-            await db.insert(messageVariants).values({
-              id: newId(),
-              messageId: msgId,
-              idx: v.idx,
-              content: v.content,
-              model: v.model,
-              provider: v.provider,
-              tokensOut: v.tokensOut,
-              genStarted: v.genStarted,
-              genFinished: v.genFinished,
-              createdAt: now,
-            });
-            variantsImported++;
-          }
-          seq++;
-        }
-        chatsImported++;
-      }
-
-      // ── Branch resolution (pass 2, character-wide) ────────────────────────
-      // Resolve parentRef (a parent FILENAME) → the parent chat's id, across ALL of this
-      // character's chats (every version + prior runs), not just this dir/run.
-      let branchesLinked = 0;
-      if (pendingParents.length > 0) {
-        const versionIds = (
-          await db
-            .select({ id: characterVersions.id })
-            .from(characterVersions)
-            .where(eq(characterVersions.characterId, characterId))
-        ).map((r) => r.id);
-        const allChats = await db
-          .select({ id: chats.id, importedFrom: chats.importedFrom })
-          .from(chats)
-          .where(inArray(chats.characterVersionId, versionIds));
-        const byFile = new Map<string, string>();
-        for (const c of allChats) {
-          if (c.importedFrom) byFile.set(c.importedFrom, c.id);
-        }
-        for (const p of pendingParents) {
-          const parentId = byFile.get(p.parentRef);
-          if (parentId && parentId !== p.chatId) {
-            await db
-              .update(chats)
-              .set({ parentChatId: parentId, forkedAt: p.forkedAt })
-              .where(eq(chats.id, p.chatId));
-            branchesLinked++;
-          }
-        }
-      }
+      // ── Chats → messages → variants + branch resolution ───────────────────
+      const counts = await importChatsIntoVersion(
+        ownerId,
+        characterId,
+        versionId,
+        input.chats,
+        now,
+      );
 
       // INFO so a `pnpm import:st` run shows per-character progress + counts at the default level
       // (an import is a rare, watched batch job — metadata only, never card/chat content).
       log.info(
-        {
-          handle,
-          characterCreated,
-          versionBumped,
-          chatsImported,
-          chatsSkipped,
-          messagesImported,
-          variantsImported,
-          worldEntriesImported,
-          branchesLinked,
-        },
+        { handle, characterCreated, versionBumped, worldEntriesImported, ...counts },
         "imported character",
       );
       return {
@@ -353,13 +257,164 @@ export function createImportService(db: Db, deps: ImportServiceDeps): ImportServ
         versionId,
         characterCreated,
         versionBumped,
-        chatsImported,
-        chatsSkipped,
-        messagesImported,
-        variantsImported,
         worldEntriesImported,
-        branchesLinked,
+        ...counts,
       };
     },
+
+    async importChats(input) {
+      const ownerId = await owner();
+      const now = Date.now();
+      const character = (
+        await db
+          .select({ id: characters.id, currentVersionId: characters.currentVersionId })
+          .from(characters)
+          .where(and(eq(characters.ownerId, ownerId), eq(characters.id, input.characterId)))
+          .limit(1)
+      )[0];
+      if (!character?.currentVersionId) {
+        throw new DomainNotFoundError("character", input.characterId);
+      }
+      const counts = await importChatsIntoVersion(
+        ownerId,
+        character.id,
+        character.currentVersionId,
+        input.chats,
+        now,
+      );
+      log.info({ characterId: character.id, ...counts }, "imported chats (standalone)");
+      return { characterId: character.id, versionId: character.currentVersionId, ...counts };
+    },
   };
+
+  // Import a chat list into an existing character version: dup-skip by importHash, write
+  // chats/messages/variants, then resolve branch parents (parentRef filename → parent chat id)
+  // character-wide. Shared by importCharacter and the standalone importChats (loose JSONL into an
+  // existing character).
+  async function importChatsIntoVersion(
+    ownerId: string,
+    characterId: string,
+    versionId: string,
+    chatsInput: ImportChatInput[],
+    now: number,
+  ): Promise<{
+    chatsImported: number;
+    chatsSkipped: number;
+    messagesImported: number;
+    variantsImported: number;
+    branchesLinked: number;
+  }> {
+    let chatsImported = 0;
+    let chatsSkipped = 0;
+    let messagesImported = 0;
+    let variantsImported = 0;
+    const pendingParents: { chatId: string; parentRef: string; forkedAt: number }[] = [];
+
+    for (const ci of chatsInput) {
+      const dup = (
+        await db
+          .select({ id: chats.id })
+          .from(chats)
+          .where(and(eq(chats.ownerId, ownerId), eq(chats.importHash, ci.importHash)))
+          .limit(1)
+      )[0];
+      if (dup) {
+        chatsSkipped++;
+        continue; // true idempotent skip — messages already written
+      }
+
+      const pc = ci.parsed;
+      const created =
+        pc.createDate ?? pc.messages.find((m) => m.sendDate !== null)?.sendDate ?? now;
+      const chatId = newId();
+      await db.insert(chats).values({
+        id: chatId,
+        ownerId,
+        title: ci.importedFrom.replace(/\.jsonl$/, ""),
+        characterVersionId: versionId,
+        // Imported ST chats are continuable Claude chats: agent-sdk on the Max sub (seedable from
+        // canon on demand). sessionId stays null until the first send seeds/resumes a session.
+        api: "agent-sdk",
+        source: "max-pro-sub",
+        sessionId: null,
+        importedFrom: ci.importedFrom,
+        importHash: ci.importHash,
+        messageCount: pc.messages.length,
+        metadata: { bucket: pc.bucket, isBranch: pc.isBranch, notePrompt: pc.notePrompt },
+        createdAt: created,
+        updatedAt: now,
+      });
+      if (pc.parentRef) pendingParents.push({ chatId, parentRef: pc.parentRef, forkedAt: created });
+
+      let seq = 0;
+      for (const m of pc.messages) {
+        const msgId = newId();
+        await db.insert(messages).values({
+          id: msgId,
+          chatId,
+          seq,
+          role: m.role,
+          content: m.content,
+          model: m.model,
+          provider: m.provider,
+          tokensOut: m.tokensOut,
+          genStarted: m.genStarted,
+          genFinished: m.genFinished,
+          activeVariantIdx: m.activeVariantIdx,
+          createdAt: m.sendDate ?? created,
+        });
+        messagesImported++;
+        for (const v of m.variants) {
+          await db.insert(messageVariants).values({
+            id: newId(),
+            messageId: msgId,
+            idx: v.idx,
+            content: v.content,
+            model: v.model,
+            provider: v.provider,
+            tokensOut: v.tokensOut,
+            genStarted: v.genStarted,
+            genFinished: v.genFinished,
+            createdAt: now,
+          });
+          variantsImported++;
+        }
+        seq++;
+      }
+      chatsImported++;
+    }
+
+    // ── Branch resolution (pass 2, character-wide) ────────────────────────
+    // Resolve parentRef (a parent FILENAME) → the parent chat's id, across ALL of this
+    // character's chats (every version + prior runs), not just this dir/run.
+    let branchesLinked = 0;
+    if (pendingParents.length > 0) {
+      const versionIds = (
+        await db
+          .select({ id: characterVersions.id })
+          .from(characterVersions)
+          .where(eq(characterVersions.characterId, characterId))
+      ).map((r) => r.id);
+      const allChats = await db
+        .select({ id: chats.id, importedFrom: chats.importedFrom })
+        .from(chats)
+        .where(inArray(chats.characterVersionId, versionIds));
+      const byFile = new Map<string, string>();
+      for (const c of allChats) {
+        if (c.importedFrom) byFile.set(c.importedFrom, c.id);
+      }
+      for (const p of pendingParents) {
+        const parentId = byFile.get(p.parentRef);
+        if (parentId && parentId !== p.chatId) {
+          await db
+            .update(chats)
+            .set({ parentChatId: parentId, forkedAt: p.forkedAt })
+            .where(eq(chats.id, p.chatId));
+          branchesLinked++;
+        }
+      }
+    }
+
+    return { chatsImported, chatsSkipped, messagesImported, variantsImported, branchesLinked };
+  }
 }
