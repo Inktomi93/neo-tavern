@@ -23,6 +23,8 @@ corpus-staging/
 # .so wheels here — multi-GB, machine-specific). pyproject.toml + uv.lock ARE committed
 # (reproducible via `pnpm cuda:setup`); the materialized venv is not.
 tools/cuda/.venv/
+# api-map analysis tool's uv venv (reproducible via `pnpm api:map`; pyproject + uv.lock are committed).
+tools/api-map/.venv/
 
 # Model weights (BGE-M3, reranker) downloaded by transformers.js — repo-local + self-
 # contained (MODEL_CACHE_DIR), re-downloadable, never committed.

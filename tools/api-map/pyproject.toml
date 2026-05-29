@@ -1,0 +1,10 @@
+[project]
+name = "neo-api-map"
+version = "0.1.0"
+description = "Capability/domain gap map of SillyTavern vs neo-tavern (tree-sitter AST)."
+requires-python = ">=3.11"
+dependencies = [
+    "tree-sitter>=0.23",
+    "tree-sitter-javascript>=0.23",
+    "tree-sitter-typescript>=0.23",
+]
