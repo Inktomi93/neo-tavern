@@ -183,23 +183,10 @@ function extractLorebook(book: unknown): Record<string, unknown>[] {
   return list.filter((e): e is Record<string, unknown> => typeof e === "object" && e !== null);
 }
 
-/** Parse a SillyTavern character-card PNG. Returns null when the bytes carry no card
- *  data (no `ccv3`/`chara` chunk, malformed PNG, or undecodable base64/JSON). */
-export function parseCardPng(bytes: Uint8Array, fallbackName: string): ParsedCard | null {
-  const encoded = readPngTextChunk(bytes, "ccv3") ?? readPngTextChunk(bytes, "chara");
-  if (!encoded) return null;
-
-  let cardJson: RawCard;
-  try {
-    const decoded = Buffer.from(encoded, "base64").toString("utf-8");
-    const parsed: unknown = JSON.parse(decoded);
-    if (typeof parsed !== "object" || parsed === null) return null;
-    cardJson = parsed as RawCard;
-  } catch {
-    return null;
-  }
-
-  cardJson = normalizeCardJson(cardJson);
+// The normalize → field-map core, shared by the PNG and bare-JSON parsers. Takes the already-parsed
+// card object (any spec) and maps it to our ParsedCard shape.
+function cardFromJson(raw: RawCard, fallbackName: string): ParsedCard {
+  const cardJson = normalizeCardJson(raw);
   // V2/V3 nest everything under `data`; post-normalize V1/Pygmalion do too. Fall back to
   // the root object for any odd card that slipped through normalization.
   const data: RawCard =
@@ -231,4 +218,32 @@ export function parseCardPng(bytes: Uint8Array, fallbackName: string): ParsedCar
       : [],
     raw: cardJson,
   };
+}
+
+/** Parse a SillyTavern character-card PNG. Returns null when the bytes carry no card
+ *  data (no `ccv3`/`chara` chunk, malformed PNG, or undecodable base64/JSON). */
+export function parseCardPng(bytes: Uint8Array, fallbackName: string): ParsedCard | null {
+  const encoded = readPngTextChunk(bytes, "ccv3") ?? readPngTextChunk(bytes, "chara");
+  if (!encoded) return null;
+  try {
+    const decoded = Buffer.from(encoded, "base64").toString("utf-8");
+    const parsed: unknown = JSON.parse(decoded);
+    if (typeof parsed !== "object" || parsed === null) return null;
+    return cardFromJson(parsed as RawCard, fallbackName);
+  } catch {
+    return null;
+  }
+}
+
+/** Parse a bare V2/V3 character-card JSON (ST "export as JSON" / a `.json` card), bytes or string.
+ *  The JSON sibling of `parseCardPng` — same normalization core, no PNG chunk extraction. */
+export function parseCardJson(input: Uint8Array | string, fallbackName: string): ParsedCard | null {
+  try {
+    const text = typeof input === "string" ? input : Buffer.from(input).toString("utf-8");
+    const parsed: unknown = JSON.parse(text);
+    if (typeof parsed !== "object" || parsed === null) return null;
+    return cardFromJson(parsed as RawCard, fallbackName);
+  } catch {
+    return null;
+  }
 }

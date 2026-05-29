@@ -3,7 +3,7 @@
 // characters / versions / chats / messages / message_variants / world rows. The jobs-layer
 // runner (pnpm import:st) walks the staged files and drives this through the front door.
 
-export { type ParsedCard, parseCardPng } from "./card";
+export { type ParsedCard, parseCardJson, parseCardPng } from "./card";
 export {
   type ChatBucket,
   type MessageRole,
