@@ -86,6 +86,12 @@ only ✅-tracking in the repo; keep it one line.
   SigLIP-2 so400m **1152-dim**, its own `libsql_vector_idx` — NOT the 1024-dim text space). The
   visual **embed pass** (embed FROM the blob by hash) is the remaining follow-up. See `docs/assets.md`.
 
+**Next big workstream — DESIGN LOCKED, not yet built:** pluggable auth (`single-user` default /
+`forward-header` / `oidc`) + a user layer (`OWNER_GROUP`/`OWNER_HANDLES`→admin, `users.externalId`/
+`enabled`) + encrypted per-user credentials (BYO OpenRouter key) gated by one turn-time **credential
+resolver**. Bearer-token sessions, no cookies/CSRF. Full exhaustive spec (incl. ground-truth authentik
+endpoints/headers from the live stack): **`docs/auth-and-credentials-plan.md`**.
+
 **Untracked sub-items (fold into the issues above when they land):**
 - Character library + a FOCUSED editor (name/description/personality/scenario/greetings/
   system-prompt/world-info — not ST's 47 fields) + a World Info editor (`always` vs `keyword`). (≈ #45.)
