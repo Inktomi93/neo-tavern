@@ -112,10 +112,19 @@ const envSchema = z
     // caddy+authentik forward-auth (verify X-Authentik-Jwt via JWKS); `oidc` = the app is an authentik
     // OIDC client over HTTPS (cookie/BFF sessions).
     AUTH_MODE: z.enum(["single-user", "forward-header", "oidc"]).default("single-user"),
-    // What identity an UN-credentialed request gets. `owner` (DEFAULT) → the owner (the trusted-LAN /
-    // raw-IP path; SSO-on-domain + owner-on-raw-IP coexist under `oidc`). `deny` → no identity (401);
-    // makes SSO mandatory. Use `deny` only where the un-credentialed path is untrusted (shared/exposed LAN).
+    // What identity an UN-credentialed request gets. `owner` (DEFAULT) → the owner; `deny` → no
+    // identity (401), making SSO mandatory. CRITICAL: in an SSO mode (oidc/forward-header) the `owner`
+    // fallback is ORIGIN-GATED — granted only on a LOCAL origin (a private/loopback Host literal, or a
+    // TRUSTED_LOCAL_HOSTS hostname), NEVER on the public FQDN. That is what makes `oidc`+`owner` =
+    // "SSO on the domain AND owner on the raw LAN IP" SAFE: an un-cookied request to the public domain
+    // resolves to null (→ 401), not the owner. In `single-user` mode the fallback is unconditional (the
+    // locked zero-infra contract — it's the only way in). See auth/trust-header.ts `isLocalOrigin`.
     AUTH_FALLBACK: z.enum(["owner", "deny"]).default("owner"),
+    // Extra hostnames (comma-list, case-insensitive) treated as a trusted LOCAL origin for the owner
+    // fallback in SSO modes — for a raw-LAN path reached by name rather than a private IP (e.g.
+    // `neo.lan`, an mDNS `homelab.local`). Private/loopback IP literals + `localhost` are always local
+    // and need no entry here. The public FQDN must NEVER be listed (that would re-open the bypass).
+    TRUSTED_LOCAL_HOSTS: z.string().optional(),
 
     // Admin/owner determination (group preferred, mirrors the stack's Grafana convention). An identity
     // whose `groups` contains OWNER_GROUP, OR whose handle ∈ OWNER_HANDLES, provisions as role:'admin'.

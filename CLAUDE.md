@@ -30,7 +30,10 @@ Identity keys on the **stable `sub` / `X-Authentik-Uid`** (`users.externalId`); 
 `preferred_username`. **Built (migrations 0025–0026 + the auth commits):** the three pluggable
 `AUTH_MODE`s (`single-user`/`forward-header`/`oidc`) + `AUTH_FALLBACK` via `auth/trust-header.ts`
 `resolveIdentity` (layered cookie→forward-header→fallback; `forward-header` verifies `X-Authentik-Jwt`
-against the JWKS); `users.externalId`/`enabled` + `provisionIdentity` (externalId-keyed, the SSO seam);
+against the JWKS; the `owner` fallback is **origin-gated** in SSO modes — granted only on a local origin
+[private/loopback `Host` or `TRUSTED_LOCAL_HOSTS`], so an un-cookied PUBLIC request resolves to null→401,
+never owner+admin — `single-user` stays unconditional; non-tRPC routes [export/import/upload] go through
+the SAME seam via `auth-context.ts` `resolveOwner`, not an owner-defaulting wrapper); `users.externalId`/`enabled` + `provisionIdentity` (externalId-keyed, the SSO seam);
 the tRPC procedure ladder (`publicProcedure`→`authedProcedure`+CSRF→`adminProcedure`) on `ctx.auth`;
 revocable server-side **`sessions`** (HttpOnly/Secure/SameSite=Lax cookie, BFF); encrypted **per-user
 `user_credentials`** (AES-256-GCM, BYO OpenRouter key); ONE turn-time **credential resolver**

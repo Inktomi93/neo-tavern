@@ -23,7 +23,8 @@ own (encrypted) OpenRouter key. See the plan for all of it.
 | Var | Mode | Value |
 | --- | --- | --- |
 | `AUTH_MODE` | all | active SSO mechanism: `single-user` (default) · `forward-header` · `oidc` |
-| `AUTH_FALLBACK` | all | un-credentialed request → `owner` (default) or `deny`. **`oidc`+`owner` = SSO on the domain AND owner on the raw LAN IP, at once.** `deny` = SSO mandatory. |
+| `AUTH_FALLBACK` | all | un-credentialed request → `owner` (default) or `deny`. **`oidc`+`owner` = SSO on the domain AND owner on the raw LAN IP, at once** — safe because in SSO modes the `owner` fallback is **origin-gated**: granted ONLY on a local origin; on the public FQDN an un-cookied request gets `null` → 401 → SSO. `deny` = SSO mandatory everywhere. In `single-user` mode the fallback is unconditional (the only way in). |
+| `TRUSTED_LOCAL_HOSTS` | sso | optional comma-list of extra hostnames counted as a LOCAL origin for the `owner` fallback (a raw-LAN path reached by name, e.g. `neo.lan`). Private/loopback IPs + `localhost` are local already. **Never list the public FQDN here** (that re-opens the bypass). |
 | `DEFAULT_USER_HANDLE` | all | the owner handle (single-user / fallback identity + admin) |
 | `OWNER_GROUP` | sso | authentik group whose members are admins, e.g. `Neo Owners` (preferred) |
 | `OWNER_HANDLES` | sso | comma-list fallback for admins (default = `DEFAULT_USER_HANDLE`) |
@@ -83,6 +84,8 @@ handle @neotavern {
 	# Everything → the app: it serves the SPA bundle, /api/*, and the blob CAS. In oidc mode the app
 	# owns auth (the cookie session), so there is NO forward_auth here. flush_interval -1 + long
 	# timeouts keep live push (SSE) streaming; the app's ~25s heartbeat holds the connection open.
+	# DO NOT add `header_up Host …` here: the app's owner-fallback origin gate (below) trusts the
+	# original `Host`, so the FQDN must reach the app unmodified.
 	reverse_proxy neo-tavern:8788 {
 		flush_interval -1
 		transport http {
@@ -92,6 +95,21 @@ handle @neotavern {
 	}
 }
 ```
+
+> **Why `oidc`+`owner` is safe (the origin gate).** With no `forward_auth`, every request reaches the
+> app; an un-credentialed one would, naively, hit the `owner` fallback and be promoted to owner+admin.
+> To keep the doc's promise ("SSO on the domain AND owner on the raw LAN IP") **without** that bypass,
+> the app gates the fallback by origin (`auth/trust-header.ts` `isLocalOrigin`): in an SSO mode it
+> grants `owner` **only** when the request's `Host` is a private/loopback IP literal, `localhost`, or a
+> `TRUSTED_LOCAL_HOSTS` name — i.e. the raw-LAN-IP path. On the public FQDN an un-cookied request
+> resolves to `null` → 401, so SSO is mandatory there. The non-tRPC routes (`/api/export|import/*`,
+> `/api/assets/upload`) go through the **same** seam, so they're not anonymously owner-scoped either.
+>
+> **Load-bearing assumption:** the `Host` header is trustworthy here because (a) Caddy routes by the
+> real `Host` (`@neotavern host neo-tavern.inktomi.tech`), so a spoofed private-IP `Host` never matches
+> this site and never reaches the app; and (b) **port 8788 is not publicly routable** (the CLAUDE.md
+> deployment invariant). Hence the "DO NOT `header_up Host`" note above. If you ever expose 8788
+> directly, set `AUTH_FALLBACK=deny` — the origin gate assumes the invariant holds.
 
 ### `AUTH_MODE=forward-header` (alternative — authentik gates at the proxy)
 Same shell (`import security_headers` + CSP + `request_body` + the `@compressible`/`encode` lines),

@@ -5,7 +5,7 @@ import { dirname, join, resolve, sep } from "node:path";
 import { unzipSync } from "fflate";
 import type { Hono } from "hono";
 import type { Db } from "../db/client";
-import { resolveUsername } from "./auth/trust-header";
+import { type AuthResolver, resolveOwner } from "./auth-context";
 import { getAppConfig } from "./config/app-config";
 import { DomainNotFoundError } from "./domain/_shared/errors";
 import type { AssetsService } from "./domain/assets";
@@ -22,20 +22,19 @@ import {
 } from "./domain/import";
 import { getLog } from "./observability/logger";
 
-// First-class ST import over HTTP (the inverse of the export routes). Owner-scoped via the same
-// header-trust model as tRPC/export. Lives in the entry layer — the one place allowed to wire
-// domain/import + domain/assets together (the card PNG is stored as the avatar), exactly as the CLI
-// (scripts/import-st.ts) does. Three inputs: individual cards (PNG/JSON), loose chat JSONL into an
-// existing character (chosen explicitly — ST headers don't carry a reliable name), and a zip of a
-// full ST profile (the bulk path; reuses the CLI pipeline).
+// First-class ST import over HTTP (the inverse of the export routes). Owner-scoped via the SAME auth
+// seam as tRPC/export (resolveOwner) — every route requires a resolved identity (no anonymous
+// owner-scope) + the CSRF header on these mutating POSTs. Lives in the entry layer — the one place
+// allowed to wire domain/import + domain/assets together (the card PNG is stored as the avatar),
+// exactly as the CLI (scripts/import-st.ts) does. Three inputs: individual cards (PNG/JSON), loose
+// chat JSONL into an existing character (chosen explicitly — ST headers don't carry a reliable name),
+// and a zip of a full ST profile (the bulk path; reuses the CLI pipeline).
 
 const sha256 = (b: Uint8Array): string => createHash("sha256").update(b).digest("hex");
 
 // PNG magic: 89 50 4E 47. A card upload is either a PNG (with the embedded chunk) or a bare card JSON.
 const isPng = (b: Uint8Array): boolean =>
   b.length > 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47;
-
-const username = (req: Request): Promise<string> => resolveUsername(req.headers);
 
 // Locate the ST profile dir (the one with characters/ and/or chats/) inside an unzipped tree — the
 // zip may wrap everything in a top-level folder (e.g. default-user/). Checks the root, then one level.
@@ -51,11 +50,18 @@ async function findProfileDir(root: string): Promise<string> {
   return root; // nothing matched → collectBundlesFromDir will just find nothing
 }
 
-export function registerImportRoutes(app: Hono, db: Db, assets: AssetsService): void {
+export function registerImportRoutes(
+  app: Hono,
+  db: Db,
+  assets: AssetsService,
+  authResolver: AuthResolver,
+): void {
   // POST /api/import/cards — one or more character cards (PNG with embedded chunk, or bare V2/V3 JSON).
   // multipart field `files` (repeatable) or `file`.
   app.post("/api/import/cards", async (c) => {
-    const owner = await username(c.req.raw);
+    const auth = await resolveOwner(authResolver, db, c.req.raw.headers, { requireCsrf: true });
+    if (!auth.ok) return c.json({ error: auth.error }, auth.status);
+    const owner = auth.handle;
     const body = await c.req.parseBody({ all: true });
     // biome-ignore lint/complexity/useLiteralKeys: parseBody returns an index signature (TS needs bracket access)
     const raw = body["files"] ?? body["file"];
@@ -104,7 +110,9 @@ export function registerImportRoutes(app: Hono, db: Db, assets: AssetsService): 
   // [repeatable] + a `characterId` form field; the UI picks the target since ST chat headers don't
   // carry a reliable character name).
   app.post("/api/import/chats", async (c) => {
-    const owner = await username(c.req.raw);
+    const auth = await resolveOwner(authResolver, db, c.req.raw.headers, { requireCsrf: true });
+    if (!auth.ok) return c.json({ error: auth.error }, auth.status);
+    const owner = auth.handle;
     const body = await c.req.parseBody({ all: true });
     // biome-ignore lint/complexity/useLiteralKeys: parseBody returns an index signature (TS needs bracket access)
     const characterId = typeof body["characterId"] === "string" ? body["characterId"] : "";
@@ -146,7 +154,9 @@ export function registerImportRoutes(app: Hono, db: Db, assets: AssetsService): 
   // The bulk migration path: reuses the exact CLI pipeline (collectBundlesFromDir → importCharacter),
   // so card↔chat pairing, branch-linking, idempotency, and the skip-list all come for free.
   app.post("/api/import/zip", async (c) => {
-    const owner = await username(c.req.raw);
+    const auth = await resolveOwner(authResolver, db, c.req.raw.headers, { requireCsrf: true });
+    if (!auth.ok) return c.json({ error: auth.error }, auth.status);
+    const owner = auth.handle;
     const body = await c.req.parseBody();
     // biome-ignore lint/complexity/useLiteralKeys: parseBody returns an index signature (TS needs bracket access)
     const file = body["file"];

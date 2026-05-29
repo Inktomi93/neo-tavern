@@ -1,6 +1,6 @@
 import { exportJWK, generateKeyPair, type JWK, SignJWT } from "jose";
 import { describe, expect, test } from "vitest";
-import { type AuthConfig, resolveIdentity, resolveUsername } from "./trust-header";
+import { type AuthConfig, isLocalOrigin, resolveIdentity } from "./trust-header";
 
 // Config builders so each test states exactly which mode/fallback it exercises (resolveIdentity takes
 // config explicitly precisely so these don't depend on the once-parsed env).
@@ -9,8 +9,13 @@ const cfg = (over: Partial<AuthConfig>): AuthConfig => ({
   fallback: "owner",
   defaultHandle: "owner",
   verifyForwardJwt: true,
+  trustedLocalHosts: [],
   ...over,
 });
+
+// A request targeting the public FQDN (the domain/SSO path) vs the raw LAN IP (the owner path).
+const PUBLIC_ORIGIN = { host: "neo-tavern.inktomi.tech" };
+const LAN_ORIGIN = { host: "192.168.1.50:8788" };
 
 // Sign a real authentik-shaped JWT + return the matching JWKS JSON, so the forward-header verify path
 // is exercised cryptographically (not mocked) — the whole point of §1c.
@@ -118,8 +123,9 @@ describe("resolveIdentity — oidc cookie", () => {
     expect(viaCookie).toBe(true);
   });
 
-  test("an unrecognized cookie falls through to the fallback (not viaCookie)", async () => {
-    const headers = new Headers({ cookie: "neo_session=stale" });
+  test("an unrecognized cookie on a LOCAL origin falls through to the owner fallback (not viaCookie)", async () => {
+    // Stale cookie on the raw-LAN path → the owner fallback still applies (origin is local).
+    const headers = new Headers({ cookie: "neo_session=stale", ...LAN_ORIGIN });
     const { identity, viaCookie } = await resolveIdentity(
       headers,
       cfg({ mode: "oidc", fallback: "owner" }),
@@ -145,11 +151,99 @@ describe("resolveIdentity — fallback", () => {
   });
 });
 
-describe("resolveUsername wrapper", () => {
-  test("returns just the handle (the back-compat string contract, now async)", async () => {
-    // single-user default env → owner fallback regardless of headers.
-    const handle = await resolveUsername(new Headers({ "x-authentik-username": "ignored" }));
-    expect(typeof handle).toBe("string");
-    expect(handle.length).toBeGreaterThan(0);
+// ── The bypass regression (docs/auth-and-credentials-plan.md §2) ─────────────────────────────────
+// In an SSO mode the `owner` fallback is the raw-LAN convenience path ONLY. The exact hole this guards:
+// an un-cookied request to the PUBLIC FQDN under `oidc`+`owner` must NOT resolve to the owner (which
+// the seam would promote to admin) — it must resolve to null → 401 → SSO mandatory.
+describe("resolveIdentity — origin-gated owner fallback (SSO modes)", () => {
+  test("oidc + owner: a no-cookie PUBLIC-origin request resolves to null (NOT the owner)", async () => {
+    const headers = new Headers({ ...PUBLIC_ORIGIN }); // no cookie, public domain
+    const { identity, viaFallback } = await resolveIdentity(headers, cfg({ mode: "oidc" }), {
+      validateSessionCookie: async () => null,
+    });
+    expect(identity).toBeNull();
+    expect(viaFallback).toBe(false);
+  });
+
+  test("oidc + owner: a no-cookie LOCAL-origin (raw LAN IP) request resolves to the owner", async () => {
+    const headers = new Headers({ ...LAN_ORIGIN });
+    const { identity, viaFallback } = await resolveIdentity(headers, cfg({ mode: "oidc" }), {
+      validateSessionCookie: async () => null,
+    });
+    expect(identity).toEqual({ externalId: null, handle: "owner", groups: [] });
+    expect(viaFallback).toBe(true);
+  });
+
+  test("forward-header + owner: a no-credential PUBLIC-origin request resolves to null", async () => {
+    const headers = new Headers({ ...PUBLIC_ORIGIN });
+    const { identity } = await resolveIdentity(
+      headers,
+      cfg({ mode: "forward-header", verifyForwardJwt: false }),
+    );
+    expect(identity).toBeNull();
+  });
+
+  test("a TRUSTED_LOCAL_HOSTS hostname is treated as a local origin", async () => {
+    const headers = new Headers({ host: "neo.lan" });
+    const { identity } = await resolveIdentity(
+      headers,
+      cfg({ mode: "oidc", trustedLocalHosts: ["neo.lan"] }),
+      { validateSessionCookie: async () => null },
+    );
+    expect(identity?.handle).toBe("owner");
+  });
+
+  test("single-user owner fallback is UNCONDITIONAL (origin-independent — the zero-infra contract)", async () => {
+    // Even a public-origin request gets the owner in single-user mode (no SSO exists to fall back to).
+    const { identity } = await resolveIdentity(
+      new Headers({ ...PUBLIC_ORIGIN }),
+      cfg({ mode: "single-user" }),
+    );
+    expect(identity?.handle).toBe("owner");
+  });
+});
+
+describe("isLocalOrigin", () => {
+  const localHosts = [
+    "127.0.0.1",
+    "127.0.0.1:8788",
+    "10.1.2.3",
+    "172.16.0.1",
+    "172.31.255.255",
+    "192.168.1.50:8788",
+    "169.254.10.1",
+    "localhost",
+    "localhost:5173",
+    "[::1]:8788",
+    "[fd00::1]",
+    "[fe80::1]",
+  ];
+  const publicHosts = [
+    "neo-tavern.inktomi.tech",
+    "8.8.8.8",
+    "172.32.0.1", // just outside 172.16/12
+    "172.15.0.1", // just below 172.16/12
+    "example.com:443",
+    "[2606:4700::1111]", // public IPv6
+    "fd00.example.com", // hostname that PREFIX-matches ULA fd00::/7 but is NOT an IPv6 literal
+    "fc-corp.internal", // hostname that PREFIX-matches fc00::/7
+    "fe80-host.example.net", // hostname that PREFIX-matches link-local fe80::/10
+  ];
+
+  for (const host of localHosts) {
+    test(`local: ${host}`, () => {
+      expect(isLocalOrigin(new Headers({ host }), [])).toBe(true);
+    });
+  }
+  for (const host of publicHosts) {
+    test(`public: ${host}`, () => {
+      expect(isLocalOrigin(new Headers({ host }), [])).toBe(false);
+    });
+  }
+  test("a missing Host header is NOT local (fails closed)", () => {
+    expect(isLocalOrigin(new Headers(), [])).toBe(false);
+  });
+  test("an explicit trusted host (case-insensitive) is local", () => {
+    expect(isLocalOrigin(new Headers({ host: "Neo.LAN" }), ["neo.lan"])).toBe(true);
   });
 });

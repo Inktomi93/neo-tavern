@@ -265,15 +265,23 @@ expecting `string`):
      `-Username` (handle) / `-Groups`, **trusted by verifying `X-Authentik-Jwt` against the JWKS**
      (`FORWARD_AUTH_VERIFY_JWT`, default on; else network-isolation trust, §1c). (§1b)
   3. **Fallback** (no credential from 1–2): `AUTH_FALLBACK=owner` → `{ externalId:null, handle:
-     DEFAULT_USER_HANDLE, groups:[] }`; `AUTH_FALLBACK=deny` → `null` (caller → 401).
-- **`resolveUsername(headers, …) → string`** — UNCHANGED back-compat wrapper =
-  `resolveIdentity(headers)?.handle ?? DEFAULT_USER_HANDLE`. The 7 existing callers keep working; new
-  code that needs externalId/groups (the tRPC context, the credential resolver) calls `resolveIdentity`.
+     DEFAULT_USER_HANDLE, groups:[] }`; `AUTH_FALLBACK=deny` → `null` (caller → 401). **CORRECTION
+     (BUILT, post-audit):** in an SSO mode the `owner` fallback is **origin-gated** — granted only on a
+     LOCAL origin (private/loopback `Host`, or `TRUSTED_LOCAL_HOSTS`); on the public FQDN it returns
+     `null` → 401. Without this, `oidc`+`owner` handed every anonymous public request owner+admin. See
+     `isLocalOrigin`; the §11 single-user fallback stays unconditional.
+- **~~`resolveUsername(headers, …) → string`~~ — REMOVED (post-audit).** It ignored the cookie layer and
+  defaulted to `DEFAULT_USER_HANDLE` UNCONDITIONALLY (even under `deny`), so the export/import/asset
+  routes that used it were anonymously owner-scoped. Those routes now resolve auth through the SAME seam
+  as tRPC — `server/auth-context.ts` `createAuthResolver` + `resolveOwner` (identity required, 401 else;
+  CSRF on mutating POSTs). New code needing externalId/groups still calls `resolveIdentity` directly.
 
 **"Both modes at once" (the owner's want):** `AUTH_MODE=oidc` + `AUTH_FALLBACK=owner` = **SSO on the
-domain** (a valid `neo_session` cookie → your SSO identity) **AND owner on the raw LAN IP** (no cookie →
-fallback to the owner) — *one running process, both behaviors*. `AUTH_FALLBACK=deny` makes SSO
-mandatory (no raw-IP owner shortcut). `single-user` = no SSO mechanism + `owner` fallback (today).
+domain** (a valid `neo_session` cookie → your SSO identity) **AND owner on the raw LAN IP** (no cookie,
+LOCAL origin → fallback to the owner) — *one running process, both behaviors*. The "no cookie → owner"
+half is **origin-gated** (above): on the public FQDN a no-cookie request gets `null`→401, NOT the owner,
+so the LAN convenience never leaks onto the domain. `AUTH_FALLBACK=deny` makes SSO mandatory everywhere
+(no raw-IP owner shortcut). `single-user` = no SSO mechanism + `owner` fallback, unconditional (today).
 - **Security knob (the one to get right):** `AUTH_FALLBACK=owner` means **any un-credentialed request
   becomes the owner** — safe ONLY where un-credentialed access is trusted (LAN; the "don't expose 8788"
   invariant). If untrusted clients can reach the un-credentialed path (e.g. a shared LAN, or the raw
