@@ -68,9 +68,11 @@ URLs below are the confirmed shape.**
 - **Flow:** Authorization Code + **PKCE** (S256), with `state` + `nonce`. **Confidential client** —
   the other apps use a client-id + client-secret pair (e.g. `OPENWEBUI_OAUTH_CLIENT_ID/SECRET`,
   `GRAFANA_OAUTH_CLIENT_ID/SECRET`). Ours: `OIDC_CLIENT_ID` + `OIDC_CLIENT_SECRET`.
-- **Redirect URI convention in this stack:** `https://<app>.inktomi.tech/<callback>` (Open WebUI:
-  `…/oauth/oidc/callback`). Ours: `https://neo-tavern.inktomi.tech/api/auth/callback` — register it in
-  the authentik provider's redirect allowlist.
+- **Redirect URIs:** authentik allows **multiple** entries (and regex/wildcard). Register **every
+  origin** you'll log in from — `https://neo-tavern.inktomi.tech/api/auth/callback` AND the LAN
+  callback(s) — so OIDC works via the domain *and* the LAN IP/host (§10 picks the matching one per
+  request). **Use an explicit strict list, not a loose regex** — per **CVE-2024-52289** authentik does
+  not auto-escape `.` in regex mode, so a careless pattern becomes an open redirect.
 - **Scopes:** `openid profile email` (Grafana's exact set; Open WebUI adds `offline_access` for
   refresh — we do NOT in v1, §11).
 - **Claims (authentik defaults — our identity mapping):** `sub` = **stable UUID** (our externalId,
@@ -192,19 +194,21 @@ cookie.* We choose **server-backed** (build it right the first time):
   the user. Carries the same bearer (or a short-lived query token where `EventSource` can't set
   headers). SSO + multi-device + live push + no-CSRF all coexist.
 
-### §5a. Home / LAN access reality (the access path determines the usable mode)
-SSO works from home — same as the owner's existing Open WebUI/Grafana OIDC — **but only via the
-DOMAIN** (`neo-tavern.inktomi.tech`), because:
-- **`oidc`** is a browser redirect with a fixed `OIDC_REDIRECT_URI` (the domain). Reaching the app by
-  **raw LAN IP** (`http://192.168.x.x:8788`, bypassing caddy) breaks the callback match (and is plain
-  HTTP — bad for bearer tokens). So raw-IP is NOT an OIDC path.
-- **`forward-header`** requires caddy+authentik in front → also domain-only.
-- **`single-user`** works on ANY path (raw IP or domain), zero infra — the always-works fallback.
-**Implication for the owner (who hits direct-LAN/IP often):** at home, reach neo-tavern by the
-**domain** (split-horizon DNS pointing `*.inktomi.tech` at the LAN caddy, or NAT-loopback) → full SSO
-+ HTTPS + multi-account, identical to away. If hitting raw IP, run `single-user` (owner). authentik
-itself is reachable from the LAN regardless (the browser + the server both resolve it), so OIDC's
-*dependency* on authentik is fine at home — the only constraint is domain-based access to the app.
+### §5a. Home / LAN access reality (OIDC works via IP too, with the right config)
+SSO works from home like the owner's existing Open WebUI/Grafana OIDC. **`oidc` works on ANY origin
+you (a) register in authentik's redirect-URI list and (b) include in `OIDC_REDIRECT_URIS`** (§10
+derives `redirect_uri` from the request origin), so **the LAN IP/host works just as well as the
+domain** — not domain-only. Requirements per origin: it's registered + allowlisted, and the scheme is
+correct (`X-Forwarded-Proto` honored behind caddy). authentik is reachable from the LAN regardless
+(browser + server both resolve it), so its dependency is fine at home.
+- **`oidc`** → register both the domain callback and the LAN callback(s) (§10). The only real
+  constraint is HTTPS for the bearer: prefer HTTPS on the LAN too (LAN cert / caddy); `http://<lan-ip>`
+  is an opt-in downgrade, not silent (§10).
+- **`forward-header`** → needs caddy+authentik in front (domain path).
+- **`single-user`** → any path, zero infra — the always-works fallback (e.g. truly bare `http://ip`).
+**Owner takeaway:** at home you can use `oidc` on the LAN IP *or* the domain — register both. Cleanest
+is still a LAN domain (split-horizon DNS / NAT-loopback) so you get HTTPS + one stable origin, but it
+is **not required** for OIDC to function. `single-user` remains the zero-config escape hatch.
 
 ## §6. User layer (Part B)
 - **Admin/owner determination — two sources, group preferred (matches the Grafana pattern):**
@@ -253,16 +257,30 @@ Plumb a resolved-credential field through `runTurn`/`runRawTurn`/`runChatComplet
 before running and pass it down (`startChat` covered via its `send` delegation). Resolver throw →
 existing turn-error path.
 
-## §10. OIDC server routes (Part D)
+## §10. OIDC server routes (Part D) — origin-flexible so IP *and* domain both work
 `src/server/auth-oidc.ts`, registered in `buildApp` (like `registerImportRoutes`):
-- `GET /api/auth/login` → discovery (cached) → authorize URL (PKCE `code_challenge`, `state`,
-  `nonce`, `scope=openid profile email`, `redirect_uri`) → 302. Stash verifier/state/nonce keyed by
-  state (short-TTL in-memory; single-process assumption like AppConfig).
-- `GET /api/auth/callback` → validate state → exchange code (+verifier) → verify ID token (JWKS, iss,
-  aud, exp, nonce) → `ensureUser({ externalId: sub, handle: preferred_username })` → mint §4 bearer →
-  return to SPA (redirect `#token=…` or postMessage).
-- `POST /api/auth/logout` (hit authentik end-session; SPA drops token) · `GET /api/auth/me`.
+- **`redirect_uri` is DERIVED from the request origin, validated against an allowlist** — NOT a single
+  hardcoded domain. Build it from `X-Forwarded-Proto` (caddy sets it; fall back to the request scheme)
+  + `X-Forwarded-Host`/`Host` + `/api/auth/callback`, then check it's in `OIDC_REDIRECT_URIS` (the
+  allowlist). This is what lets you log in via the **domain OR the LAN IP/host** — you reached the app
+  on origin X, the callback returns to origin X, the bearer is stored on origin X. **Never reflect an
+  unvalidated Host** into `redirect_uri` (open-redirect / the CVE-2024-52289 class) — allowlist only.
+- `GET /api/auth/login` → discovery (cached) → authorize URL (PKCE `code_challenge`, `state`, `nonce`,
+  `scope=openid profile email`, the derived+validated `redirect_uri`) → 302. Stash
+  verifier/state/nonce/origin keyed by `state` (short-TTL in-memory; single-process assumption).
+- `GET /api/auth/callback` → validate state → exchange code (+verifier) at the token endpoint with the
+  **same** `redirect_uri` → verify ID token (JWKS, iss, aud, exp, nonce) →
+  `ensureUser({ externalId: sub, handle: preferred_username })` → mint §4 bearer → return to the SPA on
+  the originating origin (redirect `#token=…` or postMessage).
+- `POST /api/auth/logout` (hit authentik end-session; revoke the §4 session row) · `GET /api/auth/me`.
 - These routes are exempt from the §2 401 gate.
+- **authentik side:** register **every** origin's callback in the provider's redirect-URI list —
+  `https://neo-tavern.inktomi.tech/api/auth/callback` AND the LAN one(s) (e.g.
+  `https://neo-tavern.lan/api/auth/callback`, or `http://<lan-ip>:8788/api/auth/callback` if you accept
+  raw-IP). Use an **explicit strict list**, not a loose regex (CVE-2024-52289: dots aren't escaped).
+- **HTTPS note:** the bearer rides `Authorization`, so prefer HTTPS on every origin incl. the LAN
+  (a LAN cert / caddy on the LAN). Allowing `http://<private-ip>` is a deliberate downgrade — gate it
+  behind an explicit opt-in (e.g. only private ranges) and document the tradeoff; don't do it silently.
 
 ## §11. WHAT TO AVOID (explicit anti-list — honor every line)
 - **NO cookie sessions.** Bearer in `Authorization` only. (The whole CSRF-avoidance strategy.)
@@ -288,8 +306,10 @@ existing turn-error path.
   `DEFAULT_USER_HANDLE`); `FORWARD_AUTH_VERIFY_JWT` (default `true`); `CREDENTIALS_KEY` (optional,
   base64 32-byte; unset ⇒ per-user creds off). OIDC-only (required iff `AUTH_MODE=oidc`): `OIDC_ISSUER`
   (`https://authentik.inktomi.tech/application/o/<slug>/`), `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`,
-  `OIDC_REDIRECT_URI` (`https://neo-tavern.inktomi.tech/api/auth/callback`), `SESSION_SECRET`.
-  `env.ts` refinement: `AUTH_MODE=oidc` ⇒ OIDC vars required.
+  **`OIDC_REDIRECT_URIS`** (comma-list **allowlist** of permitted callback origins — domain + LAN
+  IP/host — §10 derives the per-request one from this; NOT a single fixed URL), `SESSION_SECRET`,
+  `OIDC_ALLOW_INSECURE_LAN` (optional, default false; permit `http://<private-ip>` callbacks — opt-in
+  downgrade). `env.ts` refinement: `AUTH_MODE=oidc` ⇒ OIDC vars required.
 
 ## §13. Migrations (`pnpm db:generate:force`)
 Define ALL the new schema up front so it's **one migration, no follow-ups** (the "do it right" point):
@@ -334,5 +354,8 @@ null, enabled true, role already admin from migration 0025; no sessions until fi
 - **Session revocation (the build-it-right guarantee):** a valid bearer authenticates; after
   `revokedAt` is set (logout) OR the owning `users.enabled=false`, the **same bearer is rejected on the
   very next request** (not after expiry); a second device's session is unaffected by revoking the first.
+- **Origin-flexible OIDC redirect:** `redirect_uri` is derived from the request origin and accepted
+  for an allowlisted origin (domain AND a LAN host both work); an **off-allowlist** origin is rejected
+  (no open redirect); `X-Forwarded-Proto: https` yields an `https` redirect_uri behind the proxy.
 - `pnpm check` green per commit. Manual: flip `AUTH_MODE`, set a key via tRPC, generate on the per-user
   key; confirm the owner path unchanged.
