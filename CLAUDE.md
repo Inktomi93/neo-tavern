@@ -170,6 +170,8 @@ these → stop and ask.
   `AUTH_MODE`, cookie/BFF sessions, the credential resolver, per-user encrypted keys. The *why*.
 - **`docs/auth.md`** — the operational recipe: the paste-ready Caddy block (both modes) + the authentik
   setup checklist + env vars. The *how to deploy*.
+- **`docs/auth-verify.md`** — the verification runbook: `pnpm verify:auth` (local HTTP probe per mode) +
+  the live Caddy+authentik walkthrough + a debug checklist. The *how to confirm it works*.
 - **`docs/dependencies.md`** — deps (installed + deferred parking lot).
 - **`references/README.md`** — reference repos (read, don't copy).
 - **`README.md` / `ONBOARDING.md`** — how to run / onboarding.

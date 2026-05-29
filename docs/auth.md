@@ -169,4 +169,6 @@ Nothing in authentik. Set `AUTH_MODE=single-user` (default) + `DEFAULT_USER_HAND
 4. Paste the matching Caddy block into `*.inktomi.tech { … }`; `caddy reload` (validates first — a bad
    block keeps the running config).
 5. Smoke test: `https://neo-tavern.inktomi.tech/api/healthz` → `{ok:true}`; log in; confirm live push
-   (open a chat on two devices) and that compression didn't eat the SSE stream.
+   (open a chat on two devices) and that compression didn't eat the SSE stream. **The step-by-step
+   verification (local probe + the live walkthrough + a debug checklist) is `docs/auth-verify.md`** —
+   `pnpm verify:auth` locally, `pnpm verify:auth --remote https://neo-tavern.inktomi.tech` against the deploy.
