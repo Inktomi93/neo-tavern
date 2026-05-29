@@ -166,7 +166,7 @@ these → stop and ask.
 - **`docs/sdk-notes.md`** — provider SDK field notes: Agent SDK (the runtime, event matrix,
   compaction, seeding, caching) + OpenRouter (chat-completions + responses).
 - **`docs/ui-direction.md`** — the client UX plan (the next big chunk of work).
-- **`docs/auth-and-credentials-plan.md`** — the LOCKED (unbuilt) auth/credentials design: pluggable
+- **`docs/auth-and-credentials-plan.md`** — the auth/credentials design (BUILT): pluggable
   `AUTH_MODE`, cookie/BFF sessions, the credential resolver, per-user encrypted keys. The *why*.
 - **`docs/auth.md`** — the operational recipe: the paste-ready Caddy block (both modes) + the authentik
   setup checklist + env vars. The *how to deploy*.

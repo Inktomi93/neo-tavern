@@ -86,11 +86,17 @@ only ✅-tracking in the repo; keep it one line.
   SigLIP-2 so400m **1152-dim**, its own `libsql_vector_idx` — NOT the 1024-dim text space). The
   visual **embed pass** (embed FROM the blob by hash) is the remaining follow-up. See `docs/assets.md`.
 
-**Next big workstream — DESIGN LOCKED, not yet built:** pluggable auth (`single-user` default /
-`forward-header` / `oidc`) + a user layer (`OWNER_GROUP`/`OWNER_HANDLES`→admin, `users.externalId`/
-`enabled`) + encrypted per-user credentials (BYO OpenRouter key) gated by one turn-time **credential
-resolver**. Bearer-token sessions, no cookies/CSRF. Full exhaustive spec (incl. ground-truth authentik
-endpoints/headers from the live stack): **`docs/auth-and-credentials-plan.md`**.
+**Pluggable auth + user/credential foundation — BUILT (migrations 0025–0026 + the `feat(auth)`
+commits) and verified live through the real caddy+authentik stack.** Pluggable `AUTH_MODE`
+(`single-user` default / `forward-header` (JWKS-verified) / `oidc`) + `AUTH_FALLBACK`; a user layer
+(`OWNER_GROUP`/`OWNER_HANDLES`→admin, `users.externalId`/`enabled`, `provisionIdentity`); the tRPC
+procedure ladder (public→authed+CSRF→admin); revocable server-side **`sessions`** in an
+**HttpOnly/Secure/SameSite=Lax cookie (BFF)** with a custom-header CSRF mitigation (NOT bearer tokens —
+that early framing was superseded); encrypted per-user credentials (BYO OpenRouter key) gated by one
+turn-time **credential resolver**; OIDC routes (openid-client v6). The *why* is
+**`docs/auth-and-credentials-plan.md`**; deploy recipe **`docs/auth.md`**; verification runbook
+**`docs/auth-verify.md`** (`pnpm verify:auth`). Remaining auth-adjacent work: the **frontend** (login
+UI, key-entry, user-admin screens) — see the client UI workstream.
 
 **Untracked sub-items (fold into the issues above when they land):**
 - Character library + a FOCUSED editor (name/description/personality/scenario/greetings/

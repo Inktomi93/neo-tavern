@@ -4,9 +4,10 @@ The **design + rationale** lives in `docs/auth-and-credentials-plan.md` (read it
 is the **operational recipe**: the finished Caddy block to paste into the stack's Caddyfile, the env
 vars, and the authentik setup checklist — so deploying neo-tavern is "paste the block + do authentik."
 
-> STATUS: the **Caddy block is final** (paste-ready). The app-side auth (`AUTH_MODE`, OIDC routes,
-> sessions, the credential resolver) is the locked-but-unbuilt plan — build it, then deploy with this.
-> A few **CONFIRM-AT-BUILD** notes are flagged inline where a block detail depends on a build choice.
+> STATUS: **BUILT + deployed.** The app-side auth (`AUTH_MODE`, OIDC routes, sessions, the credential
+> resolver) is implemented and verified live through the real caddy+authentik stack; this doc is the
+> deploy recipe. The former CONFIRM-AT-BUILD notes are resolved inline. Verification runbook +
+> debugging: **`docs/auth-verify.md`** (`pnpm verify:auth`).
 
 ## The model in one paragraph
 Identity = a pluggable `AUTH_MODE`: **`single-user`** (default, zero-infra: the owner) · **`forward-header`**
