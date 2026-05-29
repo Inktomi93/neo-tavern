@@ -15,89 +15,159 @@ dotenv.config({ override: true });
 // so it satisfies both tsc's noPropertyAccessFromIndexSignature and Biome's
 // useLiteralKeys at once. Passing process.env wholesale to .parse() never
 // property-accesses the index signature, so neither rule fires here either.
-const envSchema = z.object({
-  PORT: z.coerce.number().int().positive().default(8788),
-  NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
+const envSchema = z
+  .object({
+    PORT: z.coerce.number().int().positive().default(8788),
+    NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
 
-  // OpenRouter (raw-mode + non-Claude models). Optional until raw mode lands.
-  // sdk-mode (Claude) needs NO key here — it authenticates via the host's
-  // `claude login` Max subscription; see buildClaudeSdkEnv below.
-  OPENROUTER_API_KEY: z.string().min(1).optional(),
+    // OpenRouter (raw-mode + non-Claude models). Optional until raw mode lands.
+    // sdk-mode (Claude) needs NO key here — it authenticates via the host's
+    // `claude login` Max subscription; see buildClaudeSdkEnv below.
+    OPENROUTER_API_KEY: z.string().min(1).optional(),
 
-  // Observability (see src/server/observability + docs/observability.md).
-  LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]).default("info"),
-  // Gates the /api/_debug/* introspection API. UNSET = the API is disabled (404).
-  // Set it (any value) to enable; requests must present it. Keep unset in prod
-  // images unless you actually want the debug surface reachable.
-  DEBUG_TOKEN: z.string().min(1).optional(),
+    // Observability (see src/server/observability + docs/observability.md).
+    LOG_LEVEL: z
+      .enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"])
+      .default("info"),
+    // Gates the /api/_debug/* introspection API. UNSET = the API is disabled (404).
+    // Set it (any value) to enable; requests must present it. Keep unset in prod
+    // images unless you actually want the debug surface reachable.
+    DEBUG_TOKEN: z.string().min(1).optional(),
 
-  // Database — the libSQL file URL (dev: a local file; prod: the mounted volume).
-  DATABASE_URL: z.string().min(1).default("file:./neo-tavern.db"),
+    // Database — the libSQL file URL (dev: a local file; prod: the mounted volume).
+    DATABASE_URL: z.string().min(1).default("file:./neo-tavern.db"),
 
-  // Content-addressed asset blob root (card PNGs, avatars). A sharded CAS tree
-  // (src/server/storage/cas.ts) keyed by sha-256; the DB holds metadata, bytes live here.
-  // Prod: a path on the mounted volume; dev default sits under the gitignored data/ dir.
-  // caddy serves these statically in prod (docs/assets.md) — the app never streams bytes.
-  ASSETS_DIR: z.string().min(1).default("./data/assets"),
+    // Content-addressed asset blob root (card PNGs, avatars). A sharded CAS tree
+    // (src/server/storage/cas.ts) keyed by sha-256; the DB holds metadata, bytes live here.
+    // Prod: a path on the mounted volume; dev default sits under the gitignored data/ dir.
+    // caddy serves these statically in prod (docs/assets.md) — the app never streams bytes.
+    ASSETS_DIR: z.string().min(1).default("./data/assets"),
 
-  // Embedding ONNX execution provider. "cpu" (default) runs BGE-M3 on the CPU runtime —
-  // fine for short query embeds (~0.04s) and the safe default for tests/dev. "cuda" runs
-  // the in-process onnxruntime-node CUDA EP (~24× faster on long text — used for the
-  // corpus embed pass). CUDA needs the CUDA-12 runtime libs on LD_LIBRARY_PATH (ORT's EP
-  // is built for CUDA 12; the host's system CUDA may differ) — see docs/corpus-import.md.
-  EMBED_DEVICE: z.enum(["cpu", "cuda"]).default("cpu"),
-  // ONNX weight precision. "fp32" (default, required on cpu) or "fp16" — fp16 on CUDA is
-  // ~30% faster at the same 1024-dim output; the precision delta is negligible after
-  // L2-normalize (cosine of an fp16 vs fp32 embedding of the same text ≈ 0.9999), so a
-  // cuda+fp16 corpus index and cpu+fp32 queries share one space. The GPU launcher sets fp16.
-  EMBED_DTYPE: z.enum(["fp32", "fp16"]).default("fp32"),
-  // Reranker (bge-reranker-v2-m3 cross-encoder, Phase 4.6.3b) ONNX device. "cpu" default
-  // (safe for tests/dev); "cuda" for responsive query-time reranking. At query time the
-  // embedder (query vector) then reranker run SEQUENTIALLY, so they don't contend — a
-  // 2-GPU split (embedder GPU 0, reranker GPU 1 via CUDA_VISIBLE_DEVICES) only matters for
-  // concurrent INDEX batch ops, which don't use the reranker. So this stays device-agnostic.
-  RERANK_DEVICE: z.enum(["cpu", "cuda"]).default("cpu"),
-  // The onnx-community/bge-reranker-v2-m3-ONNX repo ships ONLY fp16 weights (fp32/auto fail
-  // — no file), so fp16 is the default for both cpu and cuda (ORT runs fp16 on cpu via fallback).
-  RERANK_DTYPE: z.enum(["fp16", "q8"]).default("fp16"),
-  // Per-model GPU placement (CUDA only). Unlike process-level CUDA_VISIBLE_DEVICES, we pin each
-  // ONNX model to a specific card IN-PROCESS via session_options.executionProviders=[{name:cuda,
-  // deviceId}] (transformers.js keeps a caller-provided EP — the `??=` seam in models/session.js;
-  // verified: deviceId:1 lands the reranker's VRAM on physical GPU 1). Default split: embedder +
-  // summarizer on GPU 0, reranker on GPU 1. Ignored when the model's device is "cpu".
-  EMBED_GPU_ID: z.coerce.number().int().min(0).default(0),
-  RERANK_GPU_ID: z.coerce.number().int().min(0).default(1),
-  // Idle-unload: free a model's VRAM after this many minutes with no requests (it cold-reloads on
-  // the next call). For sharing the GPUs with other homelab services. 0 = never unload (stay warm).
-  IDLE_UNLOAD_MIN: z.coerce.number().min(0).default(10),
-  // Optional in-process local summarizer (node-llama-cpp): path to a GGUF (e.g. a Qwen3-4B-Instruct
-  // Q8). UNSET (default) = disabled — the server never loads node-llama-cpp. When set, it gets the
-  // same warm/idle-unload lifecycle as the embedder/reranker. NOTE: node-llama-cpp 3.18.1 can't pin
-  // a specific GPU in-process (no deviceId API), so placement is its default (CUDA_VISIBLE_DEVICES
-  // is the only lever); fine since it's an occasional generative call, not a hot throughput path.
-  SUMMARIZER_GGUF: z.string().optional(),
-  // Where transformers.js downloads/caches model weights (BGE-M3, the reranker). Pinned
-  // to a repo-local, gitignored dir so model artifacts stay self-contained — not leaking
-  // into node_modules/.cache or an OS-global HF cache. Resolved relative to cwd (repo root).
-  MODEL_CACHE_DIR: z.string().min(1).default("./.models"),
-  // Cross-chat corpus auto-indexing: embed each chat's completed raw-message blocks into
-  // chat_segments (the verbatim half of hybrid search) in the background, post-turn, for EVERY chat.
-  // "true" (default) keeps the search corpus fresh as chats proceed; "false" pauses it to fully
-  // offload the GPU. Embed-only + cheap. Digest generation is separate (gated on memory.enabled).
-  CORPUS_AUTOINDEX: z.enum(["true", "false"]).default("true"),
+    // Embedding ONNX execution provider. "cpu" (default) runs BGE-M3 on the CPU runtime —
+    // fine for short query embeds (~0.04s) and the safe default for tests/dev. "cuda" runs
+    // the in-process onnxruntime-node CUDA EP (~24× faster on long text — used for the
+    // corpus embed pass). CUDA needs the CUDA-12 runtime libs on LD_LIBRARY_PATH (ORT's EP
+    // is built for CUDA 12; the host's system CUDA may differ) — see docs/corpus-import.md.
+    EMBED_DEVICE: z.enum(["cpu", "cuda"]).default("cpu"),
+    // ONNX weight precision. "fp32" (default, required on cpu) or "fp16" — fp16 on CUDA is
+    // ~30% faster at the same 1024-dim output; the precision delta is negligible after
+    // L2-normalize (cosine of an fp16 vs fp32 embedding of the same text ≈ 0.9999), so a
+    // cuda+fp16 corpus index and cpu+fp32 queries share one space. The GPU launcher sets fp16.
+    EMBED_DTYPE: z.enum(["fp32", "fp16"]).default("fp32"),
+    // Reranker (bge-reranker-v2-m3 cross-encoder, Phase 4.6.3b) ONNX device. "cpu" default
+    // (safe for tests/dev); "cuda" for responsive query-time reranking. At query time the
+    // embedder (query vector) then reranker run SEQUENTIALLY, so they don't contend — a
+    // 2-GPU split (embedder GPU 0, reranker GPU 1 via CUDA_VISIBLE_DEVICES) only matters for
+    // concurrent INDEX batch ops, which don't use the reranker. So this stays device-agnostic.
+    RERANK_DEVICE: z.enum(["cpu", "cuda"]).default("cpu"),
+    // The onnx-community/bge-reranker-v2-m3-ONNX repo ships ONLY fp16 weights (fp32/auto fail
+    // — no file), so fp16 is the default for both cpu and cuda (ORT runs fp16 on cpu via fallback).
+    RERANK_DTYPE: z.enum(["fp16", "q8"]).default("fp16"),
+    // Per-model GPU placement (CUDA only). Unlike process-level CUDA_VISIBLE_DEVICES, we pin each
+    // ONNX model to a specific card IN-PROCESS via session_options.executionProviders=[{name:cuda,
+    // deviceId}] (transformers.js keeps a caller-provided EP — the `??=` seam in models/session.js;
+    // verified: deviceId:1 lands the reranker's VRAM on physical GPU 1). Default split: embedder +
+    // summarizer on GPU 0, reranker on GPU 1. Ignored when the model's device is "cpu".
+    EMBED_GPU_ID: z.coerce.number().int().min(0).default(0),
+    RERANK_GPU_ID: z.coerce.number().int().min(0).default(1),
+    // Idle-unload: free a model's VRAM after this many minutes with no requests (it cold-reloads on
+    // the next call). For sharing the GPUs with other homelab services. 0 = never unload (stay warm).
+    IDLE_UNLOAD_MIN: z.coerce.number().min(0).default(10),
+    // Optional in-process local summarizer (node-llama-cpp): path to a GGUF (e.g. a Qwen3-4B-Instruct
+    // Q8). UNSET (default) = disabled — the server never loads node-llama-cpp. When set, it gets the
+    // same warm/idle-unload lifecycle as the embedder/reranker. NOTE: node-llama-cpp 3.18.1 can't pin
+    // a specific GPU in-process (no deviceId API), so placement is its default (CUDA_VISIBLE_DEVICES
+    // is the only lever); fine since it's an occasional generative call, not a hot throughput path.
+    SUMMARIZER_GGUF: z.string().optional(),
+    // Where transformers.js downloads/caches model weights (BGE-M3, the reranker). Pinned
+    // to a repo-local, gitignored dir so model artifacts stay self-contained — not leaking
+    // into node_modules/.cache or an OS-global HF cache. Resolved relative to cwd (repo root).
+    MODEL_CACHE_DIR: z.string().min(1).default("./.models"),
+    // Cross-chat corpus auto-indexing: embed each chat's completed raw-message blocks into
+    // chat_segments (the verbatim half of hybrid search) in the background, post-turn, for EVERY chat.
+    // "true" (default) keeps the search corpus fresh as chats proceed; "false" pauses it to fully
+    // offload the GPU. Embed-only + cheap. Digest generation is separate (gated on memory.enabled).
+    CORPUS_AUTOINDEX: z.enum(["true", "false"]).default("true"),
 
-  // Import curation: comma-separated character names (case-insensitive) to EXCLUDE at import —
-  // the card + all its chats are dropped. Default skips non-RP utility characters (the coder-helper
-  // "Ruby" and scratch "Assistant" cards) so they never enter the corpus. Set to "" to import all.
-  IMPORT_SKIP_CHARACTERS: z.string().default("Ruby,Assistant"),
+    // Import curation: comma-separated character names (case-insensitive) to EXCLUDE at import —
+    // the card + all its chats are dropped. Default skips non-RP utility characters (the coder-helper
+    // "Ruby" and scratch "Assistant" cards) so they never enter the corpus. Set to "" to import all.
+    IMPORT_SKIP_CHARACTERS: z.string().default("Ruby,Assistant"),
 
-  // Auth/tenancy (see CLAUDE.md). Identity = X-Authentik-Username, trusted ONLY when
-  // caddy forwards it with a matching X-Neo-Proxy secret; otherwise (direct LAN/IP
-  // access) we fall back to the owner. UNSET secret = header never trusted = always
-  // the default user, which is correct for local dev (no caddy in front).
-  DEFAULT_USER_HANDLE: z.string().min(1).default("owner"), // set to your authentik username so both access paths map to one user
-  NEO_PROXY_SECRET: z.string().min(1).optional(),
-});
+    // ── Auth/tenancy (see CLAUDE.md + docs/auth-and-credentials-plan.md) ──────────────────────────
+    // The app only ever CONSUMES identity (never an IdP). Auth is a LAYERED, pluggable mode: AUTH_MODE
+    // picks the SSO mechanism; AUTH_FALLBACK decides the un-credentialed case. The resolver tries
+    // cookie → forward-auth header → fallback per request, so `oidc` + `owner` = SSO on the domain AND
+    // owner on the raw LAN IP, from one process. Every var here is optional with a safe default so the
+    // zero-infra single-user box runs exactly like before (the locked anti-regression in §11).
+    DEFAULT_USER_HANDLE: z.string().min(1).default("owner"), // owner handle: single-user identity + the `owner` fallback + the default admin
+    // The owner handle that single-user uses; also the fallback identity. Set to your authentik
+    // username so the SSO path and the raw-LAN-IP fallback map to ONE user row.
+
+    // Which SSO mechanism is active. `single-user` (DEFAULT) = no SSO, zero infra; `forward-header` =
+    // caddy+authentik forward-auth (verify X-Authentik-Jwt via JWKS); `oidc` = the app is an authentik
+    // OIDC client over HTTPS (cookie/BFF sessions).
+    AUTH_MODE: z.enum(["single-user", "forward-header", "oidc"]).default("single-user"),
+    // What identity an UN-credentialed request gets. `owner` (DEFAULT) → the owner (the trusted-LAN /
+    // raw-IP path; SSO-on-domain + owner-on-raw-IP coexist under `oidc`). `deny` → no identity (401);
+    // makes SSO mandatory. Use `deny` only where the un-credentialed path is untrusted (shared/exposed LAN).
+    AUTH_FALLBACK: z.enum(["owner", "deny"]).default("owner"),
+
+    // Admin/owner determination (group preferred, mirrors the stack's Grafana convention). An identity
+    // whose `groups` contains OWNER_GROUP, OR whose handle ∈ OWNER_HANDLES, provisions as role:'admin'.
+    // OWNER_HANDLES unset ⇒ [DEFAULT_USER_HANDLE] (resolved at the consumer, not here). Comma-list.
+    OWNER_GROUP: z.string().min(1).optional(),
+    OWNER_HANDLES: z.string().optional(),
+
+    // forward-header trust: verify the signed X-Authentik-Jwt against X-Authentik-Meta-Jwks (spoof-proof
+    // regardless of network path). Default on; falls back to network-isolation trust if the JWT is absent.
+    FORWARD_AUTH_VERIFY_JWT: z
+      .enum(["true", "false"])
+      .default("true")
+      .transform((v) => v === "true"),
+
+    // Per-user credential encryption key — base64 of 32 random bytes (AES-256-GCM). UNSET ⇒ per-user
+    // creds are OFF (the store rejects writes; the resolver falls back to the host key). Validated for
+    // length in crypto/secrets.ts, NOT here — a missing/short key must DEGRADE, never throw at boot (§15).
+    CREDENTIALS_KEY: z.string().optional(),
+
+    // OIDC client (required iff AUTH_MODE=oidc — enforced by the refinement below). Confidential client,
+    // like the stack's Open WebUI/Grafana. OIDC_REDIRECT_URIS is a comma-list ALLOWLIST of permitted
+    // callback origins (the per-request redirect_uri is derived from the origin + validated against it).
+    OIDC_ISSUER: z.url().optional(),
+    OIDC_CLIENT_ID: z.string().min(1).optional(),
+    OIDC_CLIENT_SECRET: z.string().min(1).optional(),
+    OIDC_REDIRECT_URIS: z.string().optional(),
+    // HMAC-peppers the session tokenHash so a DB leak alone can't forge a session. 32+ bytes; required
+    // for oidc (the only mode that mints cookie sessions).
+    SESSION_SECRET: z.string().min(32).optional(),
+
+    // Optional legacy knob — the deployed Caddyfile does NOT set it (§1c); kept off by default as an
+    // extra network-trust lever for forward-header. NOT the primary trust mechanism (JWKS is).
+    NEO_PROXY_SECRET: z.string().min(1).optional(),
+  })
+  .superRefine((val, ctx) => {
+    // Fail fast at boot if oidc is selected without the credentials to run it (a misconfigured deploy
+    // should not silently fall back). Other modes leave these unset — the zero-infra default is untouched.
+    if (val.AUTH_MODE === "oidc") {
+      const required = [
+        "OIDC_ISSUER",
+        "OIDC_CLIENT_ID",
+        "OIDC_CLIENT_SECRET",
+        "OIDC_REDIRECT_URIS",
+        "SESSION_SECRET",
+      ] as const;
+      for (const key of required) {
+        if (!val[key]) {
+          ctx.addIssue({
+            code: "custom",
+            path: [key],
+            message: `${key} is required when AUTH_MODE=oidc`,
+          });
+        }
+      }
+    }
+  });
 
 export const env = envSchema.parse(process.env);
 
