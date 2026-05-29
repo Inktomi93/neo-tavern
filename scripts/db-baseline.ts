@@ -57,15 +57,25 @@ async function main(): Promise<void> {
 
   const db = await createDb(env.DATABASE_URL);
 
-  // Safety: this is for a POPULATED DB. If core tables are absent, the operator wants a real
-  // migrate (server boot / runMigrations), not a baseline-mark that would mask an unmigrated DB.
-  const core = await db.all<{ name: string }>(
-    sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'users'`,
+  // Safety: baseline-mark is ONLY valid on a DB already at the pre-squash HEAD — i.e. every table
+  // the baseline creates is present. Marking a DB that's empty or stranded mid-chain would record
+  // it as "fully migrated" while it's missing later tables → silent corruption. So verify the live
+  // schema has EVERY table the baseline declares, and refuse otherwise (a fresh/partial DB should
+  // just run the migrator: start the server / runMigrations).
+  const expectedTables = [...sqlText.matchAll(/CREATE TABLE `([^`]+)`/g)]
+    .map((m) => m[1])
+    .filter((t): t is string => t !== undefined);
+  const liveRows = await db.all<{ name: string }>(
+    sql`SELECT name FROM sqlite_master WHERE type = 'table'`,
   );
-  if (core.length === 0) {
+  const live = new Set(liveRows.map((r) => r.name));
+  const missing = expectedTables.filter((t) => !live.has(t));
+  if (missing.length > 0) {
     throw new Error(
-      "DB has no `users` table — it looks empty/unmigrated. Baseline-mark is only for a DB already " +
-        "built by the pre-squash migrations. For a fresh DB just start the server (runMigrations).",
+      `DB is missing ${missing.length}/${expectedTables.length} table(s) the baseline expects ` +
+        `(e.g. ${missing.slice(0, 5).join(", ")}). It is empty or stranded mid-migration — ` +
+        "baseline-mark would mask that. Bring it to HEAD with the migrator (start the server / " +
+        "runMigrations) first; this script is only for a DB already built by the full pre-squash chain.",
     );
   }
 
@@ -77,19 +87,26 @@ async function main(): Promise<void> {
   const existing = await db.all<{ hash: string; created_at: number }>(
     sql`SELECT hash, created_at FROM __drizzle_migrations`,
   );
+  // Idempotent: a single row for this baseline whose timestamp already clears the skip threshold
+  // (migrator skips iff lastDbMigration.created_at < entry.when) needs no rewrite.
   const alreadyBaselined =
     existing.length === 1 &&
     existing[0]?.hash === hash &&
-    Number(existing[0]?.created_at) === baseline.when;
+    Number(existing[0]?.created_at) >= baseline.when;
   if (alreadyBaselined) {
     console.log("[baseline] ✅ already baselined — no change.");
     process.exit(0);
   }
 
+  // Marker `created_at` = "applied now" in the repo's canonical epoch-ms UTC (Date.now(), same as
+  // every other timestamp we write). It must be STRICTLY greater than the baseline's `when` so the
+  // migrator skips it regardless of whether the comparator is `<` or `<=`; the `when + 1` floor
+  // guarantees that even under backwards clock skew.
+  const markerCreatedAt = Math.max(Date.now(), baseline.when + 1);
   // Replace whatever is there (the 27 old rows, or a partial state) with the single baseline row.
   await db.run(sql`DELETE FROM __drizzle_migrations`);
   await db.run(
-    sql`INSERT INTO __drizzle_migrations (hash, created_at) VALUES (${hash}, ${baseline.when})`,
+    sql`INSERT INTO __drizzle_migrations (hash, created_at) VALUES (${hash}, ${markerCreatedAt})`,
   );
 
   console.log(
