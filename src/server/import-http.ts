@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { unzipSync } from "fflate";
 import type { Hono } from "hono";
 import type { Db } from "../db/client";
@@ -162,10 +162,14 @@ export function registerImportRoutes(app: Hono, db: Db, assets: AssetsService): 
     }
 
     const tmp = await mkdtemp(join(tmpdir(), "neo-import-"));
+    const root = resolve(tmp) + sep;
     try {
       for (const [path, data] of Object.entries(entries)) {
         if (path.endsWith("/") || data.length === 0) continue; // directory entry
         const dest = join(tmp, path);
+        // Zip-slip guard: fflate returns entry paths verbatim (it does NOT strip `../`), so a hostile
+        // archive could escape `tmp` into an arbitrary file write. Skip anything resolving outside root.
+        if (!resolve(dest).startsWith(root)) continue;
         await mkdir(dirname(dest), { recursive: true });
         await writeFile(dest, data);
       }

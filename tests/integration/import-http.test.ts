@@ -1,7 +1,8 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import process from "node:process";
 import { zipSync } from "fflate";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { buildApp } from "../../src/server/app";
@@ -117,5 +118,24 @@ describe("import HTTP routes", () => {
   test("POST /api/import/cards rejects an empty request", async () => {
     const app = await setupApp();
     expect((await post(app, "/api/import/cards", new FormData())).status).toBe(400);
+  });
+
+  test("zip import is zip-slip safe: a `../` entry never escapes the temp dir", async () => {
+    const app = await setupApp();
+    // A unique escape target in the OS tmp root (the parent of the route's mkdtemp dir). Without the
+    // guard, an entry of `../<name>` would land here; with it, the entry is skipped.
+    const escapeName = `neo-zipslip-${Date.now()}-${process.pid}.txt`;
+    const zip = zipSync({
+      "characters/Test Character.png": new Uint8Array(readFileSync(CARD)),
+      [`../${escapeName}`]: new TextEncoder().encode("escaped!"),
+    });
+    const fd = new FormData();
+    fd.append("file", new File([zip], "evil.zip", { type: "application/zip" }));
+
+    const res = await post(app, "/api/import/zip", fd);
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.characters).toHaveLength(1); // the legit entry still imported
+    expect(existsSync(join(tmpdir(), escapeName))).toBe(false); // the `../` entry was NOT written out
   });
 });

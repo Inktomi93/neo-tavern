@@ -201,9 +201,12 @@ is the main thing missing. Run `pnpm check` (must be green) and skim recent comm
   routing/preset/persona (`arg ?? userDefault ?? schemaDefault`, lenient on stale ids) then delegates
   the first turn to `send` (byte-identical; no duplication). `forkChat`/import still create rows
   eagerly (direct insert) — that's a commit. Tests scaffold via `seedChatRow` (`tests/support/db.ts`).
-- **`max-pro-sub` is the OWNER's single host credential** (the `claude login` Max sub). startChat +
-  `resolveTurnRouting` guard: a non-owner defaulting into it is rejected (`DomainOperationError`).
-  Per-user credential isolation is a future multi-user workstream (TODO at the seam).
+- **`max-pro-sub` is the OWNER's single host credential** (the `claude login` Max sub). Guarded at
+  **`startChat` only** today: a non-owner defaulting into it is rejected (`DomainOperationError`).
+  **NOT yet guarded** at the other seams that can select it — `setProvider`, `forkChat`
+  (`targetSource`), and the turn-time `resolveTurnRouting` (pure/sync, no role access). Fine under
+  single-user; add the same `username !== DEFAULT_USER_HANDLE && source === "max-pro-sub"` check there
+  (or per-user credentials) before multi-user. (TODO at the seam.)
 - **Three typed config tiers** (`docs/settings-audit.md`): `env.ts` (deploy/box/secret/identity —
   unchanged) · **AppSettings** (admin-editable runtime toggles over the `settings` KV;
   `shared/app-settings.ts` + `server/config/app-config.ts`; env is the default FLOOR, DB override wins;
