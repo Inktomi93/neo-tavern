@@ -13,8 +13,9 @@ import { createRegexService } from "../_shared/regex";
 import { ensureUser } from "../_shared/users";
 import type { RunCompaction } from "./compaction";
 import { DEFAULT_COMPACT_INSTRUCTIONS, MANAGED_COMPACT_DEFAULT_PCT } from "./constants";
-import type { ChatContext } from "./context";
-import { generateDigests, generateSegments } from "./memory";
+import type { ChatContext } from "./context/factory";
+import { buildPromptTrace, buildTurnErrorResult, buildTurnProvenance } from "./helpers";
+import { generateDigests, generateSegments } from "./memory/generate";
 import { resolveTurnRouting } from "./routing";
 import { DbSessionStore } from "./store";
 import { chatStreamEmitter } from "./stream";
@@ -127,14 +128,7 @@ export function createSend(ctx: ChatContext, ops: { runCompaction: RunCompaction
           source: routing.source,
           model: routing.model,
           preset: chat.presetVersionId === null ? "default" : "pinned",
-          staticChars: systemPrompt.static.length,
-          dynamicChars: systemPrompt.dynamic.length,
-          staticSections: systemPrompt.trace.staticSections,
-          dynamicSections: systemPrompt.trace.dynamicSections,
-          worldInfoAttached: assembleCtx.worldEntries.length,
-          worldInfoIncluded: systemPrompt.trace.worldInfoIncluded,
-          matchedKeys: systemPrompt.trace.matchedKeys,
-          hasPersona: assembleCtx.activePersona !== null,
+          ...buildPromptTrace(systemPrompt, assembleCtx),
         },
         "chat: prompt assembled",
       );
@@ -196,13 +190,7 @@ export function createSend(ctx: ChatContext, ops: { runCompaction: RunCompaction
             },
             "chat turn failed — rolled back user message",
           );
-          return {
-            status: "error",
-            code: error.kind,
-            retryable: error.retryable,
-            ...(error.resetsAt !== undefined ? { resetsAt: error.resetsAt } : {}),
-            messages: await listByChat(params.chatId),
-          };
+          return buildTurnErrorResult(error, await listByChat(params.chatId));
         }
         throw error; // unexpected (non-provider) failure — let it propagate
       }
@@ -221,24 +209,11 @@ export function createSend(ctx: ChatContext, ops: { runCompaction: RunCompaction
         chatId: params.chatId,
         seq: userSeq + 1,
         role: "assistant",
-        content: turn.reply,
-        model: turn.usage.model,
-        provider: `${routing.api}/${routing.source}`,
-        stopReason: turn.stopReason,
-        finishReason: turn.finishReason,
-        reasoningEffort: promptConfig.params.effort ?? null,
-        tokensIn: turn.usage.tokensIn,
-        tokensOut: turn.usage.tokensOut,
-        cacheReadTokens: turn.usage.cacheReadTokens,
-        cacheWriteTokens: turn.usage.cacheWriteTokens,
-        cacheCreation5mTokens: turn.usage.cacheCreation5mTokens,
-        cacheCreation1hTokens: turn.usage.cacheCreation1hTokens,
-        contextWindow: turn.usage.contextWindow,
-        maxOutputTokens: turn.usage.maxOutputTokens,
-        ttftMs: turn.ttftMs,
-        terminalReason: turn.terminalReason,
-        apiErrorStatus: turn.apiErrorStatus,
-        costUsd: turn.usage.costUsd,
+        ...buildTurnProvenance(
+          turn,
+          `${routing.api}/${routing.source}`,
+          promptConfig.params.effort,
+        ),
         createdAt: Date.now(),
       });
       await recordTurnEvents(params.chatId, assistantMsgId, turn.events);

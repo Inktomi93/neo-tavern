@@ -9,7 +9,8 @@ import { newId } from "../_shared/ids";
 import { withChatLock } from "../_shared/lock";
 import { ensureUser } from "../_shared/users";
 import { OPEN_SCENE_PROMPT } from "./constants";
-import type { ChatContext } from "./context";
+import type { ChatContext } from "./context/factory";
+import { buildTurnErrorResult, buildTurnProvenance } from "./helpers";
 import { resolveTurnRouting } from "./routing";
 import { buildSeedFrames } from "./seed";
 import { DbSessionStore } from "./store";
@@ -144,13 +145,7 @@ export function createSwipe(ctx: ChatContext) {
             { chatId: params.chatId, kind: error.kind },
             "chat: swipe generation failed (no change)",
           );
-          return {
-            status: "error",
-            code: error.kind,
-            retryable: error.retryable,
-            ...(error.resetsAt !== undefined ? { resetsAt: error.resetsAt } : {}),
-            messages: await listByChat(params.chatId),
-          };
+          return buildTurnErrorResult(error, await listByChat(params.chatId));
         }
         throw error;
       }
@@ -202,24 +197,11 @@ export function createSwipe(ctx: ChatContext) {
         .update(messages)
         .set({
           activeVariantIdx: nextIdx,
-          content: turn.reply,
-          model: turn.usage.model,
-          provider: `${routing.api}/${routing.source}`,
-          stopReason: turn.stopReason,
-          finishReason: turn.finishReason,
-          reasoningEffort: promptConfig.params.effort ?? null,
-          tokensIn: turn.usage.tokensIn,
-          tokensOut: turn.usage.tokensOut,
-          cacheReadTokens: turn.usage.cacheReadTokens,
-          cacheWriteTokens: turn.usage.cacheWriteTokens,
-          cacheCreation5mTokens: turn.usage.cacheCreation5mTokens,
-          cacheCreation1hTokens: turn.usage.cacheCreation1hTokens,
-          contextWindow: turn.usage.contextWindow,
-          maxOutputTokens: turn.usage.maxOutputTokens,
-          ttftMs: turn.ttftMs,
-          terminalReason: turn.terminalReason,
-          apiErrorStatus: turn.apiErrorStatus,
-          costUsd: turn.usage.costUsd,
+          ...buildTurnProvenance(
+            turn,
+            `${routing.api}/${routing.source}`,
+            promptConfig.params.effort,
+          ),
         })
         .where(eq(messages.id, tip.id));
       await recordTurnEvents(params.chatId, tip.id, turn.events);

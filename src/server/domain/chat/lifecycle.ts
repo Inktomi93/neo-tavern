@@ -14,7 +14,8 @@ import { newId } from "../_shared/ids";
 import { withChatLock } from "../_shared/lock";
 import { ensureUser } from "../_shared/users";
 import { OPEN_SCENE_PROMPT } from "./constants";
-import type { ChatContext } from "./context";
+import type { ChatContext } from "./context/factory";
+import { buildTurnProvenance } from "./helpers";
 import { resolveTurnRouting } from "./routing";
 import { buildSeedFrames, GREETING_USER_STUB } from "./seed";
 import { DbSessionStore } from "./store";
@@ -135,24 +136,11 @@ export function createLifecycle(ctx: ChatContext) {
         chatId,
         seq: 1,
         role: "assistant",
-        content: turn.reply,
-        model: turn.usage.model,
-        provider: `${routing.api}/${routing.source}`,
-        stopReason: turn.stopReason,
-        finishReason: turn.finishReason,
-        reasoningEffort: promptConfig.params.effort ?? null,
-        tokensIn: turn.usage.tokensIn,
-        tokensOut: turn.usage.tokensOut,
-        cacheReadTokens: turn.usage.cacheReadTokens,
-        cacheWriteTokens: turn.usage.cacheWriteTokens,
-        cacheCreation5mTokens: turn.usage.cacheCreation5mTokens,
-        cacheCreation1hTokens: turn.usage.cacheCreation1hTokens,
-        contextWindow: turn.usage.contextWindow,
-        maxOutputTokens: turn.usage.maxOutputTokens,
-        ttftMs: turn.ttftMs,
-        terminalReason: turn.terminalReason,
-        apiErrorStatus: turn.apiErrorStatus,
-        costUsd: turn.usage.costUsd,
+        ...buildTurnProvenance(
+          turn,
+          `${routing.api}/${routing.source}`,
+          promptConfig.params.effort,
+        ),
         createdAt: Date.now(),
       });
       await recordTurnEvents(chatId, openingMsgId, turn.events);
@@ -231,19 +219,29 @@ export function createLifecycle(ctx: ChatContext) {
     });
   }
 
+  // Shared skeleton for simple single-field chat updates: resolve owner → lock → verify ownership
+  // → update. All three public mutators below are just a field name + value away from each other.
+  async function patchChat(
+    username: string,
+    chatId: string,
+    patch: Partial<typeof chats.$inferInsert>,
+  ): Promise<void> {
+    const ownerId = await ensureUser(db, username);
+    return withChatLock(chatId, async () => {
+      await loadOwnedChat(ownerId, chatId);
+      await db
+        .update(chats)
+        .set({ ...patch, updatedAt: Date.now() })
+        .where(eq(chats.id, chatId));
+    });
+  }
+
   async function updateTitle(params: {
     username: string;
     chatId: string;
     title: string;
   }): Promise<void> {
-    const ownerId = await ensureUser(db, params.username);
-    return withChatLock(params.chatId, async () => {
-      await loadOwnedChat(ownerId, params.chatId);
-      await db
-        .update(chats)
-        .set({ title: params.title, updatedAt: Date.now() })
-        .where(eq(chats.id, params.chatId));
-    });
+    return patchChat(params.username, params.chatId, { title: params.title });
   }
 
   async function star(params: {
@@ -251,14 +249,7 @@ export function createLifecycle(ctx: ChatContext) {
     chatId: string;
     starred: boolean;
   }): Promise<void> {
-    const ownerId = await ensureUser(db, params.username);
-    return withChatLock(params.chatId, async () => {
-      await loadOwnedChat(ownerId, params.chatId);
-      await db
-        .update(chats)
-        .set({ starred: params.starred, updatedAt: Date.now() })
-        .where(eq(chats.id, params.chatId));
-    });
+    return patchChat(params.username, params.chatId, { starred: params.starred });
   }
 
   async function archive(params: {
@@ -266,14 +257,7 @@ export function createLifecycle(ctx: ChatContext) {
     chatId: string;
     archived: boolean;
   }): Promise<void> {
-    const ownerId = await ensureUser(db, params.username);
-    return withChatLock(params.chatId, async () => {
-      await loadOwnedChat(ownerId, params.chatId);
-      await db
-        .update(chats)
-        .set({ archived: params.archived, updatedAt: Date.now() })
-        .where(eq(chats.id, params.chatId));
-    });
+    return patchChat(params.username, params.chatId, { archived: params.archived });
   }
 
   return { create, editMessage, delete: deleteChat, updateTitle, star, archive };

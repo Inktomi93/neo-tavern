@@ -1,7 +1,8 @@
 import type { Db } from "../../../db/client";
 import { createBranch } from "./branch";
 import { createCompaction } from "./compaction";
-import { type ChatServiceDeps, createChatContext } from "./context";
+import { createChatContext } from "./context/factory";
+import type { ChatServiceDeps } from "./context/types";
 import { createLifecycle } from "./lifecycle";
 import { createRead } from "./read";
 import { createSend } from "./send";

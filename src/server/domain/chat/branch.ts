@@ -5,7 +5,7 @@ import { getLog } from "../../observability/logger";
 import { newId } from "../_shared/ids";
 import { withChatLock } from "../_shared/lock";
 import { ensureUser } from "../_shared/users";
-import type { ChatContext } from "./context";
+import type { ChatContext } from "./context/factory";
 import { buildSeedFrames, type SeedTurn } from "./seed";
 import { DbSessionStore } from "./store";
 import { ChatOperationError, type ForkChatParams, type SetProviderParams } from "./types";

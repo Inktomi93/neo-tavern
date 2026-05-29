@@ -1,5 +1,5 @@
 import { serve } from "@hono/node-server";
-import { createDb, runMigrations } from "../db/client";
+import { createDb, optimizeDb, runMigrations } from "../db/client";
 import { buildApp } from "./app";
 import { createCharacterService } from "./domain/character";
 import { createChatService } from "./domain/chat";
@@ -65,4 +65,14 @@ serve({ fetch: app.fetch, port: env.PORT }, (info) => {
       }
     }
   });
+
+  // Run SQLite optimization periodically (every 3 hours)
+  setInterval(
+    () => {
+      optimizeDb(db).catch((err) => {
+        getLog().error({ err }, "failed to optimize db");
+      });
+    },
+    1000 * 60 * 60 * 3,
+  );
 });

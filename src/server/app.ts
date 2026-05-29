@@ -68,6 +68,11 @@ export function buildApp(db: Db, cas: Cas, services: Services, isProd: boolean) 
   // Must be first: assigns the request id + binds the request-scoped logger.
   app.use(observability);
 
+  app.onError((err, c) => {
+    getLog().error({ err, path: c.req.path }, "unhandled hono exception");
+    return c.json({ error: "Internal Server Error" }, 500);
+  });
+
   const assetsService = createAssetsService(db, cas);
   registerDebugRoutes(app, createDebugService(db), assetsService);
 

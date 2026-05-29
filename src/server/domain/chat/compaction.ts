@@ -9,7 +9,7 @@ import { TurnError } from "../../providers/turn";
 import { withChatLock } from "../_shared/lock";
 import { ensureUser } from "../_shared/users";
 import { DEFAULT_COMPACT_INSTRUCTIONS } from "./constants";
-import type { ChatContext } from "./context";
+import type { ChatContext } from "./context/factory";
 import { resolveTurnRouting } from "./routing";
 import { DbSessionStore } from "./store";
 import type { CompactParams } from "./types";
