@@ -25,6 +25,10 @@ corpus-staging/
 tools/cuda/.venv/
 # api-map analysis tool's uv venv (reproducible via `pnpm api:map`; pyproject + uv.lock are committed).
 tools/api-map/.venv/
+# Generated API/surface + hook map — regenerate on demand with `pnpm api:map`. The TOOL is committed,
+# not its (churny, biome-incompatible) output; a fresh session just runs it to get current data.
+docs/api-map.json
+docs/api-map.md
 
 # Model weights (BGE-M3, reranker) downloaded by transformers.js — repo-local + self-
 # contained (MODEL_CACHE_DIR), re-downloadable, never committed.
