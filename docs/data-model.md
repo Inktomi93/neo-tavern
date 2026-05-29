@@ -162,15 +162,21 @@ Every top-level *owned* entity carries `ownerId → users.id` (personas, charact
 presets, world_books, tags); children inherit via their parent. Scoping is **enforced in the
 `domain/*` layer** (every read/write bakes `WHERE owner_id = ctx.user.id`), exercised even with
 one user, so a second user is a no-op not a rewrite. Global uniques become composite under
-multi-user (`unique(ownerId, handle)` etc.). Identity = `X-Authentik-Username` at one auth seam:
-trusted-proxy header → that user; else `DEFAULT_USER_HANDLE`. No session, no CSRF.
+multi-user (`unique(ownerId, handle)` etc.). Identity is resolved per-request at one seam
+(`auth/trust-header.ts`); the **pluggable-`AUTH_MODE`** model (single-user / forward-header /
+oidc), keyed on the stable `sub`/`X-Authentik-Uid`, is specified in `docs/auth-and-credentials-plan.md`
+(locked, building). **No cookies → no CSRF, by construction** (bearer tokens, never `Set-Cookie`).
+Today the app effectively runs single-user-owner (the `X-Neo-Proxy` path exists in code but the live
+Caddyfile never injects it → see the plan's §1c; forward-header replaces it with JWKS verification).
 
 **Access role** (`users.role`, migration 0025): `'admin'|'user'`, default `'user'`. `ensureUser` (the
 JIT provisioning seam) sets `admin` iff the handle is `DEFAULT_USER_HANDLE` — the one access decision,
 in one place; default `'user'` avoids escalation-by-default when multi-user lands. `requireAdmin`
-(`_shared/admin.ts`) gates admin surfaces (AppSettings). **Owner-only credential:** `max-pro-sub` (mode
-1) is the host's single `claude login` — `chat.startChat`/`resolveTurnRouting` reject a non-owner
-defaulting into it; per-user credentials are a future workstream.
+(`_shared/admin.ts`) gates admin surfaces (AppSettings). (The plan generalizes admin-determination to
+`OWNER_GROUP`/`OWNER_HANDLES` and adds `users.externalId`/`enabled`.) **Owner-only credential:**
+`max-pro-sub` (mode 1) is the host's single `claude login` — guarded at `chat.startChat` today; the
+locked design moves the gate to one turn-time **credential resolver** covering every seam, with
+encrypted per-user (BYO) OpenRouter keys for non-owners (`docs/auth-and-credentials-plan.md`).
 
 **Lazy chat creation:** a `chats` row is written only at the first canon action (`chat.startChat` — the
 user's first message or a generated opening). The new-chat draft is CLIENT-side (seeded from

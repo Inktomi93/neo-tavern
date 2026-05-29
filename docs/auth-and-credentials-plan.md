@@ -32,9 +32,11 @@ OpenRouter key and generate on its own dime, on any access path, without touchin
 ### Decisions locked with the owner (do not re-litigate; implement)
 - **`AUTH_MODE` env enum**: `single-user` (DEFAULT, zero-infra) · `forward-header` (today's
   caddy+authentik) · `oidc` (app is an OIDC client; works on direct LAN too).
-- **OIDC sessions are BEARER TOKENS, never cookies.** This is the crux: a bearer token the SPA stores
-  and sends as `Authorization: Bearer …` has **no ambient credential** for a forged cross-site request
-  to ride → **no CSRF, by construction**, with zero CSRF middleware. (See §4, §11.)
+- **OIDC sessions are BEARER TOKENS, never cookies** — and **server-side / revocable** (an opaque
+  token backed by a `sessions` row, §4), not a throwaway stateless JWT. The bearer the SPA sends as
+  `Authorization: Bearer …` has **no ambient credential** for a forged cross-site request to ride →
+  **no CSRF, by construction**, with zero CSRF middleware. Server-side = logout/disable/kick-a-device
+  take effect *immediately*. "No cookies" is the rule; "session state" is fine. (See §4, §11.)
 - **Auth ⟂ push.** Multi-device live sync (the SSE/subscription, keyed by chatId, scoped to identity)
   is independent of how identity is established. SSO does NOT disable push. (See §5.)
 - **Per-user secrets encrypted at rest** (AES-256-GCM, key from env `CREDENTIALS_KEY`). This is an
@@ -155,20 +157,32 @@ Refactor `src/server/auth/trust-header.ts` into a strategy dispatch returning a 
   `/api/auth/*`.
 - The **disabled-user** check (§6) lives here: resolved → disabled → 401/403.
 
-## §4. The app session — BEARER, NEVER A COOKIE
+## §4. The app session — REVOCABLE SERVER-SIDE BEARER, NEVER A COOKIE
 
-**CSRF exists only because browsers auto-attach cookies; a token the SPA explicitly puts in an
-`Authorization` header is never sent on a cross-site forged request, so CSRF is structurally
-impossible and we write zero CSRF code.**
-- After OIDC callback, mint a **stateless signed session token**: JWT, `HS256`, secret =
-  `env.SESSION_SECRET` (32+ bytes). Claims: `sub` (externalId), `handle`, `iat`, `exp` (TTL 7d),
-  `jti`. Hand the raw token to the SPA in the callback response/redirect fragment (NOT `Set-Cookie`).
-- SPA stores it (memory + `localStorage`) and attaches `Authorization: Bearer` to every tRPC call +
-  the SSE stream. The `oidc` strategy verifies signature + `exp`; no DB hit on the hot path.
-- **Logout/revocation:** v1 = client drops token (+ hit authentik `end-session`). Server-side
-  revocation (`jti` denylist / `sessions` table) deferred; 7d TTL bounds exposure. NO refresh-token
-  rotation in v1.
-- Library: `openid-client` (discovery + code exchange + ID-token verify) + `jose` for the app session.
+**CSRF exists only because browsers auto-attach cookies; a bearer token the SPA puts in the
+`Authorization` header is never sent on a forged cross-site request → CSRF is structurally impossible,
+zero CSRF code.** This holds whether the token is stateless or server-backed — *the point is no
+cookie.* We choose **server-backed** (build it right the first time):
+- After the OIDC callback, mint an **opaque** random token (32 bytes, base64url) and store only its
+  **hash** in a **`sessions`** row: `id`, `userId → users.id`, `tokenHash`, `createdAt`, `lastSeenAt`,
+  `expiresAt`, `revokedAt?`, `userAgent`/`label?`. Hand the raw token to the SPA (callback response
+  body / redirect fragment — **NOT `Set-Cookie`**); it stores it (memory + `localStorage`) and sends
+  `Authorization: Bearer …` on every tRPC call + the SSE stream.
+- The `oidc` strategy validates by **hashing the bearer → `sessions` lookup**: row exists, not
+  `revokedAt`, not past `expiresAt`, and the owning `users.enabled` — else 401. **Sliding expiry:** bump
+  `expiresAt`/`lastSeenAt` on use (long-lived, no nagging re-logins). One indexed lookup/request —
+  negligible on one box; memoize with a short TTL only if it ever shows up hot.
+- **Why server-side, not a stateless JWT:** revocation is *immediate and real* — logout drops the row,
+  **disabling a user kills their live sessions now** (not in up-to-7-days), and you can list/revoke a
+  specific device (multi-device management). Defining the `sessions` schema **now** = no migration
+  later, which is the whole "do it right the first time" point.
+- `jose` is used **only** to verify *authentik's* ID token (OIDC leg) and the forward-auth
+  `X-Authentik-Jwt` — never to mint/verify our own session (it's opaque + DB-checked). `SESSION_SECRET`
+  optionally peppers the `tokenHash` (HMAC) so a DB leak alone can't forge a bearer.
+- **Deferred — and genuinely free to defer (no migration cost):** OIDC **refresh-token rotation**.
+  Sliding-expiry sessions + a silent OIDC re-auth cover the UX, and we avoid storing the IdP's refresh
+  token (a secret). Adding it later is a nullable column on `sessions` — additive, not debt.
+- Library: `openid-client` (discovery + code exchange + ID-token verify) + `jose` (JWKS verify).
 
 ## §5. Multi-device — and why auth doesn't break push
 - Each device logs in independently, holds its own bearer token, both resolve to the same user row
@@ -188,8 +202,9 @@ impossible and we write zero CSRF code.**
   synced to the latest `preferred_username`. `single-user` → externalId null, handle =
   DEFAULT_USER_HANDLE. `ensureUser({ externalId, handle })`: match by externalId if present (update
   handle), else by handle.
-- **`users.enabled`** (new boolean, default true). Disabled → rejected at §2. Admins toggle; never
-  hard-delete for a ban.
+- **`users.enabled`** (new boolean, default true). Disabled → rejected at §2 **immediately** (the §4
+  session check reads `users.enabled` every request + admins should revoke the user's `sessions` rows
+  on disable, so a ban takes effect now, not on token expiry). Admins toggle; never hard-delete.
 - **tRPC `userAdmin` router** (all `requireAdmin`): `listUsers`, `setRole`, `setEnabled`. No UI.
 
 ## §7. Per-user credentials + crypto (Part C, storage half)
@@ -239,8 +254,11 @@ existing turn-error path.
 - **NO cookie sessions.** Bearer in `Authorization` only. (The whole CSRF-avoidance strategy.)
 - **NO CSRF middleware/tokens.** Not needed given bearer-only.
 - **NO passwords / hashing / salts / local login form.** We are an OIDC *client*, never an IdP.
-- **NO refresh-token rotation in v1.** Re-login on expiry.
-- **NO server-side session store / `Set-Cookie` / express-session.** Stateless signed JWT for v1.
+- **NO `Set-Cookie` / cookie sessions / express-session.** The bearer lives in `Authorization` only.
+  (Server-side **session state is YES** — a revocable `sessions` table backing the opaque bearer, §4.
+  The thing we avoid is *cookies*, not session state. Don't conflate them.)
+- **NO refresh-token rotation in v1** — deferred at *no* migration cost (sliding-expiry sessions cover
+  UX; adding it later is a nullable `sessions` column, §4). Not debt.
 - **NO plaintext secrets at rest.** AES-256-GCM only; never log a key; never return one (boolean only).
 - **NO per-user `max-pro-sub`.** Host's single `claude login`; admin/owner only, forever.
 - **Do NOT break the zero-infra default.** `single-user` + no `CREDENTIALS_KEY` + no OIDC env + no
@@ -260,20 +278,26 @@ existing turn-error path.
   `env.ts` refinement: `AUTH_MODE=oidc` ⇒ OIDC vars required.
 
 ## §13. Migrations (`pnpm db:generate:force`)
+Define ALL the new schema up front so it's **one migration, no follow-ups** (the "do it right" point):
 `users.externalId` (nullable, unique-when-set) + `users.enabled` (boolean default true) +
-`user_credentials` table. No backfill needed (existing owner: externalId null, enabled true, role
-already admin from migration 0025).
+`user_credentials` table (§7) + `sessions` table (§4: `id`, `userId`, `tokenHash` unique, `createdAt`,
+`lastSeenAt`, `expiresAt`, `revokedAt?`, `userAgent?`). No backfill needed (existing owner: externalId
+null, enabled true, role already admin from migration 0025; no sessions until first OIDC login).
 
 ## §14. Sequencing — each its own green `pnpm check` commit
+0. **Schema up front (ONE migration, do-it-right):** define `users.externalId`/`enabled` +
+   `user_credentials` + `sessions` (§13) in one `db:generate` so no follow-up migrations are needed;
+   later parts just consume the tables.
 1. **A+B** — `AUTH_MODE` seam (`single-user` + `forward-header` real, `oidc` stubbed to 401) +
-   `OWNER_GROUP`/`OWNER_HANDLES`→admin + `users.externalId`/`enabled` + `ensureUser({externalId,handle})`
-   + `userAdmin` tRPC. Additive; multi-account-through-authentik works.
+   `OWNER_GROUP`/`OWNER_HANDLES`→admin + `ensureUser({externalId,handle})` + `userAdmin` tRPC
+   (incl. `listSessions`/`revokeSession`/`revokeUserSessions`). Additive; multi-account-via-authentik works.
 2. **C** — crypto + `user_credentials` + `credentials` tRPC + the resolver + turn-path wiring.
    Behavior-changing core; guard with existing send/swipe/chat-start tests + new resolver tests.
-3. **D** — OIDC server routes + the real `oidc` bearer strategy. Frontend login flow deferred.
-4. **Docs** — new `docs/auth.md` (the full model + the verbatim caddy snippet + both neo block
-   shapes), CLAUDE.md (auth pluggable; resolver is the access chokepoint; fix the `X-Neo-Proxy` /
-   max-pro-sub lines), `docs/data-model.md` (externalId/enabled/user_credentials).
+3. **D** — OIDC server routes + the real `oidc` strategy backed by the `sessions` table (mint on
+   callback, validate-by-hash per request, sliding expiry, revoke on logout/disable). Frontend deferred.
+4. **Docs** — new `docs/auth.md` (full model + verbatim caddy snippet + both neo block shapes),
+   CLAUDE.md (already reconciled this pass), `docs/data-model.md` (externalId/enabled/user_credentials/
+   sessions — partly done this pass; finish when built).
 
 ## §15. Risk register
 - Turn-path resolver refactor on the hot path → owner resolution byte-identical; existing
@@ -293,5 +317,8 @@ already admin from migration 0025).
 - **Integration:** a `role:'user'` with a stored OpenRouter key generates via the openrouter runner
   using **its** key (assert the per-user key, not env) and is **refused** `max-pro-sub`; OIDC
   `/callback` with mocked discovery+JWKS+token mints a usable bearer that authenticates a tRPC call.
+- **Session revocation (the build-it-right guarantee):** a valid bearer authenticates; after
+  `revokedAt` is set (logout) OR the owning `users.enabled=false`, the **same bearer is rejected on the
+  very next request** (not after expiry); a second device's session is unaffected by revoking the first.
 - `pnpm check` green per commit. Manual: flip `AUTH_MODE`, set a key via tRPC, generate on the per-user
   key; confirm the owner path unchanged.

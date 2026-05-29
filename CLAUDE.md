@@ -16,16 +16,26 @@ RAG / analytics superpower** over my entire RP corpus — 300+ characters, hundr
 semantic search, theme analysis, co-occurrence. The corpus layer is the **killer
 differentiator** no other ST client has; the chat is the daily driver. Both matter.
 
-**Auth & tenancy.** Zero auth *logic* in the app, no sessions, no CSRF — stateless
-per-request identity. Authentik terminates auth; identity = `X-Authentik-Username`, believed
-**only when forwarded by caddy** (verified via an `X-Neo-Proxy` shared secret; caddy strips
-client copies). No trusted header (direct-LAN/IP access, which I use often) → falls back to
-`DEFAULT_USER_HANDLE` = the owner. **Multi-user is *designed* (a `users` table + `ownerId`
-scoping enforced in the `domain` layer + per-user versioned `user_settings`), but only
-single-user is *implemented* (one user row).** No permissions/roles/sharing/login UI —
-ownership, not access control. **Deployment invariant:** don't expose port 8788 to an
-untrusted network; if the app ever becomes directly reachable by untrusted clients, the
-header-trust model changes.
+**Auth & tenancy.** *No cookies, ever → no CSRF by construction* — identity is resolved
+per-request, from a forward-auth header or a **bearer token** the SPA sends in `Authorization`
+(never a `Set-Cookie`; a forged cross-site request carries no ambient credential to ride, so no
+CSRF machinery exists). The app only ever *consumes* identity — it is **never an IdP** (no
+passwords, no local login form). **Auth model = a pluggable `AUTH_MODE`:** `single-user`
+(DEFAULT, zero-infra → identity = `DEFAULT_USER_HANDLE`, the owner) · `forward-header`
+(caddy+authentik forward-auth; trust the forwarded `X-Authentik-*` identity by **verifying the
+`X-Authentik-Jwt` against authentik's JWKS**) · `oidc` (the app is an authentik OIDC client, so
+real per-account login works even on direct LAN). Identity keys on the **stable `sub` /
+`X-Authentik-Uid`** (`users.externalId`); handle = `preferred_username`. **Built today:** a
+`users` table (+ `role` admin/user), `ownerId` scoping enforced in the `domain` layer, typed
+per-user `user_settings`, admin-gated AppSettings. **Locked but NOT yet built** (full spec:
+`docs/auth-and-credentials-plan.md`): the three `AUTH_MODE`s, `users.externalId`/`enabled`,
+server-side bearer **sessions** (revocable), encrypted **per-user credentials** (bring-your-own
+OpenRouter key), and ONE turn-time **credential resolver** that gates everything — `max-pro-sub`
+(the owner's single host `claude login`) is admin/owner-only; non-owners bring their own
+OpenRouter key. **Correction (hard-won):** the old `X-Neo-Proxy` shared-secret trust is **NOT
+deployed** — the live Caddyfile never injects it, so today the app effectively runs
+single-user-owner regardless of authentik; `forward-header` mode replaces it with JWKS
+verification. **Deployment invariant:** don't expose port 8788 to an untrusted network.
 
 ## RP philosophy (the non-obvious vision — easy to lose)
 
@@ -201,12 +211,12 @@ is the main thing missing. Run `pnpm check` (must be green) and skim recent comm
   routing/preset/persona (`arg ?? userDefault ?? schemaDefault`, lenient on stale ids) then delegates
   the first turn to `send` (byte-identical; no duplication). `forkChat`/import still create rows
   eagerly (direct insert) — that's a commit. Tests scaffold via `seedChatRow` (`tests/support/db.ts`).
-- **`max-pro-sub` is the OWNER's single host credential** (the `claude login` Max sub). Guarded at
-  **`startChat` only** today: a non-owner defaulting into it is rejected (`DomainOperationError`).
-  **NOT yet guarded** at the other seams that can select it — `setProvider`, `forkChat`
-  (`targetSource`), and the turn-time `resolveTurnRouting` (pure/sync, no role access). Fine under
-  single-user; add the same `username !== DEFAULT_USER_HANDLE && source === "max-pro-sub"` check there
-  (or per-user credentials) before multi-user. (TODO at the seam.)
+- **`max-pro-sub` is the OWNER's single host credential** (the `claude login` Max sub). Today guarded
+  at **`startChat` only** (a non-owner defaulting into it → `DomainOperationError`); NOT guarded at
+  `setProvider`/`forkChat`/turn-time — fine under single-user. **The LOCKED fix (not yet built):** one
+  turn-time **credential resolver** (`docs/auth-and-credentials-plan.md` §8) becomes the single access
+  chokepoint across every seam — `max-pro-sub` admin/owner-only, `openrouter` resolves a per-user
+  (BYO, encrypted) key → host key. That replaces the scattered startChat guard.
 - **Three typed config tiers** (`docs/settings-audit.md`): `env.ts` (deploy/box/secret/identity —
   unchanged) · **AppSettings** (admin-editable runtime toggles over the `settings` KV;
   `shared/app-settings.ts` + `server/config/app-config.ts`; env is the default FLOOR, DB override wins;
@@ -215,7 +225,8 @@ is the main thing missing. Run `pnpm check` (must be green) and skim recent comm
   `defaultGeneration` is stored-not-consumed). Everything else (ST `config.yaml`'s network/TLS/auth)
   is delegated to caddy+authentik.
 - **`users.role` (`'admin'|'user'`) is the multi-user access seam** (migration 0025; default `'user'`).
-  `ensureUser` sets `admin` iff `handle === DEFAULT_USER_HANDLE` (the one access decision). `requireAdmin`
-  (`_shared/admin.ts`) → `DomainForbiddenError` → tRPC FORBIDDEN gates admin surfaces (AppSettings).
+  `ensureUser` sets `admin` iff `handle === DEFAULT_USER_HANDLE` today (the one access decision; the
+  plan generalizes this to `OWNER_GROUP`/`OWNER_HANDLES`). `requireAdmin` (`_shared/admin.ts`) →
+  `DomainForbiddenError` → tRPC FORBIDDEN gates admin surfaces (AppSettings).
 
 When unclear, ask. Don't re-litigate locked decisions — raise a question if you disagree.
