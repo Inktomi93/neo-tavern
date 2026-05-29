@@ -206,4 +206,71 @@ describe("Regex Domain Service", () => {
     );
     expect(result2).toBe("hello Inktomi1");
   });
+  it("handles named capture groups ($<name>)", () => {
+    const scripts = [
+      {
+        id: "1",
+        name: "Named",
+        findRegex: "/(?<who>\\w+) smiled/g",
+        replaceString: "[$<who>]",
+        placement: ["AI_OUTPUT"],
+        enabled: true,
+      } as unknown as RegexScript,
+    ];
+    const result = service.executeScripts("Alice smiled gently.", scripts, "AI_OUTPUT", mockCtx);
+    expect(result).toBe("[Alice] gently.");
+  });
+
+  it("parses custom flags from /pattern/flags (case-insensitive)", () => {
+    const scripts = [
+      {
+        id: "1",
+        name: "Flags",
+        findRegex: "/HELLO/i",
+        replaceString: "hi",
+        placement: ["AI_OUTPUT"],
+        enabled: true,
+      } as unknown as RegexScript,
+    ];
+    const result = service.executeScripts("hello world", scripts, "AI_OUTPUT", mockCtx);
+    expect(result).toBe("hi world");
+  });
+
+  it("skips an invalid regex rather than crashing the turn", () => {
+    const scripts = [
+      {
+        id: "1",
+        name: "Invalid",
+        findRegex: "[", // unterminated char class → new RegExp throws
+        replaceString: "X",
+        placement: ["AI_OUTPUT"],
+        enabled: true,
+      } as unknown as RegexScript,
+    ];
+    const result = service.executeScripts("abc[def", scripts, "AI_OUTPUT", mockCtx);
+    expect(result).toBe("abc[def"); // unchanged, no throw
+  });
+
+  it("applies multiple scripts in sequence (output of one feeds the next)", () => {
+    const scripts = [
+      {
+        id: "1",
+        name: "A->B",
+        findRegex: "A",
+        replaceString: "B",
+        placement: ["AI_OUTPUT"],
+        enabled: true,
+      },
+      {
+        id: "2",
+        name: "B->C",
+        findRegex: "B",
+        replaceString: "C",
+        placement: ["AI_OUTPUT"],
+        enabled: true,
+      },
+    ] as unknown as RegexScript[];
+    const result = service.executeScripts("A", scripts, "AI_OUTPUT", mockCtx);
+    expect(result).toBe("C"); // A -> B (script 1) -> C (script 2)
+  });
 });

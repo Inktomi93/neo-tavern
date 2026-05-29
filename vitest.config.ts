@@ -16,7 +16,10 @@ export default defineConfig({
           include: [
             "src/server/**/*.test.ts",
             "src/shared/**/*.test.ts",
-            "tests/integration/**/*.test.ts",
+            // All non-e2e tests under tests/ (integration + shared + server) — NOT just
+            // tests/integration, which silently dropped tests/shared + tests/server. e2e is
+            // excluded at the top level.
+            "tests/**/*.test.ts",
           ],
         },
       },
