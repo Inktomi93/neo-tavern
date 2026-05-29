@@ -136,9 +136,11 @@ card-curator's `card_images` collection. The libSQL store is vector-agnostic.
 
 **Vector-store capabilities (verified — supersedes any earlier "can't upsert/delete" claim):**
 `libsql_vector_idx` does full CRUD — `UPSERT`/`UPDATE`/targeted `DELETE WHERE` all work and the index
-auto-maintains. The only footgun: bulk `DELETE FROM` (emptying a vector table) poisons the shadow
-index → next insert fails; fix with `REINDEX <idx>`. So **incremental re-embed = targeted DELETE +
-re-INSERT** (just like card-curator's ChromaDB delete-and-readd). See `docs/conventions.md`.
+auto-maintains. The one footgun: a bare bulk `DELETE FROM` (emptying a vector table) poisons the shadow
+index → next insert fails — so a full wipe goes through **`clearVectorTable`** (`db/vector-ops.ts`,
+drop→delete→recreate), recover a poisoned DB with **`pnpm db:reindex`**, and a missing index self-heals
+at boot (`assertVectorIndexes`). So **incremental re-embed = targeted DELETE + re-INSERT** (just like
+card-curator's ChromaDB delete-and-readd). See `docs/conventions.md`.
 
 **Card embed text** = card-curator `EMBED_FIELDS` (`config.py:63`): name, tags, description,
 personality, scenario, first_mes (+ optional alternate_greetings); **excludes** mes_example /

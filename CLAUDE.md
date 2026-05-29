@@ -192,9 +192,13 @@ is the main thing missing. Run `pnpm check` (must be green) and skim recent comm
 - **Provider routing = `chats.api` × `chats.source` × `chats.model`** (NOT the old
   `mode`/`provider` — retired in migration 0011). `resolveTurnRouting` owns selection; see the
   4-mode table above. `messages.model`/`provider` record what ACTUALLY ran (provenance).
-- **Vectors are libSQL NATIVE `F32_BLOB` + `libsql_vector_idx`** — NO sqlite-vec. Full CRUD
-  works + the index auto-maintains; the ONE footgun is bulk `DELETE FROM` (empties → next
-  insert fails) → fix with `REINDEX`. (`docs/conventions.md`, `corpus-import.md`)
+- **Vectors are libSQL NATIVE `F32_BLOB` + `libsql_vector_idx`** — NO sqlite-vec. The ANN index is
+  now **schema-declared** (`index("<t>_ann").on(sql`libsql_vector_idx(embedding)`)`, `db/schema/search.ts`)
+  and emitted into the **single squashed `0000_baseline.sql`** — no per-migration hand-adding. Clear a
+  vector table only via **`clearVectorTable`** (`db/vector-ops.ts`); a bare bulk `DELETE FROM` poisons
+  the shadow index (recover: `pnpm db:reindex`; a missing index self-heals at boot via
+  `assertVectorIndexes`). Existing DBs get `pnpm db:baseline` once (reconciles `__drizzle_migrations`).
+  (`docs/conventions.md`, `corpus-import.md`)
 - **Embedding/rerank run IN-PROCESS on GPU** via onnxruntime-node CUDA; CUDA-12 is vendored in
   `tools/cuda/` (uv, `pnpm cuda:setup`); weights cache to `.models/`.
 - **The transformers.js JS tokenizer is QUADRATIC** — use native `@anush008/tokenizers`.

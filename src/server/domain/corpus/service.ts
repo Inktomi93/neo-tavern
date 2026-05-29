@@ -11,10 +11,12 @@ import { newId } from "../_shared/ids";
 // first-class chat_segments table, generated live per-block by domain/chat/memory.ts.)
 //
 // PLAIN insert + caller-side skip (`existingKeys`) for a RESUMABLE pass — skip the expensive embed for
-// already-indexed characters. The `libsql_vector_idx` supports UPSERT/targeted-DELETE fine (verified);
-// the only footgun is bulk `DELETE FROM` emptying a vector table (→ next insert fails "shadow row"; fix
-// with `REINDEX`). Re-embed a CHANGED card = targeted `DELETE WHERE character_id = ?` + re-insert; a full
-// wipe = a fresh DB. The unique(characterId, model) index makes an un-skipped duplicate error loudly.
+// already-indexed characters. The `libsql_vector_idx` supports UPSERT/targeted-DELETE fine (verified).
+// Re-embed a CHANGED card = targeted `DELETE WHERE character_id = ?` + re-insert. A FULL wipe goes
+// through `clearVectorTable` (db/vector-ops.ts) — drop→delete→recreate the ANN index — because a bare
+// bulk `DELETE FROM` trips SQLite's truncate optimization and poisons the DiskANN shadow table (next
+// insert fails "shadow row"; `reindexAnn` / the boot health check recover a poisoned one). The
+// unique(characterId, model) index makes an un-skipped duplicate error loudly.
 export interface EmbedItem {
   characterId: string;
   ownerId: string;

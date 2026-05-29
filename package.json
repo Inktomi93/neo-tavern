@@ -19,6 +19,8 @@
     "cpd:report": "jscpd --reporters html --output reports/cpd",
     "db:generate:force": "yes | drizzle-kit generate",
     "db:studio": "drizzle-kit studio",
+    "db:baseline": "tsx scripts/db-baseline.ts",
+    "db:reindex": "tsx scripts/db-reindex.ts",
     "typecheck": "tsc --noEmit",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",

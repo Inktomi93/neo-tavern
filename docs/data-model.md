@@ -134,7 +134,7 @@ The within-chat `{{memory}}` system (`docs/memory.md`) stores per-N-turn **struc
 chat's pin). Columns: `tier` (0 = per-block, 1+ = consolidation), `blockIdx`, `seqStart`/`seqEnd` (the
 canon span — verbatim click-through **and** the edit-staleness key), `text`, `topicAnchor`,
 `keywords` (JSON), `model`, `summarizerModel`, `embedding F32_BLOB(1024)` (always populated),
-`hubScore`, `tokens`; unique `(chatId, tier, blockIdx)`; hand-added `chat_digests_ann` ANN index. Two
+`hubScore`, `tokens`; unique `(chatId, tier, blockIdx)`; schema-declared `chat_digests_ann` ANN index. Two
 read paths over ONE substrate: within-chat memory injection (**exact in-process cosine, scoped by
 `chatId`** — ignores the ANN) and cross-chat **corpus search** (the ANN). Its verbatim counterpart is
 the **`chat_segments`** table (migration 0019) — same FKs + block boundary, raw block text, generated

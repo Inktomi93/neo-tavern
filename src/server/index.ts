@@ -1,5 +1,6 @@
 import { serve } from "@hono/node-server";
 import { createDb, optimizeDb, runMigrations } from "../db/client";
+import { assertVectorIndexes } from "../db/vector-ops";
 import { buildApp } from "./app";
 import { reloadAppConfig } from "./config/app-config";
 import { createSecretBox, credentialsKeyFromEnv } from "./crypto/secrets";
@@ -33,6 +34,16 @@ const IS_PROD = env.NODE_ENV === "production";
 // trpc only ever sees the services (the layer cake keeps db/auth out of trpc).
 const db = await createDb(env.DATABASE_URL);
 await runMigrations(db);
+// Self-healing guard: every libSQL ANN vector index must exist after migrations. A missing one
+// (botched migration / manual drop) would otherwise fail cryptically at the first corpus query —
+// catch it loudly here and recreate from the canonical DDL. Cheap: one sqlite_master read.
+const annCheck = await assertVectorIndexes(db);
+if (annCheck.missing.length > 0) {
+  getLog().error(
+    { missing: annCheck.missing, repaired: annCheck.repaired },
+    "db: ANN vector index(es) were missing after migrate — recreated",
+  );
+}
 // Hydrate the runtime config cache (env floor + any admin DB override) before serving — so the
 // hot paths (send/embedder) read resolved values, not just env defaults. See config/app-config.ts.
 await reloadAppConfig(db);

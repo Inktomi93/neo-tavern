@@ -1,1 +1,0 @@
-ALTER TABLE `embeddings` ADD `hub_score` real;
