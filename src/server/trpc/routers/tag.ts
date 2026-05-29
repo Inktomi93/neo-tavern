@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { publicProcedure, t } from "../trpc";
+import { authedProcedure, t } from "../trpc";
 
 // Shared input for tag attachment mutations — attach and detach take the same three fields.
 const tagTargetInput = z.object({
@@ -9,13 +9,13 @@ const tagTargetInput = z.object({
 });
 
 export const tagRouter = t.router({
-  list: publicProcedure.query(({ ctx }) => ctx.services.tag.listTags({ username: ctx.username })),
+  list: authedProcedure.query(({ ctx }) => ctx.services.tag.listTags({ username: ctx.username })),
 
-  get: publicProcedure
+  get: authedProcedure
     .input(z.object({ tagId: z.string().min(1) }))
     .query(({ ctx, input }) => ctx.services.tag.getTag({ username: ctx.username }, input.tagId)),
 
-  create: publicProcedure
+  create: authedProcedure
     .input(
       z.object({
         name: z.string().min(1).max(200),
@@ -25,7 +25,7 @@ export const tagRouter = t.router({
     )
     .mutation(({ ctx, input }) => ctx.services.tag.createTag({ username: ctx.username }, input)),
 
-  update: publicProcedure
+  update: authedProcedure
     .input(
       z.object({
         tagId: z.string().min(1),
@@ -39,13 +39,13 @@ export const tagRouter = t.router({
       return ctx.services.tag.updateTag({ username: ctx.username }, tagId, edits);
     }),
 
-  remove: publicProcedure
+  remove: authedProcedure
     .input(z.object({ tagId: z.string().min(1) }))
     .mutation(({ ctx, input }) =>
       ctx.services.tag.removeTag({ username: ctx.username }, input.tagId),
     ),
 
-  attach: publicProcedure.input(tagTargetInput).mutation(async ({ ctx, input }) => {
+  attach: authedProcedure.input(tagTargetInput).mutation(async ({ ctx, input }) => {
     await ctx.services.tag.attachTag(
       { username: ctx.username },
       input.tagId,
@@ -55,7 +55,7 @@ export const tagRouter = t.router({
     return { success: true };
   }),
 
-  detach: publicProcedure.input(tagTargetInput).mutation(async ({ ctx, input }) => {
+  detach: authedProcedure.input(tagTargetInput).mutation(async ({ ctx, input }) => {
     await ctx.services.tag.detachTag(
       { username: ctx.username },
       input.tagId,

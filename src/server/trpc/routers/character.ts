@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { CreateCharacterInput, UpdateCharacterInput } from "../../domain/character";
-import { publicProcedure, t } from "../trpc";
+import { authedProcedure, t } from "../trpc";
 
 const createSchema = z.object({
   handle: z.string().min(1).max(200),
@@ -24,21 +24,21 @@ const updateSchema = createSchema.partial().extend({
 });
 
 export const characterRouter = t.router({
-  list: publicProcedure.query(({ ctx }) => ctx.services.character.list({ username: ctx.username })),
+  list: authedProcedure.query(({ ctx }) => ctx.services.character.list({ username: ctx.username })),
 
-  get: publicProcedure
+  get: authedProcedure
     .input(z.object({ characterId: z.string().min(1) }))
     .query(({ ctx, input }) =>
       ctx.services.character.get({ username: ctx.username }, input.characterId),
     ),
 
-  create: publicProcedure
+  create: authedProcedure
     .input(createSchema)
     .mutation(({ ctx, input }) =>
       ctx.services.character.create({ username: ctx.username }, input as CreateCharacterInput),
     ),
 
-  update: publicProcedure.input(updateSchema).mutation(({ ctx, input }) => {
+  update: authedProcedure.input(updateSchema).mutation(({ ctx, input }) => {
     const { characterId, ...edits } = input;
     return ctx.services.character.update(
       { username: ctx.username },
@@ -47,7 +47,7 @@ export const characterRouter = t.router({
     );
   }),
 
-  remove: publicProcedure
+  remove: authedProcedure
     .input(z.object({ characterId: z.string().min(1) }))
     .mutation(({ ctx, input }) =>
       ctx.services.character.remove({ username: ctx.username }, input.characterId),

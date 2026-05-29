@@ -1,18 +1,18 @@
 import { z } from "zod";
-import { publicProcedure, t } from "../trpc";
+import { authedProcedure, t } from "../trpc";
 
 export const worldInfoRouter = t.router({
-  listBooks: publicProcedure.query(({ ctx }) =>
+  listBooks: authedProcedure.query(({ ctx }) =>
     ctx.services.worldInfo.listBooks({ username: ctx.username }),
   ),
 
-  getBook: publicProcedure
+  getBook: authedProcedure
     .input(z.object({ bookId: z.string().min(1) }))
     .query(({ ctx, input }) =>
       ctx.services.worldInfo.getBook({ username: ctx.username }, input.bookId),
     ),
 
-  createBook: publicProcedure
+  createBook: authedProcedure
     .input(
       z.object({
         name: z.string().min(1).max(200),
@@ -23,7 +23,7 @@ export const worldInfoRouter = t.router({
       ctx.services.worldInfo.createBook({ username: ctx.username }, input),
     ),
 
-  updateBook: publicProcedure
+  updateBook: authedProcedure
     .input(
       z.object({
         bookId: z.string().min(1),
@@ -36,25 +36,25 @@ export const worldInfoRouter = t.router({
       return ctx.services.worldInfo.updateBook({ username: ctx.username }, bookId, edits);
     }),
 
-  removeBook: publicProcedure
+  removeBook: authedProcedure
     .input(z.object({ bookId: z.string().min(1) }))
     .mutation(({ ctx, input }) =>
       ctx.services.worldInfo.removeBook({ username: ctx.username }, input.bookId),
     ),
 
-  listEntries: publicProcedure
+  listEntries: authedProcedure
     .input(z.object({ bookId: z.string().min(1) }))
     .query(({ ctx, input }) =>
       ctx.services.worldInfo.listEntries({ username: ctx.username }, input.bookId),
     ),
 
-  getEntry: publicProcedure
+  getEntry: authedProcedure
     .input(z.object({ entryId: z.string().min(1) }))
     .query(({ ctx, input }) =>
       ctx.services.worldInfo.getEntry({ username: ctx.username }, input.entryId),
     ),
 
-  createEntry: publicProcedure
+  createEntry: authedProcedure
     .input(
       z.object({
         bookId: z.string().min(1),
@@ -71,7 +71,7 @@ export const worldInfoRouter = t.router({
       return ctx.services.worldInfo.createEntry({ username: ctx.username }, bookId, entryInput);
     }),
 
-  updateEntry: publicProcedure
+  updateEntry: authedProcedure
     .input(
       z.object({
         entryId: z.string().min(1),
@@ -88,7 +88,7 @@ export const worldInfoRouter = t.router({
       return ctx.services.worldInfo.updateEntry({ username: ctx.username }, entryId, edits);
     }),
 
-  removeEntry: publicProcedure
+  removeEntry: authedProcedure
     .input(z.object({ entryId: z.string().min(1) }))
     .mutation(({ ctx, input }) =>
       ctx.services.worldInfo.removeEntry({ username: ctx.username }, input.entryId),

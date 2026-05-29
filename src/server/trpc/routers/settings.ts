@@ -1,14 +1,14 @@
 import { z } from "zod";
 import { appSettingsSchema } from "../../../shared/app-settings";
 import { userSettingsSchema } from "../../../shared/user-settings";
-import { publicProcedure, t } from "../trpc";
+import { adminProcedure, authedProcedure, t } from "../trpc";
 
 export const settingsRouter = t.router({
-  getUserSettings: publicProcedure.query(({ ctx }) =>
+  getUserSettings: authedProcedure.query(({ ctx }) =>
     ctx.services.settings.getUserSettings({ username: ctx.username }),
   ),
 
-  updateUserSettings: publicProcedure
+  updateUserSettings: authedProcedure
     .input(
       z.object({
         config: userSettingsSchema,
@@ -19,21 +19,21 @@ export const settingsRouter = t.router({
       ctx.services.settings.updateUserSettings({ username: ctx.username }, input),
     ),
 
-  getGlobalSetting: publicProcedure
+  getGlobalSetting: authedProcedure
     .input(z.object({ key: z.string().min(1) }))
     .query(({ ctx, input }) => ctx.services.settings.getGlobalSetting(input.key)),
 
-  setGlobalSetting: publicProcedure
+  setGlobalSetting: authedProcedure
     .input(z.object({ key: z.string().min(1), value: z.any() }))
     .mutation(({ ctx, input }) => ctx.services.settings.setGlobalSetting(input.key, input.value)),
 
-  // Admin-only runtime config (the env-default-floor + DB-override knobs). The service enforces
-  // requireAdmin; a non-owner gets FORBIDDEN.
-  getAppSettings: publicProcedure.query(({ ctx }) =>
+  // Admin-only runtime config (the env-default-floor + DB-override knobs). Gated by adminProcedure
+  // AND the service's own requireAdmin (defense in depth).
+  getAppSettings: adminProcedure.query(({ ctx }) =>
     ctx.services.settings.getAppSettings({ username: ctx.username }),
   ),
 
-  updateAppSettings: publicProcedure
+  updateAppSettings: adminProcedure
     .input(appSettingsSchema)
     .mutation(({ ctx, input }) =>
       ctx.services.settings.updateAppSettings({ username: ctx.username }, input),

@@ -62,10 +62,14 @@ function determineRole(handle: string, groups: string[]): "admin" | "user" {
  * The SEAM-ONLY identity upsert for SSO modes (docs/auth-and-credentials-plan.md §6). Called once at
  * the auth seam / OIDC callback — NOT a broadening of ensureUser (whose ~30 downstream callers only
  * have a handle and must keep working). Keys on the STABLE `externalId` when present (so a username
- * rename updates `handle` on the SAME row, never duplicates); else by handle. Sets `role` from the
- * current group/handle membership and links a newly-seen externalId. NEVER resets `enabled` on an
- * existing row — that would let a disabled user re-enable themselves by logging in; only a fresh
- * insert is enabled. Returns the row's id + enabled + role so the seam can gate (disabled → reject).
+ * rename updates `handle` on the SAME row, never duplicates); else by handle.
+ *
+ * `role` is SEEDED from OWNER_GROUP/OWNER_HANDLES membership on INSERT, then admin-managed via
+ * userAdmin.setRole — provisioning does NOT re-derive it on update, so a manual grant isn't clobbered
+ * on the user's next login (and there's no per-request role churn). The owner is always admin (in
+ * OWNER_HANDLES by default). Likewise `enabled` is NEVER reset on update — that would let a disabled
+ * user re-enable themselves by logging in; only a fresh insert is enabled. Returns the row's id +
+ * enabled + (stored) role so the seam can gate (disabled → reject) and populate ctx.auth.role.
  */
 export async function provisionIdentity(
   db: Db,
@@ -79,37 +83,46 @@ export async function provisionIdentity(
     role: users.role,
     enabled: users.enabled,
   };
+  // The exact shape `cols` selects — so `existing` is typed precisely (no $inferSelect cast that would
+  // falsely claim the unselected displayName/createdAt columns exist on these rows).
+  type ExistingRow = {
+    id: string;
+    handle: string;
+    externalId: string | null;
+    role: "admin" | "user";
+    enabled: boolean;
+  };
 
   // Match by the stable externalId first; fall back to handle (single-user rows / first SSO login of a
   // pre-existing handle).
-  let existing: typeof users.$inferSelect | undefined;
+  let existing: ExistingRow | undefined;
   if (identity.externalId) {
     existing = (
       await db.select(cols).from(users).where(eq(users.externalId, identity.externalId)).limit(1)
-    )[0] as typeof users.$inferSelect | undefined;
+    ).at(0);
   }
   if (!existing) {
     existing = (
       await db.select(cols).from(users).where(eq(users.handle, identity.handle)).limit(1)
-    )[0] as typeof users.$inferSelect | undefined;
+    ).at(0);
   }
 
   if (existing) {
-    // Refresh only what changed; preserve `enabled` (the admin disable lever).
+    // Refresh handle (rename) + link a newly-seen externalId; preserve `role` (admin-managed) and
+    // `enabled` (the admin disable lever).
     const patch: Partial<typeof users.$inferInsert> = {};
     if (identity.externalId && existing.externalId !== identity.externalId) {
       patch.externalId = identity.externalId;
     }
     if (existing.handle !== identity.handle) patch.handle = identity.handle;
-    if (existing.role !== role) patch.role = role;
     if (Object.keys(patch).length > 0) {
       await db.update(users).set(patch).where(eq(users.id, existing.id));
       getLog().info(
-        { handle: identity.handle, externalId: identity.externalId, role },
+        { handle: identity.handle, externalId: identity.externalId },
         "user: provisioned SSO identity (updated)",
       );
     }
-    return { id: existing.id, enabled: existing.enabled, role };
+    return { id: existing.id, enabled: existing.enabled, role: existing.role };
   }
 
   const id = newId();

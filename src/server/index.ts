@@ -2,6 +2,7 @@ import { serve } from "@hono/node-server";
 import { createDb, optimizeDb, runMigrations } from "../db/client";
 import { buildApp } from "./app";
 import { reloadAppConfig } from "./config/app-config";
+import { createAdminService } from "./domain/admin";
 import { createCharacterService } from "./domain/character";
 import { createChatService } from "./domain/chat";
 import { createCorpusService } from "./domain/corpus";
@@ -34,6 +35,7 @@ await runMigrations(db);
 await reloadAppConfig(db);
 const cas = createCas(env.ASSETS_DIR);
 const services: Services = {
+  admin: createAdminService(db),
   character: createCharacterService(db),
   chat: createChatService(db),
   corpus: createCorpusService(db),

@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { buildApp } from "../../src/server/app";
+import { createAdminService } from "../../src/server/domain/admin";
 import { createCharacterService } from "../../src/server/domain/character";
 import { createChatService } from "../../src/server/domain/chat";
 import { createCorpusService } from "../../src/server/domain/corpus";
@@ -28,6 +29,7 @@ async function setupApp() {
   const db = await freshDb();
   const cas = createCas(casRoot);
   const services = {
+    admin: createAdminService(db),
     character: createCharacterService(db),
     chat: createChatService(db),
     corpus: createCorpusService(db),

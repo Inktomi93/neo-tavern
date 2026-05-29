@@ -12,16 +12,9 @@
 // root, keeping this module db-free + unit-testable. `provisionIdentity` (the upsert) lives in
 // domain/_shared/users.ts; the cookie validator comes from the sessions domain service.
 import { createLocalJWKSet, createRemoteJWKSet, type JWTPayload, jwtVerify } from "jose";
+import type { ResolvedIdentity } from "../../shared/identity";
 import { env } from "../env";
 import { getLog } from "../observability/logger";
-
-/** The resolved caller identity. `externalId` is the stable authentik sub/uid (null for the
- *  single-user / owner-fallback path, which keys on `handle`). `groups` drives admin determination. */
-export interface ResolvedIdentity {
-  externalId: string | null;
-  handle: string;
-  groups: string[];
-}
 
 /** The bits of config the resolver needs, passed explicitly so unit tests can vary mode/fallback
  *  without re-parsing env. `authConfigFromEnv()` builds the live one. */
@@ -40,12 +33,17 @@ export interface ResolveDeps {
   validateSessionCookie?: (token: string) => Promise<ResolvedIdentity | null>;
 }
 
-/** What the resolver returns: the identity (or null when denied) plus whether it came from the
- *  session cookie — the per-request signal the CSRF middleware gates on (a cookie request has a
- *  cross-site surface; a header/fallback request does not). */
+/** What the resolver returns: the identity (or null when denied) + how it was resolved.
+ *  - `viaCookie` is the per-request CSRF signal (a cookie request has a cross-site surface; a
+ *    header/fallback request does not).
+ *  - `viaFallback` marks the un-credentialed owner-fallback path — the SAFE discriminator for "this
+ *    IS the owner" (a forward-header identity may also have externalId === null when no uid header was
+ *    forwarded, so externalId-null alone must NOT be read as "owner"). The seam role-resolves the
+ *    non-fallback (SSO) identities; the fallback is the owner/admin without a DB touch. */
 export interface IdentityResolution {
   identity: ResolvedIdentity | null;
   viaCookie: boolean;
+  viaFallback: boolean;
 }
 
 const SESSION_COOKIE = "neo_session";
@@ -170,22 +168,23 @@ export async function resolveIdentity(
     const token = readCookie(headers, SESSION_COOKIE);
     if (token) {
       const identity = await deps.validateSessionCookie(token);
-      if (identity) return { identity, viaCookie: true };
+      if (identity) return { identity, viaCookie: true, viaFallback: false };
     }
   }
   // 2. Forward-auth header (forward-header).
   if (config.mode === "forward-header") {
     const identity = await resolveForwardHeader(headers, config.verifyForwardJwt);
-    if (identity) return { identity, viaCookie: false };
+    if (identity) return { identity, viaCookie: false, viaFallback: false };
   }
   // 3. Fallback.
   if (config.fallback === "owner") {
     return {
       identity: { externalId: null, handle: config.defaultHandle, groups: [] },
       viaCookie: false,
+      viaFallback: true,
     };
   }
-  return { identity: null, viaCookie: false };
+  return { identity: null, viaCookie: false, viaFallback: false };
 }
 
 /**

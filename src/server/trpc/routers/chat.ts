@@ -2,7 +2,7 @@ import { on } from "node:events";
 import { z } from "zod";
 import { chatApiSchema, chatSourceSchema } from "../../../shared/chat-routing";
 import { chatStreamEmitter } from "../../domain/chat";
-import { publicProcedure, t } from "../trpc";
+import { authedProcedure, t } from "../trpc";
 
 // Thin driver: validate input, call the domain service via ctx, translate domain errors to
 // transport errors. No db/provider access here.
@@ -11,7 +11,7 @@ export const chatRouter = t.router({
   // Lazy creation: the client holds the new-chat draft (seeded from user settings) and calls this only
   // at the first canon action — the user's first message OR a generated opening (exactly one). The
   // chatId may be client-supplied so the client can subscribe to streamMessages before the turn runs.
-  start: publicProcedure
+  start: authedProcedure
     .input(
       z
         .object({
@@ -36,16 +36,16 @@ export const chatRouter = t.router({
     ),
 
   // The caller's chats, newest-updated first (owner-scoped) — the chat-list rail.
-  list: publicProcedure.query(({ ctx }) => ctx.services.chat.listChats({ username: ctx.username })),
+  list: authedProcedure.query(({ ctx }) => ctx.services.chat.listChats({ username: ctx.username })),
 
   // One owned chat's metadata (summary + pins/links). NOT_FOUND if unowned.
-  get: publicProcedure
+  get: authedProcedure
     .input(z.object({ chatId: z.string().min(1) }))
     .query(({ ctx, input }) =>
       ctx.services.chat.getChat({ username: ctx.username, chatId: input.chatId }),
     ),
 
-  messages: publicProcedure
+  messages: authedProcedure
     .input(z.object({ chatId: z.string().min(1) }))
     .query(({ ctx, input }) =>
       ctx.services.chat.listMessages({ username: ctx.username, chatId: input.chatId }),
@@ -53,13 +53,13 @@ export const chatRouter = t.router({
 
   // Dry-run: the system prompt + routing the NEXT turn would use, WITHOUT generating. The
   // "what will this send / why did this world-info fire" inspector. NOT_FOUND if unowned.
-  previewAssembly: publicProcedure
+  previewAssembly: authedProcedure
     .input(z.object({ chatId: z.string().min(1) }))
     .query(({ ctx, input }) =>
       ctx.services.chat.previewAssembly({ username: ctx.username, chatId: input.chatId }),
     ),
 
-  send: publicProcedure
+  send: authedProcedure
     .input(
       z.object({
         chatId: z.string().min(1),
@@ -70,7 +70,7 @@ export const chatRouter = t.router({
     .mutation(({ ctx, input }) => ctx.services.chat.send({ username: ctx.username, ...input })),
 
   // Subscribe to real-time token deltas for a specific chat.
-  streamMessages: publicProcedure
+  streamMessages: authedProcedure
     .input(z.object({ chatId: z.string().min(1) }))
     .subscription(async function* ({ input, signal }) {
       try {
@@ -86,7 +86,7 @@ export const chatRouter = t.router({
 
   // Switch a chat's api/source/model in place (the generalized escape valve). NOT_FOUND if unowned,
   // BAD_REQUEST on an incoherent/unimplemented combo.
-  setProvider: publicProcedure
+  setProvider: authedProcedure
     .input(
       z.object({
         chatId: z.string().min(1),
@@ -100,7 +100,7 @@ export const chatRouter = t.router({
     ),
 
   // Branch a chat at a seq into a new chat (optionally switching api/source at the branch point).
-  fork: publicProcedure
+  fork: authedProcedure
     .input(
       z.object({
         chatId: z.string().min(1),
@@ -112,12 +112,12 @@ export const chatRouter = t.router({
     .mutation(({ ctx, input }) => ctx.services.chat.forkChat({ username: ctx.username, ...input })),
 
   // Swipe: regenerate the last assistant turn as a new variant (same result shape as send).
-  swipe: publicProcedure
+  swipe: authedProcedure
     .input(z.object({ chatId: z.string().min(1), expectedSeq: z.number().int().nonnegative() }))
     .mutation(({ ctx, input }) => ctx.services.chat.swipe({ username: ctx.username, ...input })),
 
   // Make an existing variant active (swipe ← →).
-  selectVariant: publicProcedure
+  selectVariant: authedProcedure
     .input(
       z.object({
         chatId: z.string().min(1),
@@ -130,7 +130,7 @@ export const chatRouter = t.router({
     ),
 
   // Edit a message in place.
-  editMessage: publicProcedure
+  editMessage: authedProcedure
     .input(
       z.object({
         chatId: z.string().min(1),
@@ -144,25 +144,25 @@ export const chatRouter = t.router({
 
   // Manually compact an agent-sdk chat's session (steered /compact). { compacted: false } if the
   // chat can't be compacted (openrouter, or no session yet).
-  compact: publicProcedure
+  compact: authedProcedure
     .input(z.object({ chatId: z.string().min(1), instructions: z.string().min(1).optional() }))
     .mutation(({ ctx, input }) => ctx.services.chat.compact({ username: ctx.username, ...input })),
 
-  delete: publicProcedure
+  delete: authedProcedure
     .input(z.object({ chatId: z.string().min(1) }))
     .mutation(({ ctx, input }) => ctx.services.chat.delete({ username: ctx.username, ...input })),
 
-  updateTitle: publicProcedure
+  updateTitle: authedProcedure
     .input(z.object({ chatId: z.string().min(1), title: z.string().min(1).max(200) }))
     .mutation(({ ctx, input }) =>
       ctx.services.chat.updateTitle({ username: ctx.username, ...input }),
     ),
 
-  star: publicProcedure
+  star: authedProcedure
     .input(z.object({ chatId: z.string().min(1), starred: z.boolean() }))
     .mutation(({ ctx, input }) => ctx.services.chat.star({ username: ctx.username, ...input })),
 
-  archive: publicProcedure
+  archive: authedProcedure
     .input(z.object({ chatId: z.string().min(1), archived: z.boolean() }))
     .mutation(({ ctx, input }) => ctx.services.chat.archive({ username: ctx.username, ...input })),
 });

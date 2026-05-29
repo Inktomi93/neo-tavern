@@ -1,5 +1,6 @@
 import { test as baseTest } from "vitest";
 import type { Db } from "../../src/db/client";
+import { createAdminService } from "../../src/server/domain/admin";
 import { createCharacterService } from "../../src/server/domain/character";
 import { createChatService } from "../../src/server/domain/chat";
 import { createCorpusService } from "../../src/server/domain/corpus";
@@ -10,11 +11,12 @@ import { createSearchService } from "../../src/server/domain/search";
 import { createSettingsService } from "../../src/server/domain/settings";
 import { createTagService } from "../../src/server/domain/tag";
 import { createWorldInfoService } from "../../src/server/domain/world-info";
-import { createContext } from "../../src/server/trpc/context";
+import { type AuthContext, createContext } from "../../src/server/trpc/context";
 import { appRouter } from "../../src/server/trpc/router";
 import { freshDb } from "./db";
 
 export interface AppServices {
+  admin: ReturnType<typeof createAdminService>;
   character: ReturnType<typeof createCharacterService>;
   chat: ReturnType<typeof createChatService>;
   corpus: ReturnType<typeof createCorpusService>;
@@ -42,6 +44,7 @@ export const test = baseTest.extend<IntegrationFixtures>({
   },
   services: async ({ db }, use) => {
     const services: AppServices = {
+      admin: createAdminService(db),
       character: createCharacterService(db),
       chat: createChatService(db),
       corpus: createCorpusService(db),
@@ -56,13 +59,36 @@ export const test = baseTest.extend<IntegrationFixtures>({
     await use(services);
   },
   ownerCaller: async ({ services }, use) => {
-    const ctx = createContext({ username: "owner", services });
-    const ownerCaller = appRouter.createCaller(ctx);
-    await use(ownerCaller);
+    await use(callerFor(services, authFor("owner", { role: "admin" })));
   },
   otherCaller: async ({ services }, use) => {
-    const ctx = createContext({ username: "other", services });
-    const ownerCaller = appRouter.createCaller(ctx);
-    await use(ownerCaller);
+    await use(callerFor(services, authFor("other", { role: "user" })));
   },
 });
+
+// Build an explicit AuthContext for a tRPC caller — tests state the auth they act under (no hidden
+// synthesis), so the procedure ladder (authed/admin/CSRF) is exercised honestly. Defaults model the
+// header/fallback path (identity present, no cookie → CSRF gate inert); override per test for the
+// un-authed (identity:null), admin, or cookie-mutation (viaCookie + hasCsrfHeader) cases.
+export function authFor(handle: string, over: Partial<AuthContext> = {}): AuthContext {
+  return {
+    identity: { externalId: null, handle, groups: [] },
+    viaCookie: false,
+    hasCsrfHeader: true,
+    role: "user",
+    ...over,
+  };
+}
+
+// A caller that acts with no resolved identity (AUTH_FALLBACK=deny, no credential) — authedProcedure
+// must 401 it.
+export const ANONYMOUS_AUTH: AuthContext = {
+  identity: null,
+  viaCookie: false,
+  hasCsrfHeader: false,
+  role: "user",
+};
+
+export function callerFor(services: AppServices, auth: AuthContext) {
+  return appRouter.createCaller(createContext({ services, auth }));
+}

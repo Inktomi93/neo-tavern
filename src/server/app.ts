@@ -8,9 +8,14 @@ import type { Db } from "../db/client";
 import { isAssetHash } from "../shared/assets";
 import { processMacros } from "../shared/macro";
 import type { RegexPlacement, RegexScript } from "../shared/regex";
-import { resolveUsername } from "./auth/trust-header";
+import {
+  authConfigFromEnv,
+  hasCsrfHeader,
+  resolveIdentity,
+  resolveUsername,
+} from "./auth/trust-header";
 import { createRegexService } from "./domain/_shared/regex";
-import { ensureUser } from "./domain/_shared/users";
+import { ensureUser, provisionIdentity } from "./domain/_shared/users";
 import { createAssetsService } from "./domain/assets";
 import { createDebugService } from "./domain/debug";
 import { createExportService } from "./domain/export";
@@ -20,7 +25,7 @@ import { debugAuthMiddleware, registerDebugRoutes } from "./observability/debug"
 import { getLog } from "./observability/logger";
 import { observability } from "./observability/middleware";
 import type { Cas } from "./storage/cas";
-import { createContext, type Services } from "./trpc/context";
+import { type AuthContext, createContext, type Services } from "./trpc/context";
 import { appRouter } from "./trpc/router";
 import { APP_VERSION } from "./version";
 
@@ -183,16 +188,41 @@ export function buildApp(db: Db, cas: Cas, services: Services, isProd: boolean) 
     });
   });
 
+  // The tRPC auth seam — the one place allowed to wire resolveIdentity (auth) + provisionIdentity
+  // (domain/db) together. Produces the AuthContext the procedure ladder gates on:
+  //   • no identity (AUTH_FALLBACK=deny, no credential) → null → authedProcedure 401s.
+  //   • owner fallback → the admin owner, NO db touch + NO enabled gate (the raw-LAN-IP/zero-infra
+  //     path is the owner by definition, not a revocable user — plan §2).
+  //   • SSO identity (cookie/forward-header) → provisionIdentity resolves role + the enabled gate
+  //     (disabled → dropped to unauthenticated).
+  // (validateSessionCookie is injected here in commit 4 once the sessions service exists; until then
+  // the cookie layer is inert and oidc falls through to the fallback.)
+  async function buildAuthContext(headers: Headers): Promise<AuthContext> {
+    const { identity, viaCookie, viaFallback } = await resolveIdentity(
+      headers,
+      authConfigFromEnv(),
+    );
+    const hasCsrf = hasCsrfHeader(headers);
+    if (identity === null) {
+      return { identity: null, viaCookie, hasCsrfHeader: hasCsrf, role: "user" };
+    }
+    if (viaFallback) {
+      return { identity, viaCookie, hasCsrfHeader: hasCsrf, role: "admin" };
+    }
+    const { enabled, role } = await provisionIdentity(db, identity);
+    if (!enabled) {
+      return { identity: null, viaCookie, hasCsrfHeader: hasCsrf, role: "user" };
+    }
+    return { identity, viaCookie, hasCsrfHeader: hasCsrf, role };
+  }
+
   app.all("/api/trpc/*", (c) =>
     fetchRequestHandler({
       endpoint: "/api/trpc",
       req: c.req.raw,
       router: appRouter,
       createContext: async ({ req }) =>
-        createContext({
-          username: await resolveUsername(req.headers),
-          services,
-        }),
+        createContext({ services, auth: await buildAuthContext(req.headers) }),
       onError: ({ error, path, type }) => {
         getLog().error(
           { path, type, code: error.code, err: error.message },
