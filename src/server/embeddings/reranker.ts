@@ -6,6 +6,7 @@ import {
   type PreTrainedModel,
   type PreTrainedTokenizer,
 } from "@huggingface/transformers";
+import { getAppConfig } from "../config/app-config";
 import { env } from "../env";
 import { getLog } from "../observability/logger";
 import { WarmModel } from "./warm-model";
@@ -76,7 +77,7 @@ function sessionOptions(): Record<string, unknown> {
 // (frees VRAM) and the next call cold-reloads both.
 const warm = new WarmModel<Loaded>({
   name: `${RERANKER_MODEL}@${env.RERANK_DEVICE}:${env.RERANK_GPU_ID}`,
-  idleMs: env.IDLE_UNLOAD_MIN * 60_000,
+  idleMs: getAppConfig().idleUnloadMin * 60_000,
   load: async () => {
     const [model, tokenizer] = await Promise.all([
       AutoModelForSequenceClassification.from_pretrained(RERANKER_ID, {

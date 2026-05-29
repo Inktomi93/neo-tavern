@@ -10,6 +10,7 @@ import {
   type Processor,
   RawImage,
 } from "@huggingface/transformers";
+import { getAppConfig } from "../config/app-config";
 import { env } from "../env";
 import { getLog } from "../observability/logger";
 import { sessionOptions } from "./session-options";
@@ -34,7 +35,7 @@ interface ImageModelBundle {
 
 const warmModel = new WarmModel<ImageModelBundle>({
   name: `${IMAGE_EMBEDDING_MODEL}@${env.EMBED_DEVICE}:${env.EMBED_GPU_ID}`,
-  idleMs: env.IDLE_UNLOAD_MIN * 60_000,
+  idleMs: getAppConfig().idleUnloadMin * 60_000,
   load: async () => {
     const model = await AutoModel.from_pretrained(IMAGE_EMBEDDING_MODEL, {
       device: env.EMBED_DEVICE as "cpu" | "cuda",

@@ -1,6 +1,7 @@
 import { serve } from "@hono/node-server";
 import { createDb, optimizeDb, runMigrations } from "../db/client";
 import { buildApp } from "./app";
+import { reloadAppConfig } from "./config/app-config";
 import { createCharacterService } from "./domain/character";
 import { createChatService } from "./domain/chat";
 import { createCorpusService } from "./domain/corpus";
@@ -28,6 +29,9 @@ const IS_PROD = env.NODE_ENV === "production";
 // trpc only ever sees the services (the layer cake keeps db/auth out of trpc).
 const db = await createDb(env.DATABASE_URL);
 await runMigrations(db);
+// Hydrate the runtime config cache (env floor + any admin DB override) before serving — so the
+// hot paths (send/embedder) read resolved values, not just env defaults. See config/app-config.ts.
+await reloadAppConfig(db);
 const cas = createCas(env.ASSETS_DIR);
 const services: Services = {
   character: createCharacterService(db),

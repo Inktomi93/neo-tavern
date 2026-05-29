@@ -4,7 +4,7 @@ import type { ChatDeltaEvent } from "../../../shared/chat-types";
 import { createMacroContext } from "../../../shared/macro";
 import { assemblePrompt } from "../../../shared/prompt-assemble";
 import type { RegexPlacement } from "../../../shared/regex";
-import { env } from "../../env";
+import { getAppConfig } from "../../config/app-config";
 import { getLog } from "../../observability/logger";
 import { type ChatTurnResult, TurnError } from "../../providers/turn";
 import { newId } from "../_shared/ids";
@@ -300,7 +300,7 @@ export function createSend(ctx: ChatContext, ops: { runCompaction: RunCompaction
       // Cross-chat corpus indexing: embed this chat's completed raw-message blocks into chat_segments
       // (the verbatim half of hybrid search) in the background, for EVERY chat — independent of the
       // memory toggle. Embed-only, lock-free, fire-and-forget. CORPUS_AUTOINDEX=false pauses it.
-      if (env.CORPUS_AUTOINDEX === "true") {
+      if (getAppConfig().corpusAutoindex) {
         void generateSegments(
           db,
           { embedder },

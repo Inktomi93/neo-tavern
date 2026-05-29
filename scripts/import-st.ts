@@ -1,5 +1,6 @@
 import process from "node:process";
 import { createDb, runMigrations } from "../src/db/client";
+import { getAppConfig, reloadAppConfig } from "../src/server/config/app-config";
 import { createAssetsService } from "../src/server/domain/assets";
 import { collectBundlesFromDir, createImportService } from "../src/server/domain/import";
 import { env } from "../src/server/env";
@@ -17,13 +18,14 @@ async function main(): Promise<void> {
 
   const db = await createDb(env.DATABASE_URL);
   await runMigrations(db);
+  // Load the effective runtime config (env floor + any admin DB override) so the skip-list honors an
+  // admin's stored value, not just the env default — the same resolver the server import path uses.
+  await reloadAppConfig(db);
   const svc = createImportService(db, { ownerHandle: env.DEFAULT_USER_HANDLE });
   // The card PNG is the avatar: store it in the CAS and pin the asset onto the version row.
   const assets = createAssetsService(db, createCas(env.ASSETS_DIR));
 
-  const skipNames = env.IMPORT_SKIP_CHARACTERS.split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
+  const skipNames = getAppConfig().importSkipCharacters;
   const { bundles, orphanChatDirs, unreadableCards, skippedCharacters } =
     await collectBundlesFromDir(dir, skipNames);
   console.log(

@@ -3,6 +3,7 @@
 import { initTRPC, TRPCError } from "@trpc/server";
 import {
   DomainConflictError,
+  DomainForbiddenError,
   DomainNotFoundError,
   DomainOperationError,
 } from "../domain/_shared/errors";
@@ -19,6 +20,9 @@ const domainErrorMiddleware = t.middleware(async ({ next }) => {
     }
     if (cause instanceof DomainConflictError) {
       throw new TRPCError({ code: "CONFLICT", message: cause.message, cause });
+    }
+    if (cause instanceof DomainForbiddenError) {
+      throw new TRPCError({ code: "FORBIDDEN", message: cause.message, cause });
     }
     if (cause instanceof DomainOperationError) {
       throw new TRPCError({ code: "BAD_REQUEST", message: cause.message, cause });

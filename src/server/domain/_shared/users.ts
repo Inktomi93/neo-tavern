@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import type { Db } from "../../../db/client";
 import { users } from "../../../db/schema";
+import { env } from "../../env";
 import { getLog } from "../../observability/logger";
 import { newId } from "./ids";
 
@@ -19,7 +20,11 @@ export async function ensureUser(db: Db, handle: string): Promise<string> {
     return found.id;
   }
   const id = newId();
-  await db.insert(users).values({ id, handle, createdAt: Date.now() }).onConflictDoNothing();
+  // The one access-control decision the app owns: the owner (DEFAULT_USER_HANDLE) is provisioned as
+  // admin; everyone else as "user". Idempotent — covers the fresh-DB owner-first-login case without
+  // a separate seed; authentik remains the real gate for who reaches this point at all.
+  const role = handle === env.DEFAULT_USER_HANDLE ? "admin" : "user";
+  await db.insert(users).values({ id, handle, role, createdAt: Date.now() }).onConflictDoNothing();
   // Identity → tenant: a new user row appeared. Rare + notable (esp. under multi-user) —
   // the handle is an identity label, not RP content, so it's safe to log.
   getLog().info({ handle }, "user: created tenant row");

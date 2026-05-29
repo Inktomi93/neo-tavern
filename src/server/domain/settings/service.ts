@@ -1,7 +1,15 @@
 import { eq } from "drizzle-orm";
 import type { Db } from "../../../db/client";
 import { settings, userSettings } from "../../../db/schema";
+import { type AppSettings, parseAppSettings } from "../../../shared/app-settings";
 import { parseUserSettings, USER_SETTINGS_SCHEMA_VERSION } from "../../../shared/user-settings";
+import {
+  APP_SETTINGS_KEY,
+  type EffectiveAppConfig,
+  getAppConfig,
+  reloadAppConfig,
+} from "../../config/app-config";
+import { requireAdmin } from "../_shared/admin";
 import { logAudit } from "../_shared/audit";
 import { ensureUser } from "../_shared/users";
 import type {
@@ -81,10 +89,35 @@ export function createSettingsService(db: Db): SettingsService {
     return rows[0]!;
   }
 
+  // App-wide runtime config (admin-gated). Reads return the RESOLVED view (env floor + stored
+  // override); writes merge a partial into the stored override blob and refresh the resolver cache.
+  async function getAppSettings(params: { username: string }): Promise<EffectiveAppConfig> {
+    await requireAdmin(db, params.username);
+    return getAppConfig();
+  }
+
+  async function updateAppSettings(
+    params: { username: string },
+    partial: AppSettings,
+  ): Promise<EffectiveAppConfig> {
+    await requireAdmin(db, params.username);
+    // Merge into the existing override blob (admin can flip one toggle without resetting the rest).
+    const existing = await db
+      .select({ value: settings.value })
+      .from(settings)
+      .where(eq(settings.key, APP_SETTINGS_KEY))
+      .limit(1);
+    const merged: AppSettings = { ...parseAppSettings(existing[0]?.value ?? {}), ...partial };
+    await setGlobalSetting(APP_SETTINGS_KEY, merged);
+    return reloadAppConfig(db);
+  }
+
   return {
     getUserSettings,
     updateUserSettings,
     getGlobalSetting,
     setGlobalSetting,
+    getAppSettings,
+    updateAppSettings,
   };
 }

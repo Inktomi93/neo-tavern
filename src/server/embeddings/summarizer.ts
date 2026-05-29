@@ -7,6 +7,7 @@ import type {
   LlamaGrammar,
   LlamaModel,
 } from "node-llama-cpp";
+import { getAppConfig } from "../config/app-config";
 import { env } from "../env";
 import { getLog } from "../observability/logger";
 import { runChatCompletionTurn } from "../providers/openrouter";
@@ -75,7 +76,7 @@ function stripThink(text: string): string {
 
 const warm = new WarmModel<Loaded>({
   name: `summarizer@${env.SUMMARIZER_GGUF ?? "unset"}`,
-  idleMs: env.IDLE_UNLOAD_MIN * 60_000,
+  idleMs: getAppConfig().idleUnloadMin * 60_000,
   load: async () => {
     const modelPath = env.SUMMARIZER_GGUF;
     if (!modelPath)

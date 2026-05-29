@@ -1,5 +1,6 @@
 import { performance } from "node:perf_hooks";
 import { type FeatureExtractionPipeline, env as hf, pipeline } from "@huggingface/transformers";
+import { getAppConfig } from "../config/app-config";
 import { env } from "../env";
 import { getLog } from "../observability/logger";
 import { sessionOptions } from "./session-options";
@@ -42,7 +43,7 @@ export interface Embedder {
 // Shared warm/idle-unload lifecycle (see warm-model.ts). One pipeline serves all callers.
 const warm = new WarmModel<FeatureExtractionPipeline>({
   name: `${EMBEDDING_MODEL}@${env.EMBED_DEVICE}:${env.EMBED_GPU_ID}`,
-  idleMs: env.IDLE_UNLOAD_MIN * 60_000,
+  idleMs: getAppConfig().idleUnloadMin * 60_000,
   load: () =>
     pipeline("feature-extraction", MODEL_ID, {
       device: env.EMBED_DEVICE,

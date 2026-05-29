@@ -1,4 +1,6 @@
+import type { AppSettings } from "../../../shared/app-settings";
 import type { UserSettings } from "../../../shared/user-settings";
+import type { EffectiveAppConfig } from "../../config/app-config";
 
 export interface UserSettingsView {
   userId: string;
@@ -29,4 +31,12 @@ export interface SettingsService {
 
   getGlobalSetting(key: string): Promise<GlobalSettingView | null>;
   setGlobalSetting(key: string, value: unknown): Promise<GlobalSettingView>;
+
+  /** Admin-only. The resolved runtime config (env floor + stored override). */
+  getAppSettings(params: { username: string }): Promise<EffectiveAppConfig>;
+  /** Admin-only. Merge a partial override into the stored blob; returns the new resolved config. */
+  updateAppSettings(
+    params: { username: string },
+    partial: AppSettings,
+  ): Promise<EffectiveAppConfig>;
 }

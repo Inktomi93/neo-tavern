@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { appSettingsSchema } from "../../../shared/app-settings";
 import { userSettingsSchema } from "../../../shared/user-settings";
 import { publicProcedure, t } from "../trpc";
 
@@ -25,4 +26,16 @@ export const settingsRouter = t.router({
   setGlobalSetting: publicProcedure
     .input(z.object({ key: z.string().min(1), value: z.any() }))
     .mutation(({ ctx, input }) => ctx.services.settings.setGlobalSetting(input.key, input.value)),
+
+  // Admin-only runtime config (the env-default-floor + DB-override knobs). The service enforces
+  // requireAdmin; a non-owner gets FORBIDDEN.
+  getAppSettings: publicProcedure.query(({ ctx }) =>
+    ctx.services.settings.getAppSettings({ username: ctx.username }),
+  ),
+
+  updateAppSettings: publicProcedure
+    .input(appSettingsSchema)
+    .mutation(({ ctx, input }) =>
+      ctx.services.settings.updateAppSettings({ username: ctx.username }, input),
+    ),
 });

@@ -5,6 +5,7 @@ import {
   type ThinkingConfig,
 } from "@anthropic-ai/claude-agent-sdk";
 import { type GenerationParams, isThinkingOn } from "../../../shared/generation";
+import { getAppConfig } from "../../config/app-config";
 import {
   buildClaudeOpenRouterEnv,
   buildClaudeSdkEnv,
@@ -38,7 +39,8 @@ export function disciplineOptions(
 // docs/sdk-notes.md "Observing injection"). Kept OUT of disciplineOptions() so
 // that helper stays the pure leak contract the tests lock.
 export function observabilityOptions(): Partial<Options> {
-  if (env.LOG_LEVEL !== "debug" && env.LOG_LEVEL !== "trace") {
+  const logLevel = getAppConfig().logLevel;
+  if (logLevel !== "debug" && logLevel !== "trace") {
     return {};
   }
   return {

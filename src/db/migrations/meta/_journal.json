@@ -176,6 +176,13 @@
       "when": 1779993996259,
       "tag": "0024_robust_killraven",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "6",
+      "when": 1780062877084,
+      "tag": "0025_bizarre_whistler",
+      "breakpoints": true
     }
   ]
 }

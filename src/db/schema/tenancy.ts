@@ -9,6 +9,13 @@ export const users = sqliteTable("users", {
   id: text("id").primaryKey(),
   handle: text("handle").notNull().unique(), // = X-Authentik-Username
   displayName: text("display_name"),
+  // Access role. The DESIGNED-multi-user hook (gates admin surfaces like AppSettings). Default
+  // "user" is deliberate: ensureUser JIT-provisions a row per authentik username, so an "admin"
+  // default would auto-admin every future user (escalation-by-default). The owner becomes admin via
+  // ensureUser (role="admin" iff handle === DEFAULT_USER_HANDLE) + a one-time migration backfill.
+  role: text("role", { enum: ["admin", "user"] })
+    .notNull()
+    .default("user"),
   createdAt: integer("created_at").notNull(),
 });
 
