@@ -168,6 +168,35 @@ Sources: [authentik OAuth2 provider](https://docs.goauthentik.io/add-secure-apps
 the owner's live `docker-compose.yaml` (Open WebUI ~659-665, Grafana ~1331-1341) + `Caddyfile`
 (`(authentik)` snippet ~46-58).
 
+### 1e. Caddy v2 specifics for the neo-tavern block (current best practice + the real gotchas)
+The deployment is one app container behind the stack's caddy. Get these right (verified against current
+Caddy v2 docs/issues):
+- **SSE ⚠️ the headline trap — compression breaks live push.** Caddy auto-flushes recognized streaming
+  responses, BUT the **`encode` (gzip/zstd) module buffers SSE and the event never reaches the client**
+  ([caddy#6293](https://github.com/caddyserver/caddy/issues/6293)); the stream also only establishes
+  after the first upstream byte. The stack's global `encode zstd gzip` would **silently kill push**.
+  Fix: set **`flush_interval -1`** on the neo-tavern proxy **and do NOT compress the SSE endpoint**
+  (scope `encode` to exclude `/api/trpc` streaming, or mark the stream `Content-Encoding: identity`).
+  Long read/write timeouts on the stream (the ST block uses 300s; SSE wants effectively no write
+  timeout — rely on the §5a heartbeat to keep it live).
+- **SPA caching** ([Caddy patterns](https://caddyserver.com/docs/caddyfile/patterns)): hashed bundle
+  assets (Vite `/assets/<name>.<hash>.js`) → `Cache-Control: public, max-age=31536000, immutable`;
+  **`index.html` → `no-cache, must-revalidate`** so a new deploy is picked up. `try_files {path}
+  /index.html` for client-side routing. (Whoever serves the SPA — the app's Hono `serveStatic` today —
+  applies this; if caddy ever serves the bundle directly, replicate it there.)
+- **The route split** (mirrors §1d, clean): caddy serves **`/blob/*`** statically + immutable off
+  `ASSETS_DIR` (the §-assets block in `docs/assets.md`); **proxies everything else** to `neo-tavern:8788`.
+  Forward-auth (forward-header mode only) is scoped to **`/api/*`** — never the SPA bundle or `/blob`.
+- **CSP** (the auth-review XSS mitigation): set a `Content-Security-Policy` for the SPA — start
+  `default-src 'self'; img-src 'self' data: blob:; connect-src 'self'; frame-ancestors 'none';
+  base-uri 'self'; object-src 'none'` and tighten as the UI lands (Vite needs no inline scripts in
+  prod). Reuse/extend the stack's `(security_headers)` snippet (HSTS/nosniff/Referrer-Policy) + add CSP.
+- **Upload body size:** import-zip (`POST /api/import/zip`) can be large — set `request_body
+  { max_size 1GB }` (or similar) on the neo-tavern site so a proxy cap doesn't truncate a corpus zip
+  (the stack already does this for Forgejo at 4GB).
+- **Inherited from the stack (keep):** crowdsec bouncer, `rate_limit` (skips private ranges — so LAN
+  RP isn't throttled), cloudflare-DNS TLS, `encode` (minus the SSE carve-out above).
+
 ---
 
 ## §2. `AUTH_MODE` seam (Part A)
