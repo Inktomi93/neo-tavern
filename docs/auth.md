@@ -21,8 +21,9 @@ own (encrypted) OpenRouter key. See the plan for all of it.
 ## Env vars (set on the neo-tavern container)
 | Var | Mode | Value |
 | --- | --- | --- |
-| `AUTH_MODE` | all | `single-user` (default) · `forward-header` · `oidc` |
-| `DEFAULT_USER_HANDLE` | all | the owner handle (single-user identity + admin) |
+| `AUTH_MODE` | all | active SSO mechanism: `single-user` (default) · `forward-header` · `oidc` |
+| `AUTH_FALLBACK` | all | un-credentialed request → `owner` (default) or `deny`. **`oidc`+`owner` = SSO on the domain AND owner on the raw LAN IP, at once.** `deny` = SSO mandatory. |
+| `DEFAULT_USER_HANDLE` | all | the owner handle (single-user / fallback identity + admin) |
 | `OWNER_GROUP` | sso | authentik group whose members are admins, e.g. `Neo Owners` (preferred) |
 | `OWNER_HANDLES` | sso | comma-list fallback for admins (default = `DEFAULT_USER_HANDLE`) |
 | `FORWARD_AUTH_VERIFY_JWT` | forward-header | `true` (verify `X-Authentik-Jwt` via JWKS) |
@@ -34,6 +35,26 @@ own (encrypted) OpenRouter key. See the plan for all of it.
 | `OPENROUTER_API_KEY` | optional | the **host** OpenRouter key (shared fallback) |
 
 ---
+
+## Networking, TLS, HTTP/3 (stack-specific)
+- **Upstream — where the app runs.** The blocks below proxy to `neo-tavern:8788` (the compose service
+  name, for when it's containerized). **FOR NOW the app runs on the host, not in the docker network** →
+  caddy (in docker) reaches it via **`host.docker.internal:8788`** (add
+  `extra_hosts: ["host.docker.internal:host-gateway"]` to the caddy service), or the docker bridge
+  gateway IP. The app must listen on `0.0.0.0:8788`. **Swap `neo-tavern:8788` → `host.docker.internal:8788`
+  in the blocks while host-hosted; revert when it moves into the stack.**
+- **TLS is free here.** The block is a `handle` inside `*.inktomi.tech`, which already gets a wildcard
+  cert via the cloudflare DNS-01 challenge — so `neo-tavern.inktomi.tech` is HTTPS with no extra config.
+  **LAN HTTPS for SSO needs no separate cert:** split-DNS `neo-tavern.inktomi.tech` → the LAN IP and the
+  same wildcard cert is valid (so the §5a "LAN cert" caveat in the plan is moot — just point DNS at the box).
+- **HTTP/3:** enable it **globally** — the stack's Caddyfile currently has `servers { protocols h1 h2 }`
+  (h3 OFF); change to `protocols h1 h2 h3` and open **UDP/443**. The neo-tavern block is unchanged
+  (protocol is server-level). SSE/live-push works over h3.
+- **Cloudflare proxy vs SSE — N/A here (confirmed direct).** The owner is **banned from cloudflare
+  proxying**, so traffic never traverses cloudflare's network — cloudflare is **DNS-only** (+ the DNS-01
+  cert challenge). So there is **no cloudflare buffering or ~100s idle timeout** in the path → long-lived
+  SSE / live push is unobstructed. (If proxying were ever enabled, that timeout/buffering WOULD threaten
+  SSE — but it can't be, here.)
 
 ## Caddy block — paste inside the existing `*.inktomi.tech { … }` site
 It inherits TLS, access logging, `rate_limit` (skips private ranges → LAN RP isn't throttled), and the

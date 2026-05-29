@@ -30,8 +30,11 @@ place that decides "can this user use this credential" at turn time. A second ac
 OpenRouter key and generate on its own dime, on any access path, without touching the owner's sub.
 
 ### Decisions locked with the owner (do not re-litigate; implement)
-- **`AUTH_MODE` env enum**: `single-user` (DEFAULT, zero-infra) · `forward-header` (today's
-  caddy+authentik) · `oidc` (app is an OIDC client; works on direct LAN too).
+- **Auth is LAYERED, not a single rigid mode (§2):** `AUTH_MODE` picks the SSO mechanism
+  (`single-user` DEFAULT · `forward-header` · `oidc`) and `AUTH_FALLBACK` (`owner`|`deny`) decides the
+  un-credentialed case. The resolver tries cookie → forward-auth header → fallback per request, so
+  **`oidc` + `AUTH_FALLBACK=owner` = SSO on the domain AND owner on the raw LAN IP, simultaneously,
+  from one process.** (`deny` = SSO mandatory.)
 - **OIDC sessions are BEARER TOKENS, never cookies** — and **server-side / revocable** (an opaque
   session id backed by a `sessions` row, §4), carried in an **HttpOnly, Secure, SameSite=Lax
   cookie** — the **BFF pattern, which we already are** (confidential OIDC client, server-side). This
@@ -195,26 +198,56 @@ Caddy v2 docs/issues):
   { max_size 1GB }` (or similar) on the neo-tavern site so a proxy cap doesn't truncate a corpus zip
   (the stack already does this for Forgejo at 4GB).
 - **Inherited from the stack (keep):** crowdsec bouncer, `rate_limit` (skips private ranges — so LAN
-  RP isn't throttled), cloudflare-DNS TLS, `encode` (minus the SSE carve-out above).
+  RP isn't throttled), cloudflare-DNS-01 wildcard TLS, `encode` (minus the SSE carve-out above).
+- **HTTP/3:** owner prefers it; the stack's global `servers { protocols h1 h2 }` currently **excludes
+  h3** → flip to `protocols h1 h2 h3` (global, one line) + open UDP/443. Block unchanged; SSE works over h3.
+- **TLS is free + LAN HTTPS needs no extra cert:** the wildcard `*.inktomi.tech` cert (DNS-01) covers
+  `neo-tavern.inktomi.tech` whether it resolves to the WAN or (split-DNS) the LAN IP — so the §5a "LAN
+  cert" caveat is moot; just point DNS at the box.
+- **Cloudflare-proxied SSE — N/A (confirmed direct):** the owner is **banned from cloudflare proxying**,
+  so cloudflare is DNS-only (+ DNS-01 cert) and traffic is direct to the box — **no cloudflare
+  buffering/timeout threatens live-push**. Full deploy recipe + the host-vs-container upstream
+  (`host.docker.internal:8788` while host-hosted): `docs/auth.md`.
 
 ---
 
-## §2. `AUTH_MODE` seam (Part A)
+## §2. The auth seam — LAYERED resolution (Part A)
 
-Single env knob selects the identity strategy; **every existing caller of `resolveUsername` stays
-unchanged** (keep the signature). `env.ts`:
-`AUTH_MODE: z.enum(["single-user","forward-header","oidc"]).default("single-user")`.
+env (`env.ts`): `AUTH_MODE: z.enum(["single-user","forward-header","oidc"]).default("single-user")`
+(which SSO mechanism is active) **+** `AUTH_FALLBACK: z.enum(["owner","deny"]).default("owner")` (what
+identity an **un-credentialed** request gets). The mechanisms **layer** — this is why "both at once"
+works (see below).
 
-Refactor `src/server/auth/trust-header.ts` into a strategy dispatch returning a resolved identity
-`{ externalId: string | null, handle: string }`:
-- **`single-user`** → always `{ externalId: null, handle: DEFAULT_USER_HANDLE }`. Any auth header is
-  ignored. Zero infra. Default.
-- **`forward-header`** → read `X-Authentik-Uid` (externalId) + `X-Authentik-Username` (handle) +
-  `X-Authentik-Groups`. **Trust = verify `X-Authentik-Jwt` against the JWKS** when present
-  (`FORWARD_AUTH_VERIFY_JWT`, default on); else network-isolation trust (§1c). Invalid → 401.
-- **`oidc`** → read the **session cookie** (§4), hash → `sessions` lookup → identity. **No/invalid
-  session → 401** (this mode has no owner fallback). Public routes: `/api/healthz`, `/api/auth/*`.
-- The **disabled-user** check (§6) lives here: resolved → disabled → 401/403.
+**`src/server/auth/trust-header.ts` exposes TWO functions** (do NOT broaden `resolveUsername`'s
+signature — it has ~7 call sites: `app.ts` `createContext` + the export/import/asset routes, all
+expecting `string`):
+- **`resolveIdentity(headers) → { externalId: string|null; handle: string; groups: string[] } | null`**
+  — the layered resolver, tried **in order, per request**:
+  1. **Session cookie** (when `AUTH_MODE=oidc`): read `neo_session` from the `Cookie` header → hash →
+     `sessions` lookup (exists, not `revokedAt`, not expired, owner `enabled`) → that identity. (§4)
+  2. **Forward-auth header** (when `AUTH_MODE=forward-header`): `X-Authentik-Uid` (externalId) /
+     `-Username` (handle) / `-Groups`, **trusted by verifying `X-Authentik-Jwt` against the JWKS**
+     (`FORWARD_AUTH_VERIFY_JWT`, default on; else network-isolation trust, §1c). (§1b)
+  3. **Fallback** (no credential from 1–2): `AUTH_FALLBACK=owner` → `{ externalId:null, handle:
+     DEFAULT_USER_HANDLE, groups:[] }`; `AUTH_FALLBACK=deny` → `null` (caller → 401).
+- **`resolveUsername(headers, …) → string`** — UNCHANGED back-compat wrapper =
+  `resolveIdentity(headers)?.handle ?? DEFAULT_USER_HANDLE`. The 7 existing callers keep working; new
+  code that needs externalId/groups (the tRPC context, the credential resolver) calls `resolveIdentity`.
+
+**"Both modes at once" (the owner's want):** `AUTH_MODE=oidc` + `AUTH_FALLBACK=owner` = **SSO on the
+domain** (a valid `neo_session` cookie → your SSO identity) **AND owner on the raw LAN IP** (no cookie →
+fallback to the owner) — *one running process, both behaviors*. `AUTH_FALLBACK=deny` makes SSO
+mandatory (no raw-IP owner shortcut). `single-user` = no SSO mechanism + `owner` fallback (today).
+- **Security knob (the one to get right):** `AUTH_FALLBACK=owner` means **any un-credentialed request
+  becomes the owner** — safe ONLY where un-credentialed access is trusted (LAN; the "don't expose 8788"
+  invariant). If untrusted clients can reach the un-credentialed path (e.g. a shared LAN, or the raw
+  IP exposed), use `deny`. (Note: with `owner` fallback, disabling a user does NOT block them on a
+  shared raw-IP path — they'd hit the owner fallback like anyone; that path is "owner", not "them".
+  Disable is immediate on the *credentialed* paths via session revocation, §4/§6.)
+- **Public routes** (no identity needed, never 401): `/api/healthz`, `/api/auth/*`, the blob CAS.
+- **CSRF (cookie path only):** a tRPC middleware on **mutation** procedures requires the custom header
+  `x-neo-csrf` (any value); `SameSite=Lax` + this header is the whole CSRF story (§4). Queries/SSE
+  (GET) need no header. `Set-Cookie` happens ONLY in `/api/auth/callback` (§10), never at this seam.
 
 ## §4. The app session — REVOCABLE SERVER-SIDE, CARRIED IN AN HttpOnly COOKIE (BFF)
 
@@ -230,7 +263,8 @@ exfiltrate** the credential. We rejected localStorage for that reason.)
   sends it automatically — including on the **SSE stream** (EventSource sends cookies same-origin), so
   push needs no extra auth plumbing.
 - Validate every request by **hashing the cookie → `sessions` lookup**: row exists, not `revokedAt`,
-  not past `expiresAt`, and the owning `users.enabled` — else 401. **Sliding expiry:** bump
+  not past `expiresAt`, and the owning `users.enabled` — else the cookie yields **no identity** (the
+  §2 resolver falls through to the next layer / `AUTH_FALLBACK`). **Sliding expiry:** bump
   `expiresAt`/`lastSeenAt` on use. One indexed lookup/request — negligible on one box.
 - **CSRF mitigation (small, standard, invisible to the user):** `SameSite=Lax` already blocks
   cross-site POST (and still returns on the top-level OAuth callback redirect — that's why Lax, not
@@ -250,7 +284,10 @@ exfiltrate** the credential. We rejected localStorage for that reason.)
 - **Deferred (free — no migration cost):** OIDC refresh-token rotation; sliding sessions + silent
   re-auth cover the UX, and we avoid storing the IdP refresh token. Adding it later is a nullable
   `sessions` column.
-- Library: `openid-client` (discovery + code exchange + ID-token verify) + `jose` (JWKS verify).
+- Libraries (not yet deps — add at build): **`openid-client` v6+** (discovery + code exchange +
+  ID-token verify — NOTE its API changed substantially from v5; follow the v6 docs, don't copy v5
+  snippets) + **`jose`** (verify the forward-auth `X-Authentik-Jwt` against the JWKS). For the opaque
+  session token: `node:crypto` `randomBytes` + a SHA-256/HMAC hash — no JWT lib needed for our session.
 
 ## §5. Multi-device — and why auth doesn't break push (cookies make it *easier*)
 - Each device logs in once (its own session cookie); both resolve to the same user row (same
@@ -289,10 +326,12 @@ both resolve it), so its dependency is fine at home.
 - **`forward-header`** → caddy+authentik in front (HTTPS domain path).
 - **`single-user`** → ANY path incl. truly bare `http://<lan-ip>:8788` — zero infra, **no session, no
   cookie, no token** (just owner identity), so plaintext-http is fine *because nothing secret rides it*.
-**Owner takeaway:** at home, either run a **LAN HTTPS host** (split-horizon DNS / NAT-loopback + a cert,
-or just hit the public domain) → full SSO + multi-account; **or** hit the raw LAN IP over http →
-`single-user` (you, the owner). Both work; the only thing you can't do is an *authenticated* session
-over plaintext http — and you don't need one, since raw-IP is single-user anyway.
+**Owner takeaway — both at once (§2):** run `AUTH_MODE=oidc` + `AUTH_FALLBACK=owner`, and a *single
+process* serves both: hit the **domain/LAN-HTTPS-host → full SSO** (cookie identity); hit the **raw
+`http://<lan-ip>:8788` → you, the owner** (no cookie → owner fallback). No either/or, no per-path
+config switch. The only thing that can't happen is an *authenticated* session over plaintext http —
+and you don't need one, because the raw-IP path is the owner fallback anyway. (Use `AUTH_FALLBACK=deny`
+only if you must forbid the un-credentialed raw-IP shortcut — e.g. a shared/untrusted LAN.)
 
 ## §6. User layer (Part B)
 - **Admin/owner determination — two sources, group preferred (matches the Grafana pattern):**
@@ -300,10 +339,14 @@ over plaintext http — and you don't need one, since raw-IP is single-user anyw
   - `OWNER_HANDLES` env (comma-list, default = `DEFAULT_USER_HANDLE`): handle ∈ list → admin.
   `ensureUser` sets `admin` iff (group matches) OR (handle ∈ OWNER_HANDLES), else `'user'`.
 - **`users.externalId`** (new nullable, unique-when-set): authentik `sub`/uid — the stable identity.
-  SSO modes **match/provision by externalId, not handle** (survives username renames); keep `handle`
-  synced to the latest `preferred_username`. `single-user` → externalId null, handle =
-  DEFAULT_USER_HANDLE. `ensureUser({ externalId, handle })`: match by externalId if present (update
-  handle), else by handle.
+  **Do NOT broaden `ensureUser(db, handle): Promise<string>`** — it has ~19 call sites that only have a
+  handle (downstream domain services pass `ctx.username`); they must keep working unchanged. Instead add
+  a **seam-only** `provisionIdentity(db, { externalId, handle, groups }): Promise<string>` called ONCE,
+  at the auth seam (§2 `resolveIdentity` / the OIDC callback), which does the externalId-keyed upsert
+  (match by `externalId` if present → update `handle` to the latest `preferred_username`; else by
+  handle) + sets `role`/`enabled`, and returns the user id. Downstream `ensureUser(db, handle)` then
+  just finds the row. `single-user` keeps using plain `ensureUser` (externalId null, handle =
+  DEFAULT_USER_HANDLE).
 - **`users.enabled`** (new boolean, default true). Disabled → rejected at §2 **immediately** (the §4
   session check reads `users.enabled` every request + admins should revoke the user's `sessions` rows
   on disable, so a ban takes effect now, not on token expiry). Admins toggle; never hard-delete.
@@ -400,7 +443,9 @@ existing turn-error path.
 
 ## §12. Env vars (complete)
 - Unchanged: `DEFAULT_USER_HANDLE`, `NEO_PROXY_SECRET`, `OPENROUTER_API_KEY` (now the host OR fallback).
-- New: `AUTH_MODE` (default `single-user`); `OWNER_GROUP` (optional) + `OWNER_HANDLES` (default =
+- New: `AUTH_MODE` (default `single-user`; the active SSO mechanism) + **`AUTH_FALLBACK`**
+  (`owner`|`deny`, default `owner`; identity for an un-credentialed request — `owner` = SSO-on-domain +
+  owner-on-raw-IP coexist, §2); `OWNER_GROUP` (optional) + `OWNER_HANDLES` (default =
   `DEFAULT_USER_HANDLE`); `FORWARD_AUTH_VERIFY_JWT` (default `true`); `CREDENTIALS_KEY` (optional,
   base64 32-byte; unset ⇒ per-user creds off). OIDC-only (required iff `AUTH_MODE=oidc`): `OIDC_ISSUER`
   (`https://authentik.inktomi.tech/application/o/<slug>/`), `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`,
@@ -438,7 +483,8 @@ null, enabled true, role already admin from migration 0025; no sessions until fi
 - Turn-path resolver refactor on the hot path → owner resolution byte-identical; existing
   send/swipe/chat-start tests are the guard.
 - `getOpenRouterClient` singleton → per-key cache: never leak one user's key into another's client.
-- `oidc` flips "always a fallback identity" → "401 without a token"; keep non-oidc modes untouched and
+- `AUTH_FALLBACK=deny` flips "always a fallback identity" → "401 without a credential"; the default
+  `owner` keeps the zero-infra/raw-IP behavior. Keep non-SSO defaults untouched and
   the default single-user/zero-infra.
 - `CREDENTIALS_KEY` unset must degrade (per-user creds off, host key only), never throw at boot.
 - externalId migration: SSO keys on externalId, single-user on handle — `ensureUser` must handle both
@@ -456,9 +502,10 @@ null, enabled true, role already admin from migration 0025; no sessions until fi
    **cross-site POST without the custom header is rejected** (SameSite + header check); the cookie is
    `HttpOnly; Secure; SameSite=Lax` (assert the `Set-Cookie` attributes on callback).
 
-- **Supporting unit:** crypto round-trip (+ wrong-key fails, + AAD mismatch fails); AUTH_MODE dispatch
-  (single-user ignores headers; forward-header verifies the JWT / trusts network; oidc 401 without a
-  valid cookie); `ensureUser` rename (same externalId, new handle → same row).
+- **Supporting unit:** crypto round-trip (+ wrong-key fails, + AAD mismatch fails); layered resolver
+  (single-user ignores headers; forward-header verifies the JWT / trusts network; oidc reads the
+  cookie); **`AUTH_FALLBACK`** (no credential → owner when `owner`, → 401 when `deny`); `provisionIdentity`
+  rename (same externalId, new handle → same row, no dup).
 - **OIDC leg:** `/callback` with mocked discovery+JWKS+ID-token → `Set-Cookie` + 302 (no token in the
   URL); the resulting cookie authenticates a subsequent tRPC call.
 - **Origin-flexible OIDC redirect:** `redirect_uri` is derived from the request origin and accepted
