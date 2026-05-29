@@ -122,13 +122,14 @@ static-asset race; we avoid it with a tiny, stable 2-path carve-out, not ST's JS
 		reverse_proxy neo-tavern:8788
 	}
 ```
-> **CONFIRM-AT-BUILD:** serve the blob CAS from a path that's easy to keep public. Today the route is
-> `/api/blob/:hash` (so it's carved out above); `shared/assets.ts` `blobUrl` emits `/blob/<hash>`. Pick
-> ONE at build (a top-level `/blob/*` is cleaner — then the auth split is just "gate `/api/*`" with no
-> blob carve-out). If `/blob/*` is used, add a `handle /blob/*` that either proxies the app or
-> `file_server`s `ASSETS_DIR` directly (the immutable static block in `docs/assets.md`).
-> **CONFIRM-AT-BUILD:** if the tRPC SSE subscription path is known precisely, you may scope `encode`
-> to exclude just it; `not path /api/*` is the safe superset (API JSON compression is a negligible loss).
+> **CONFIRMED (built):** TWO blob paths, both public. The client requests `/blob/<hash>` (`shared/assets.ts`
+> `blobUrl`) — served outside `/api/*`, so the SPA-bundle `handle` already serves it freely (caddy maps it
+> to `ASSETS_DIR` or proxies the app). The app ALSO serves **`/api/blob/:hash`** (the JIT `?w=…&f=webp`
+> resize via `sharp`) — kept public by the `@apipublic path /api/blob/* /api/healthz` carve-out above. No
+> change to the block is needed; neither blob path hits forward-auth.
+> **CONFIRMED (built):** the only SSE stream is the tRPC **`streamMessages`** subscription at `/api/trpc/*`,
+> so `@compressible not path /api/*` already excludes it from `encode` (the safe superset). Narrowing to
+> `/api/trpc` is possible but unnecessary — compressing the rest of the JSON API is a negligible loss.
 
 ---
 

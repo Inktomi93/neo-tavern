@@ -1,10 +1,13 @@
 # Plan: pluggable auth (single-user / forward-header / OIDC) + user & per-user-credential foundation
 
-> **STATUS: DESIGN LOCKED — not yet built.** This is the spec for the next implementation pass.
-> It is intentionally exhaustive so the implementing session cannot misread intent. Read it top to
-> bottom before writing code. When in doubt, prefer "the simplest thing that matches §0 and §11 (what
-> to avoid)." (Prior settings/lazy-create/import work already shipped — see the git log around the
-> `feat(settings)` / `feat(chat)` / `feat(import)` commits.)
+> **STATUS: BUILT** (migrations 0025–0026 + the `feat(auth)` commits — see the git log). This doc
+> remains the **design rationale** (the *why*); `docs/auth.md` is the deploy recipe. The server/domain/
+> API are implemented + green; the **frontend** (login UI, key-entry, user-admin screens) is the
+> remaining piece. Implementation notes vs the original plan: `resolveUsername` is async (the
+> resolution does I/O); CSRF gates per-request on `viaCookie` (not on `AUTH_MODE`); admin-gating is
+> narrow (AppSettings + `userAdmin` only — the OpenRouter account endpoints are `authedProcedure`, per-
+> user; the only credential gate is `max-pro-sub` via the turn-time resolver); the host
+> `OPENROUTER_API_KEY` is a temporary fallback (per-user keys are the goal).
 
 ---
 

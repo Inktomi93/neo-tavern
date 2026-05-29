@@ -14,6 +14,7 @@ import {
   resolveIdentity,
   resolveUsername,
 } from "./auth/trust-header";
+import { registerOidcRoutes } from "./auth-oidc";
 import { createRegexService } from "./domain/_shared/regex";
 import { ensureUser, provisionIdentity } from "./domain/_shared/users";
 import { createAssetsService } from "./domain/assets";
@@ -85,6 +86,9 @@ export function buildApp(db: Db, cas: Cas, services: Services, isProd: boolean) 
   const exportService = createExportService(db, cas);
   registerDebugRoutes(app, createDebugService(db), assetsService);
   registerImportRoutes(app, db, assetsService);
+  // OIDC login/callback/logout/me — public Hono routes (no-op unless AUTH_MODE=oidc). The session
+  // cookie it mints is what the tRPC auth seam (above) reads.
+  registerOidcRoutes(app, db, services.sessions);
 
   const debugRouter = new Hono();
   debugRouter.use("/*", debugAuthMiddleware);

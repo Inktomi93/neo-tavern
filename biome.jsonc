@@ -261,11 +261,22 @@
       "linter": { "rules": { "style": { "useNamingConvention": "off" } } }
     },
     {
-      // The auth seam reads authentik's OIDC/JWT claim names verbatim (preferred_username, sub,
-      // groups) — an external IdP wire shape, snake_case by spec — so useNamingConvention can't apply
-      // (cf. the providers + env.ts overrides). The test signs/asserts the same claim shape.
-      "includes": ["src/server/auth/trust-header.ts", "src/server/auth/trust-header.test.ts"],
-      "linter": { "rules": { "style": { "useNamingConvention": "off" } } }
+      // The auth seam + OIDC routes read authentik's OIDC/JWT claim names verbatim (preferred_username,
+      // sub, groups, code_challenge_method) — an external IdP wire shape, snake_case by spec — so
+      // useNamingConvention can't apply (cf. the providers + env.ts overrides), and useLiteralKeys is
+      // off for the bracket access tsc's noPropertyAccessFromIndexSignature requires on claim reads.
+      "includes": [
+        "src/server/auth/trust-header.ts",
+        "src/server/auth/trust-header.test.ts",
+        "src/server/auth-oidc.ts",
+        "src/server/auth-oidc.test.ts"
+      ],
+      "linter": {
+        "rules": {
+          "style": { "useNamingConvention": "off" },
+          "complexity": { "useLiteralKeys": "off" }
+        }
+      }
     },
     {
       // The corpus importer parses SillyTavern's external, multi-spec wire JSON,

@@ -163,21 +163,35 @@ presets, world_books, tags); children inherit via their parent. Scoping is **enf
 `domain/*` layer** (every read/write bakes `WHERE owner_id = ctx.user.id`), exercised even with
 one user, so a second user is a no-op not a rewrite. Global uniques become composite under
 multi-user (`unique(ownerId, handle)` etc.). Identity is resolved per-request at one seam
-(`auth/trust-header.ts`); the **pluggable-`AUTH_MODE`** model (single-user / forward-header /
-oidc), keyed on the stable `sub`/`X-Authentik-Uid`, is specified in `docs/auth-and-credentials-plan.md`
-(locked, building). The browser session is an **HttpOnly/Secure/SameSite=Lax cookie** (BFF pattern;
-revocable server-side `sessions`), CSRF mitigated by SameSite + a custom header — not a JS-readable token.
-Today the app effectively runs single-user-owner (the `X-Neo-Proxy` path exists in code but the live
-Caddyfile never injects it → see the plan's §1c; forward-header replaces it with JWKS verification).
+(`auth/trust-header.ts` `resolveIdentity`); the **pluggable-`AUTH_MODE`** model (single-user /
+forward-header / oidc), keyed on the stable `sub`/`X-Authentik-Uid` (`users.externalId`), is **built**
+(`docs/auth-and-credentials-plan.md` is the *why*). The browser session is an
+**HttpOnly/Secure/SameSite=Lax cookie** (BFF pattern; revocable server-side `sessions`), CSRF mitigated
+by SameSite + a custom request header — not a JS-readable token. `forward-header` trusts the proxy by
+verifying `X-Authentik-Jwt` against the JWKS (the `X-Neo-Proxy` shared-secret path is NOT deployed and
+is not used — see the plan's §1c). `single-user` ignores all headers (owner fallback only).
+
+**New auth tables/columns (migration 0026):**
+- **`users.externalId`** (nullable, unique-when-set) = the stable authentik `sub`/uid; SSO modes key on
+  it (a username rename updates the same row), single-user stays handle-keyed (null). **`users.enabled`**
+  (bool, default true) = the soft access gate, checked every request (disable → rejected on the *next*
+  request, not at token expiry).
+- **`sessions`** = the revocable BFF login session: opaque 32-byte token, only its HMAC(`SESSION_SECRET`)
+  hash stored (`tokenHash` unique); `userId` cascade, `createdAt`/`lastSeenAt`/`expiresAt`/`revokedAt?`/
+  `userAgent?`. Validated per request (exists + !revoked + !expired + owner enabled); sliding expiry.
+  This is NOT `session_entries` (the SDK transcript cache) — different table, different job.
+- **`user_credentials`** = per-user encrypted provider key (AES-256-GCM, `ciphertext`/`iv`/`tag`, AAD =
+  `userId|provider`), unique `(userId, provider)`; `userId` cascade. The plaintext key is never stored
+  and never returned by any API (only `hasMyOpenRouterKey`).
 
 **Access role** (`users.role`, migration 0025): `'admin'|'user'`, default `'user'`. `ensureUser` (the
-JIT provisioning seam) sets `admin` iff the handle is `DEFAULT_USER_HANDLE` — the one access decision,
-in one place; default `'user'` avoids escalation-by-default when multi-user lands. `requireAdmin`
-(`_shared/admin.ts`) gates admin surfaces (AppSettings). (The plan generalizes admin-determination to
-`OWNER_GROUP`/`OWNER_HANDLES` and adds `users.externalId`/`enabled`.) **Owner-only credential:**
-`max-pro-sub` (mode 1) is the host's single `claude login` — guarded at `chat.startChat` today; the
-locked design moves the gate to one turn-time **credential resolver** covering every seam, with
-encrypted per-user (BYO) OpenRouter keys for non-owners (`docs/auth-and-credentials-plan.md`).
+JIT provisioning seam) sets `admin` iff the handle is `DEFAULT_USER_HANDLE`; SSO logins go through
+`provisionIdentity` (externalId-keyed upsert), which seeds `role` from `OWNER_GROUP`/`OWNER_HANDLES` on
+insert, then it's admin-managed (`userAdmin.setRole`). `requireAdmin` (`_shared/admin.ts`) + the tRPC
+`adminProcedure` gate admin surfaces (AppSettings, `userAdmin`). **Owner-only credential:** `max-pro-sub`
+(mode 1) is the host's single `claude login`; the gate is now ONE turn-time **credential resolver**
+(`_shared/credentials.ts` `resolveCredential`) covering every seam — admin/owner-only for the sub, with
+encrypted per-user (BYO) OpenRouter keys (→ host key fallback) for everyone else.
 
 **Lazy chat creation:** a `chats` row is written only at the first canon action (`chat.startChat` — the
 user's first message or a generated opening). The new-chat draft is CLIENT-side (seeded from

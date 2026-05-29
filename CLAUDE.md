@@ -27,17 +27,21 @@ home-via-raw-`http://LAN-IP` path — no session/cookie, so plaintext-http is fi
 (caddy+authentik forward-auth; trust `X-Authentik-*` by **verifying `X-Authentik-Jwt` against the
 JWKS**) · `oidc` (the app is an authentik OIDC client over HTTPS; works on a LAN HTTPS host too).
 Identity keys on the **stable `sub` / `X-Authentik-Uid`** (`users.externalId`); handle =
-`preferred_username`. **Built today:** a
-`users` table (+ `role` admin/user), `ownerId` scoping enforced in the `domain` layer, typed
-per-user `user_settings`, admin-gated AppSettings. **Locked but NOT yet built** (full spec:
-`docs/auth-and-credentials-plan.md`): the three `AUTH_MODE`s, `users.externalId`/`enabled`,
-revocable server-side **sessions** (cookie-backed), encrypted **per-user credentials** (bring-your-own
-OpenRouter key), and ONE turn-time **credential resolver** that gates everything — `max-pro-sub`
-(the owner's single host `claude login`) is admin/owner-only; non-owners bring their own
-OpenRouter key. **Correction (hard-won):** the old `X-Neo-Proxy` shared-secret trust is **NOT
-deployed** — the live Caddyfile never injects it, so today the app effectively runs
-single-user-owner regardless of authentik; `forward-header` mode replaces it with JWKS
-verification. **Deployment invariant:** don't expose port 8788 to an untrusted network.
+`preferred_username`. **Built (migrations 0025–0026 + the auth commits):** the three pluggable
+`AUTH_MODE`s (`single-user`/`forward-header`/`oidc`) + `AUTH_FALLBACK` via `auth/trust-header.ts`
+`resolveIdentity` (layered cookie→forward-header→fallback; `forward-header` verifies `X-Authentik-Jwt`
+against the JWKS); `users.externalId`/`enabled` + `provisionIdentity` (externalId-keyed, the SSO seam);
+the tRPC procedure ladder (`publicProcedure`→`authedProcedure`+CSRF→`adminProcedure`) on `ctx.auth`;
+revocable server-side **`sessions`** (HttpOnly/Secure/SameSite=Lax cookie, BFF); encrypted **per-user
+`user_credentials`** (AES-256-GCM, BYO OpenRouter key); ONE turn-time **credential resolver**
+(`_shared/credentials.ts` `resolveCredential`) gating every seam — `max-pro-sub` (the owner's single
+host `claude login`) admin/owner-only, everyone else BYO OpenRouter key (→ host key fallback, which is
+*temporary* — per-user keys are the goal); the `userAdmin` + `credentials` tRPC routers; OIDC routes
+(`auth-oidc.ts`, openid-client v6). The earlier `users`/`role`/`ownerId`-scoping/`user_settings`/
+admin-gated-AppSettings layer remains. **Hard-won:** the old `X-Neo-Proxy` shared-secret trust is **NOT
+deployed** (the live Caddyfile never injects it) — `forward-header` uses JWKS verification instead.
+**Deployment invariant:** don't expose port 8788 to an untrusted network. **Frontend** (login UI,
+key-entry, user-admin screens) is the remaining piece — server/domain/API are done.
 
 ## RP philosophy (the non-obvious vision — easy to lose)
 
@@ -217,12 +221,13 @@ is the main thing missing. Run `pnpm check` (must be green) and skim recent comm
   routing/preset/persona (`arg ?? userDefault ?? schemaDefault`, lenient on stale ids) then delegates
   the first turn to `send` (byte-identical; no duplication). `forkChat`/import still create rows
   eagerly (direct insert) — that's a commit. Tests scaffold via `seedChatRow` (`tests/support/db.ts`).
-- **`max-pro-sub` is the OWNER's single host credential** (the `claude login` Max sub). Today guarded
-  at **`startChat` only** (a non-owner defaulting into it → `DomainOperationError`); NOT guarded at
-  `setProvider`/`forkChat`/turn-time — fine under single-user. **The LOCKED fix (not yet built):** one
-  turn-time **credential resolver** (`docs/auth-and-credentials-plan.md` §8) becomes the single access
-  chokepoint across every seam — `max-pro-sub` admin/owner-only, `openrouter` resolves a per-user
-  (BYO, encrypted) key → host key. That replaces the scattered startChat guard.
+- **`max-pro-sub` is the OWNER's single host credential** (the `claude login` Max sub). Gated by ONE
+  turn-time **credential resolver** (`domain/_shared/credentials.ts` `resolveCredential`, the
+  `docs/auth-and-credentials-plan.md` §8 chokepoint) — the chat verbs (send/swipe/generateOpening/
+  compact + startChat's pre-insert gate) call it before running: `max-pro-sub` is admin/owner-only
+  (role-checked → `DomainForbiddenError`), `openrouter` resolves a per-user (BYO, AES-256-GCM-encrypted)
+  key → host `OPENROUTER_API_KEY` fallback → `DomainOperationError`. The host OR key is a *temporary*
+  fallback — per-user keys are the goal. (This replaced the old startChat handle-guard, now deleted.)
 - **Three typed config tiers** (`docs/settings-audit.md`): `env.ts` (deploy/box/secret/identity —
   unchanged) · **AppSettings** (admin-editable runtime toggles over the `settings` KV;
   `shared/app-settings.ts` + `server/config/app-config.ts`; env is the default FLOOR, DB override wins;
