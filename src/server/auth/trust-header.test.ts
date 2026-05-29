@@ -113,8 +113,8 @@ describe("resolveIdentity — forward-header", () => {
 });
 
 describe("resolveIdentity — oidc cookie", () => {
-  test("reads neo_session, validates it via the injected validator, and reports viaCookie", async () => {
-    const headers = new Headers({ cookie: "neo_session=opaque-token; other=x" });
+  test("reads __Host-neo_session, validates it via the injected validator, and reports viaCookie", async () => {
+    const headers = new Headers({ cookie: "__Host-neo_session=opaque-token; other=x" });
     const { identity, viaCookie } = await resolveIdentity(headers, cfg({ mode: "oidc" }), {
       validateSessionCookie: async (token) =>
         token === "opaque-token" ? { externalId: "ext-c", handle: "carol", groups: [] } : null,
@@ -125,7 +125,7 @@ describe("resolveIdentity — oidc cookie", () => {
 
   test("an unrecognized cookie on a LOCAL origin falls through to the owner fallback (not viaCookie)", async () => {
     // Stale cookie on the raw-LAN path → the owner fallback still applies (origin is local).
-    const headers = new Headers({ cookie: "neo_session=stale", ...LAN_ORIGIN });
+    const headers = new Headers({ cookie: "__Host-neo_session=stale", ...LAN_ORIGIN });
     const { identity, viaCookie } = await resolveIdentity(
       headers,
       cfg({ mode: "oidc", fallback: "owner" }),

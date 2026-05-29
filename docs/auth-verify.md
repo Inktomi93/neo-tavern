@@ -81,7 +81,8 @@ until the app moves into the compose stack.
    ```
    → checks healthz, `/api/auth/me` (no cookie → `authenticated:false`), and `/api/auth/login` → 302 to
    authentik. Then open the domain in a browser → you bounce to authentik → back to the app with a
-   `neo_session` cookie. Confirm in devtools the cookie is **HttpOnly + Secure + SameSite=Lax**.
+   `__Host-neo_session` cookie. Confirm in devtools it is **HttpOnly + Secure + SameSite=Lax** and the
+   name carries the **`__Host-`** prefix (Path=/, no Domain — the browser host-binds it).
 
 **forward-header (alternative).** Run the authentik outpost; paste the `forward-header` block
 (`import authentik` scoped to `/api/*`); set `AUTH_MODE=forward-header`, `OWNER_GROUP`. The app verifies

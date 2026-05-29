@@ -132,7 +132,7 @@ describe("auth at the route boundary (oidc + owner, real buildApp)", () => {
     const { chatId, ownerId } = await seedChatRow(db, { greeting: "hi" });
     const { token } = await services.sessions.create({ userId: ownerId });
     const res = await app.request(`/api/export/chat/${chatId}`, {
-      headers: { host: PUBLIC, cookie: `neo_session=${token}` },
+      headers: { host: PUBLIC, cookie: `__Host-neo_session=${token}` },
     });
     expect(res.status).toBe(200);
   });

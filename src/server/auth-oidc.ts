@@ -2,6 +2,7 @@ import type { Hono } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import * as client from "openid-client";
 import type { Db } from "../db/client";
+import { SESSION_COOKIE_NAME } from "./auth/trust-header";
 import { provisionIdentity } from "./domain/_shared/users";
 import type { SessionsService } from "./domain/sessions";
 import { env } from "./env";
@@ -13,11 +14,14 @@ import { getLog } from "./observability/logger";
 // (the open-redirect / CVE-2024-52289 class). The session rides in an HttpOnly/Secure/SameSite=Lax
 // cookie; NO token in any URL/fragment. openid-client v6 (its API differs substantially from v5).
 
-export const SESSION_COOKIE_NAME = "neo_session";
+// SESSION_COOKIE_NAME (the `__Host-`-prefixed name) is owned by auth/trust-header (the raw
+// resolveIdentity parser uses it too); re-exported here for the OIDC routes + tests.
+export { SESSION_COOKIE_NAME };
 
 // The session cookie attributes — the locked §11 contract: HttpOnly (an XSS can't exfiltrate it),
-// Secure (no plaintext-http session), SameSite=Lax (blocks cross-site POST but still rides the
-// top-level OAuth callback redirect — why Lax, not Strict). Path "/" so it covers the whole app.
+// Secure (no plaintext-http session — ALSO required by the `__Host-` name prefix), SameSite=Lax
+// (blocks cross-site POST but still rides the top-level OAuth callback redirect — why Lax, not
+// Strict), Path "/" + NO Domain (the other two `__Host-` requirements). So the host-binding holds.
 export function sessionCookieOptions(maxAgeSeconds: number) {
   return {
     httpOnly: true,
@@ -183,7 +187,9 @@ export function registerOidcRoutes(app: Hono, db: Db, sessions: SessionsService)
     if (token) {
       await sessions.revokeByToken(token);
     }
-    deleteCookie(c, SESSION_COOKIE_NAME, { path: "/" });
+    // `secure: true` is required to clear a `__Host-` cookie (the expiring Set-Cookie must itself be a
+    // valid __Host- cookie: Secure + Path=/ + no Domain), or the browser ignores it and the cookie lives.
+    deleteCookie(c, SESSION_COOKIE_NAME, { path: "/", secure: true });
     return c.json({ ok: true });
   });
 

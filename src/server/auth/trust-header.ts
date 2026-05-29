@@ -41,7 +41,7 @@ export interface AuthConfig {
 /** Injected, db-dependent resolution steps (wired at the composition root; absent ⇒ that layer is
  *  inert). Keeps this infra module from importing the domain/db layers it sits below. */
 export interface ResolveDeps {
-  /** Validate a `neo_session` cookie token → identity, or null if missing/revoked/expired/disabled.
+  /** Validate a `__Host-neo_session` cookie token → identity, or null if missing/revoked/expired/disabled.
    *  Backed by the sessions domain service (which enforces users.enabled every request). oidc only. */
   validateSessionCookie?: (token: string) => Promise<ResolvedIdentity | null>;
 }
@@ -60,7 +60,12 @@ export interface IdentityResolution {
   viaFallback: boolean;
 }
 
-const SESSION_COOKIE = "neo_session";
+// The session cookie name carries the `__Host-` prefix (2026 hardening): the browser binds the cookie
+// to the EXACT host and rejects any Set-Cookie that lacks Secure / Path=/ or carries a Domain — which
+// kills subdomain cookie-injection + fixation. `sessionCookieOptions` (auth-oidc.ts) satisfies those.
+// This literal name is the single source of truth — the raw `readCookie` parser below AND the Hono
+// helpers in auth-oidc.ts use it verbatim. OWASP's gold-standard session-cookie name.
+export const SESSION_COOKIE_NAME = "__Host-neo_session";
 const CSRF_HEADER = "x-neo-csrf";
 
 export function authConfigFromEnv(): AuthConfig {
@@ -189,7 +194,7 @@ export async function resolveIdentity(
 ): Promise<IdentityResolution> {
   // 1. Session cookie (oidc).
   if (config.mode === "oidc" && deps.validateSessionCookie) {
-    const token = readCookie(headers, SESSION_COOKIE);
+    const token = readCookie(headers, SESSION_COOKIE_NAME);
     if (token) {
       const identity = await deps.validateSessionCookie(token);
       if (identity) return { identity, viaCookie: true, viaFallback: false };

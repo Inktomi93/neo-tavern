@@ -259,7 +259,7 @@ signature — it has ~7 call sites: `app.ts` `createContext` + the export/import
 expecting `string`):
 - **`resolveIdentity(headers) → { externalId: string|null; handle: string; groups: string[] } | null`**
   — the layered resolver, tried **in order, per request**:
-  1. **Session cookie** (when `AUTH_MODE=oidc`): read `neo_session` from the `Cookie` header → hash →
+  1. **Session cookie** (when `AUTH_MODE=oidc`): read `__Host-neo_session` from the `Cookie` header → hash →
      `sessions` lookup (exists, not `revokedAt`, not expired, owner `enabled`) → that identity. (§4)
   2. **Forward-auth header** (when `AUTH_MODE=forward-header`): `X-Authentik-Uid` (externalId) /
      `-Username` (handle) / `-Groups`, **trusted by verifying `X-Authentik-Jwt` against the JWKS**
@@ -277,7 +277,7 @@ expecting `string`):
   CSRF on mutating POSTs). New code needing externalId/groups still calls `resolveIdentity` directly.
 
 **"Both modes at once" (the owner's want):** `AUTH_MODE=oidc` + `AUTH_FALLBACK=owner` = **SSO on the
-domain** (a valid `neo_session` cookie → your SSO identity) **AND owner on the raw LAN IP** (no cookie,
+domain** (a valid `__Host-neo_session` cookie → your SSO identity) **AND owner on the raw LAN IP** (no cookie,
 LOCAL origin → fallback to the owner) — *one running process, both behaviors*. The "no cookie → owner"
 half is **origin-gated** (above): on the public FQDN a no-cookie request gets `null`→401, NOT the owner,
 so the LAN convenience never leaks onto the domain. `AUTH_FALLBACK=deny` makes SSO mandatory everywhere
@@ -303,7 +303,7 @@ exfiltrate** the credential. We rejected localStorage for that reason.)
 - After the OIDC callback, mint an **opaque** random token (32 bytes, base64url), store only its
   **hash** in a **`sessions`** row (`id`, `userId → users.id`, `tokenHash`, `createdAt`, `lastSeenAt`,
   `expiresAt`, `revokedAt?`, `userAgent`/`label?`), and set it as the session cookie:
-  `Set-Cookie: neo_session=<token>; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=…`. The browser
+  `Set-Cookie: __Host-neo_session=<token>; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=…`. The browser
   sends it automatically — including on the **SSE stream** (EventSource sends cookies same-origin), so
   push needs no extra auth plumbing.
 - Validate every request by **hashing the cookie → `sessions` lookup**: row exists, not `revokedAt`,

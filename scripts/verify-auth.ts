@@ -1,6 +1,7 @@
 import process from "node:process";
 import { exportJWK, generateKeyPair, type JWK, SignJWT } from "jose";
 import { createDb } from "../src/db/client";
+import { SESSION_COOKIE_NAME } from "../src/server/auth/trust-header";
 import { provisionIdentity } from "../src/server/domain/_shared/users";
 import { createSessionsService } from "../src/server/domain/sessions";
 import { env } from "../src/server/env";
@@ -158,7 +159,7 @@ async function verifyOidc(): Promise<void> {
     userId: id,
     userAgent: "verify-auth probe",
   });
-  const cookie = `neo_session=${token}`;
+  const cookie = `${SESSION_COOKIE_NAME}=${token}`;
 
   const authed = await authedQuery({ cookie });
   check(

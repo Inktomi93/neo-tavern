@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { deriveRedirectUri, sessionCookieOptions } from "./auth-oidc";
+import { deriveRedirectUri, SESSION_COOKIE_NAME, sessionCookieOptions } from "./auth-oidc";
 
 // The security-critical PURE logic of the OIDC routes (the network legs — discovery, code exchange —
 // are exercised by the manual smoke test in docs/auth.md, per tests/AGENTS.md "mock only the provider
@@ -60,5 +60,13 @@ describe("sessionCookieOptions — the locked §11 cookie contract", () => {
     expect(opts.sameSite).toBe("Lax");
     expect(opts.path).toBe("/");
     expect(opts.maxAge).toBe(3600);
+  });
+
+  test("uses the __Host- name prefix + satisfies its requirements (Secure, Path /, no Domain)", () => {
+    expect(SESSION_COOKIE_NAME.startsWith("__Host-")).toBe(true);
+    const opts = sessionCookieOptions(3600);
+    expect(opts.secure).toBe(true); // __Host- requires Secure
+    expect(opts.path).toBe("/"); // __Host- requires Path=/
+    expect("domain" in opts).toBe(false); // __Host- forbids a Domain attribute
   });
 });
