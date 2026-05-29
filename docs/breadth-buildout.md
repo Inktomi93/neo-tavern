@@ -26,12 +26,22 @@ migrations, the vector-index lesson, Serena editing).
 
 ## Working discipline (read once, applies to all tracks)
 
+- **BUILD IT IN FULL — DO NOT PUSS OUT.** These tracks are deliberately feature-breadth, NOT YAGNI.
+  Do not stub it, do not ship the quick-and-dirty 80%, do not silently narrow scope to dodge the hard
+  part (the undici egress hook, the in-process k-means, the branded-ID churn, the all-pairs matmul).
+  "Hard/big" is not a reason to skip — it's a reason to split into commits and build the whole thing.
+  If you genuinely believe a piece should be cut, SAY SO EXPLICITLY and why — never quietly downgrade.
+  We set out to do cool shit; do the cool shit.
+- **USE SERENA'S SYMBOLIC TOOLS for quick ops — do not default to read-the-whole-file + hand-rewrite.**
+  Serena is the active LSP. Inventory with `search_for_pattern`; navigate with `get_symbols_overview`
+  + `find_symbol`(include_body); edit with `replace_content` / `replace_symbol_body` /
+  `insert_before_symbol` / `insert_after_symbol` (no prior Read needed, exact-match safe). These are
+  faster and more precise than the generic file tools. (Caveat: `get_diagnostics_for_file` can be STALE
+  right after you edit a type-definition file — the LSP doesn't reload dependents — so trust a fresh
+  `tsc` over it.)
 - **Green-to-ship:** `pnpm check` = biome + `tsc --noEmit` + `pnpm arch` (dependency-cruiser) + vitest.
   Must be green before every commit. Commit directly to `main`, one logical step per commit, with the
   `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>` trailer.
-- **Editing:** Serena is the active LSP — prefer `replace_content` / `replace_symbol_body` /
-  `insert_*` over blind rewrites. Serena's `get_diagnostics_for_file` can be STALE after editing a
-  type-definition file (the LSP doesn't reload dependents) — trust `tsc` (fresh) over it.
 - **Layer cake (enforced by `.dependency-cruiser.cjs`):** `shared`/`db` are foundation. `domain`
   features expose a front-door `index.ts`; callers never reach internals; features don't import each
   other. tRPC routers are THIN (validate → call `ctx.services.*` → map domain errors); they can't
@@ -146,6 +156,38 @@ undici global-vs-library dispatcher (test interception). CSP vs Vite build (iter
 
 # Track B — Corpus RAG analytics (the differentiator)
 
+## B.0 — card-curator answer-key: what each prior system DOES / CALCULATES (rebuild reference)
+`references/card-curator` (a prior project of ours — ChromaDB + Qwen3-VL embeddings, an MCP tool
+server) already BUILT most of this analytics surface. This is the rebuild map: what each system
+computes, where it lives, and the neo target. **Port the LOGIC/calculations, not the storage/model
+glue** — card-curator embeds Qwen3-VL into ChromaDB; neo uses BGE-M3 in libSQL.
+
+| System — what it computes | card-curator `file:line` | neo target / status |
+|---|---|---|
+| **CSLS hub score** = mean cosine to K=10 nearest same-set neighbors (exact `embs @ embs.T`, zero self, top-K mean) | `index.py:62` `_compute_hub_scores` | ✅ DONE — `corpus/hubness.ts` |
+| **Resumable embed+index** with content-hash change detection (skip unchanged on re-run) | `index.py:144` `build_index` (+ hashes `:107-133`) | ✅ DONE — `scripts/embed-corpus.ts` + `existingKeys` |
+| **Duplicate detection** — all-pairs sim, keep pairs ≥ threshold (default **0.92**), dedupe (A,B)/(B,A), sort desc, top-N; `by` text\|image; `sim = 1 − dist/2` | `server.py:926` `find_duplicates` | **Pillar C** — port the threshold/dedupe logic; use the exact matmul (per B.7), not per-row search |
+| **"More like this"** — kNN by text OR image embedding | `server.py:663` `similar_cards` | **Breadth** — `similarCards` / `similarChats` |
+| **Genre classification** — per-card LLM → `{primary_genre, sub_genres[], tone, setting}` (GENRE_SCHEMA) | `analyze.py:135` `classify_genre` | **Theme route A** (per-card tags) + tag auto-suggest |
+| **Card summary** — 2–3 sentence LLM summary | `analyze.py:149` `summarize_card` | Breadth (card preview) |
+| **Card comparison** — LLM → `{similarities, differences, redundancy_score 0–1, verdict}` (COMPARISON_SCHEMA) | `analyze.py:160` `compare_cards` | **Breadth** — pairs with dedup ("compare these two") |
+| **Arbitrary-schema Q&A** over a card (JSON-schema-constrained local model) | `analyze.py:101` `ask_about_card` / `server.py:876` | Breadth; the pattern theme-naming reuses |
+| **Bulk LLM analysis** over many cards | `server.py:1434` `batch_analyze` | Breadth (theme naming = this pattern) |
+| **Per-character stats** — totals (chats/main/branch, messages user/char, swipes), word & token counts, first/last date, **every message datetime**, `models_used{}`, `apis_used{}`, reasoning count+duration, gen-time & TTFT tallies | `chats.py:236` `CharacterStats` + `:556` `get_chat_stats` + `:492` `_aggregate_chat_files` | **Breadth** `characterProfile` — compute from neo DB rows (`messages`/`chats`), NOT JSONL re-parse |
+| **Popularity ranking** — rank characters by engagement | `chats.py:587` `get_popularity_ranking`; `server.py:745` `chat_popularity` | Breadth (dashboard) |
+| **Character detail** — one character's full aggregate | `chats.py:615` `get_character_detail`; `server.py:766` | Breadth `characterProfile` |
+| **Activity by time** — message counts by **day-of-week** & **hour-of-day** + top-5 chars per bucket | `chats.py:704` `get_activity_by_time`; `server.py:1333` `chat_timeline`, `:1396` `chat_activity` | **The timeline answer-key** (needs `msgMidAt`) + dashboard heatmap |
+| **Per-model usage** across the corpus | `server.py:1279` `model_summary`; `chats.py:331` `_tally_model_api` | Breadth `corpusStats` (neo reads `messages.model`) |
+| **Unused cards** — cards with zero chats | `server.py:1219` `find_unused_cards` | **"Forgotten gems"** (richer: low-revisit, not just zero) |
+| **Semantic chat search + raw click-through** | `server.py:994` `search_chats` + `:1161` `get_chat_context` | ✅ DONE — `search.corpus`/`discover` + seq spans |
+| **Chat segmentation at user/char PAIR boundaries** (a user msg + reply = one unit) | `chat_index.py:68` `segment_chat` + `:48` `_is_pair_boundary` | Reference — neo uses fixed `blockSize=8` (`memory/generate.ts`); pair-boundary is the option if block edges feel arbitrary |
+| **Separate stats index/collection** | `chat_index.py:492` `build_stats_index` | neo keeps stats as live SQL aggregates (no separate index) |
+
+**NOT in card-curator → these are neo-ORIGINAL (build fresh, no port):**
+- **Keyword×keyword co-occurrence** (Pillar A) — card-curator has none; neo builds it on `chat_digests.keywords`.
+- **Emergent theme CLUSTERING via k-means** (Pillar B) — card-curator does themes the SIMPLE way: per-card LLM `classify_genre` tags. So neo has TWO routes: **(A) port `classify_genre`** (proven, simple, per-card tags — good first cut, immediately feeds tag auto-suggest) and **(B) k-means emergent clustering** of digest embeddings (richer, neo-new, surfaces themes nobody labeled). Recommend A first, B as the deeper layer.
+- card-curator is per-CARD; neo extends the SAME calculations to CHATS / digests / segments (more substrate).
+
 ## B.1 Current state — what the engine already gives you (`file:line`)
 - **Character embeds:** `src/server/domain/corpus/service.ts` (`embedAndStore`/`embedAndStoreMany`/`existingKeys`) → `character_embeddings` (1024-dim, model-tagged). Targets from `src/server/domain/corpus/targets.ts` + `embed-text.ts`. Resumable GPU pass `scripts/embed-corpus.ts`.
 - **Chat memory substrate (live, incremental):** `src/server/domain/chat/memory/generate.ts` — `generateDigests` (LLM-summarized tier-0 blocks of `blockSize=8`, + consolidation tiers 1–3) → `chat_digests` (with `topicAnchor`, `keywords[]`, `seqStart/seqEnd`, `hubScore`); `generateSegments` (embed-only, full coverage) → `chat_segments`. Backfill: `scripts/memory-backfill.ts`.
@@ -171,7 +213,7 @@ Unit: cluster the ~2,500 tier-0 digest embeddings into themes. **k-means** in **
 **New tables:** `theme_clusters(id, owner_id, model, cluster_idx, theme_name, sub_themes json, description, centroid F32_BLOB(1024), member_count, computed_at, UNIQUE(owner,model,cluster_idx))` — centroids are few (~30), query by **loading direct**, no ANN index needed; `digest_theme_assignments(digest_id→cascade PK, cluster_idx, owner_id, distance, computed_at)` + index (owner,cluster_idx).
 **Precompute** `scripts/compute-themes.ts` (`--k` CLI + emit inertia/silhouette for elbow): load digests → k-means → name clusters → upsert. Tag `model`; re-run on embedder swap or after `memory:backfill`.
 **tRPC:** `themes()`, `themeTimeline(clusterId,bucketDays?)`, `characterThemeProfile(characterId)`, `themeCharacters(clusterId,limit)`.
-**DATA-MODEL GAP (decide early):** `chat_digests.createdAt` is *compute* time, not *story* time. The timeline needs a new **`msgMidAt integer`** column on `chat_digests` (median/midpoint message epoch-ms of the block's `seqStart..seqEnd`), populated by `generateDigests`. Cheap to add now while near the schema; epoch-ms UTC per `shared/time.ts`.
+**DECIDED — build it in this track (locked in):** add a **`msgMidAt integer`** column to `chat_digests` (epoch-ms UTC = the midpoint message time of the block's `seqStart..seqEnd`, via `shared/time.ts`), populated by `generateDigests`, and **backfill existing digests** (extend `scripts/memory-backfill.ts` or a one-off join to `messages`). This is the *story*-time axis the theme timeline buckets on — `chat_digests.createdAt` is *compute* time (a backfill burst) and is wrong for timelines. Additive migration on `chat_digests`; ship it as part of the themes schema step (B.8 step 6).
 
 ## B.5 Pillar C — Duplicate / near-duplicate detection — **effort S (80% built)**
 - **Characters:** new `src/server/domain/corpus/duplicates.ts` `findDuplicateCharacters({threshold=0.92})` — port `server.py:926-987` + `st-bridge embeddings.py:179-220`. Reuse `computeGroupHubs`'s load+normalize+matmul; emit pairs with **CSLS-adjusted** cosine ≥ threshold, deduped (a,b)/(b,a), sorted desc. 310² trivial.
@@ -286,9 +328,12 @@ security gap, UI-independent. (2) Track B **dedup + co-occurrence** — fastest 
 clean commits. (4) Track B **themes + breadth** — the bigger build (needs `msgMidAt` + backfill).
 (5) **Branded IDs** — once, deliberately.
 
-**Decide before building:**
-- **`msgMidAt` digest column** (Track B.4) — add now while near the schema (cheap; the theme timeline needs it).
-- **Branded IDs** (Track C.3) — high safety, domain-wide churn; opt in explicitly.
+**Decided (owner sign-off):**
+- **`msgMidAt` digest column** (Track B.4) — **LOCKED IN to the RAG track.** Add the column + populate
+  in `generateDigests` + backfill, as part of the themes schema step (B.8 step 6). Not optional.
+- **Branded IDs** (Track C.3) — **APPROVED as a standalone follow-up pass.** Do the full domain-wide
+  refactor (don't half-do it), but on a quiet tree — its own dedicated PR/commit-series, NOT interleaved
+  with feature work, so the churn doesn't tangle a feature diff. It's the last item in Track C (C.4).
 
 Effort totals (rough): Track A core ~1 wk; Track B pillars+core breadth ~3–4 wk (+1–2 stretch);
 Track C mechanical ~2–3 days + branded IDs ~few days.
