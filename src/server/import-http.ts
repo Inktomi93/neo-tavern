@@ -20,7 +20,6 @@ import {
   parseChatJsonl,
   slugifyHandle,
 } from "./domain/import";
-import { env } from "./env";
 import { getLog } from "./observability/logger";
 
 // First-class ST import over HTTP (the inverse of the export routes). Owner-scoped via the same
@@ -36,8 +35,7 @@ const sha256 = (b: Uint8Array): string => createHash("sha256").update(b).digest(
 const isPng = (b: Uint8Array): boolean =>
   b.length > 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47;
 
-const username = (req: Request): string =>
-  resolveUsername(req.headers, env.NEO_PROXY_SECRET, env.DEFAULT_USER_HANDLE);
+const username = (req: Request): Promise<string> => resolveUsername(req.headers);
 
 // Locate the ST profile dir (the one with characters/ and/or chats/) inside an unzipped tree — the
 // zip may wrap everything in a top-level folder (e.g. default-user/). Checks the root, then one level.
@@ -57,7 +55,7 @@ export function registerImportRoutes(app: Hono, db: Db, assets: AssetsService): 
   // POST /api/import/cards — one or more character cards (PNG with embedded chunk, or bare V2/V3 JSON).
   // multipart field `files` (repeatable) or `file`.
   app.post("/api/import/cards", async (c) => {
-    const owner = username(c.req.raw);
+    const owner = await username(c.req.raw);
     const body = await c.req.parseBody({ all: true });
     // biome-ignore lint/complexity/useLiteralKeys: parseBody returns an index signature (TS needs bracket access)
     const raw = body["files"] ?? body["file"];
@@ -106,7 +104,7 @@ export function registerImportRoutes(app: Hono, db: Db, assets: AssetsService): 
   // [repeatable] + a `characterId` form field; the UI picks the target since ST chat headers don't
   // carry a reliable character name).
   app.post("/api/import/chats", async (c) => {
-    const owner = username(c.req.raw);
+    const owner = await username(c.req.raw);
     const body = await c.req.parseBody({ all: true });
     // biome-ignore lint/complexity/useLiteralKeys: parseBody returns an index signature (TS needs bracket access)
     const characterId = typeof body["characterId"] === "string" ? body["characterId"] : "";
@@ -148,7 +146,7 @@ export function registerImportRoutes(app: Hono, db: Db, assets: AssetsService): 
   // The bulk migration path: reuses the exact CLI pipeline (collectBundlesFromDir → importCharacter),
   // so card↔chat pairing, branch-linking, idempotency, and the skip-list all come for free.
   app.post("/api/import/zip", async (c) => {
-    const owner = username(c.req.raw);
+    const owner = await username(c.req.raw);
     const body = await c.req.parseBody();
     // biome-ignore lint/complexity/useLiteralKeys: parseBody returns an index signature (TS needs bracket access)
     const file = body["file"];

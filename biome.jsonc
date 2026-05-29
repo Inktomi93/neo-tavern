@@ -261,6 +261,13 @@
       "linter": { "rules": { "style": { "useNamingConvention": "off" } } }
     },
     {
+      // The auth seam reads authentik's OIDC/JWT claim names verbatim (preferred_username, sub,
+      // groups) — an external IdP wire shape, snake_case by spec — so useNamingConvention can't apply
+      // (cf. the providers + env.ts overrides). The test signs/asserts the same claim shape.
+      "includes": ["src/server/auth/trust-header.ts", "src/server/auth/trust-header.test.ts"],
+      "linter": { "rules": { "style": { "useNamingConvention": "off" } } }
+    },
+    {
       // The corpus importer parses SillyTavern's external, multi-spec wire JSON,
       // whose field names are snake_case by spec (first_mes, char_name, insertion_order…).
       // Keeping those names visible makes the port auditable against the ST spec +

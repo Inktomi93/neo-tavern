@@ -14,7 +14,7 @@ import { ensureUser } from "./domain/_shared/users";
 import { createAssetsService } from "./domain/assets";
 import { createDebugService } from "./domain/debug";
 import { createExportService } from "./domain/export";
-import { env } from "./env";
+// The auth seam (resolveUsername) reads env internally now — app.ts no longer needs the env import.
 import { registerImportRoutes } from "./import-http";
 import { debugAuthMiddleware, registerDebugRoutes } from "./observability/debug";
 import { getLog } from "./observability/logger";
@@ -138,7 +138,7 @@ export function buildApp(db: Db, cas: Cas, services: Services, isProd: boolean) 
 
   app.post("/api/assets/upload", async (c) => {
     // Validate auth / tenancy seamlessly
-    resolveUsername(c.req.raw.headers, env.NEO_PROXY_SECRET, env.DEFAULT_USER_HANDLE);
+    await resolveUsername(c.req.raw.headers);
 
     const body = await c.req.parseBody();
     // biome-ignore lint/complexity/useLiteralKeys: TS requires index signature access
@@ -162,11 +162,7 @@ export function buildApp(db: Db, cas: Cas, services: Services, isProd: boolean) 
   // Export downloads (transport, not canon → generated on demand, not stored in CAS). Owner-scoped
   // via the same header-trust model as tRPC. PNG card / ST JSONL — the inverse of import.
   app.get("/api/export/character/:characterId", async (c) => {
-    const username = resolveUsername(
-      c.req.raw.headers,
-      env.NEO_PROXY_SECRET,
-      env.DEFAULT_USER_HANDLE,
-    );
+    const username = await resolveUsername(c.req.raw.headers);
     const ownerId = await ensureUser(db, username);
     const result = await exportService.exportCharacter(ownerId, c.req.param("characterId"));
     if (!result) return c.notFound();
@@ -177,11 +173,7 @@ export function buildApp(db: Db, cas: Cas, services: Services, isProd: boolean) 
   });
 
   app.get("/api/export/chat/:chatId", async (c) => {
-    const username = resolveUsername(
-      c.req.raw.headers,
-      env.NEO_PROXY_SECRET,
-      env.DEFAULT_USER_HANDLE,
-    );
+    const username = await resolveUsername(c.req.raw.headers);
     const ownerId = await ensureUser(db, username);
     const result = await exportService.exportChat(ownerId, c.req.param("chatId"));
     if (!result) return c.notFound();
@@ -196,9 +188,9 @@ export function buildApp(db: Db, cas: Cas, services: Services, isProd: boolean) 
       endpoint: "/api/trpc",
       req: c.req.raw,
       router: appRouter,
-      createContext: ({ req }) =>
+      createContext: async ({ req }) =>
         createContext({
-          username: resolveUsername(req.headers, env.NEO_PROXY_SECRET, env.DEFAULT_USER_HANDLE),
+          username: await resolveUsername(req.headers),
           services,
         }),
       onError: ({ error, path, type }) => {

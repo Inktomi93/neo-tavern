@@ -73,6 +73,7 @@
     "drizzle-orm": "^0.45.2",
     "fflate": "^0.8.3",
     "hono": "^4.12.22",
+    "jose": "^6.2.3",
     "lucide-react": "^1.16.0",
     "luxon": "^3.7.2",
     "nanoid": "^5.1.11",
