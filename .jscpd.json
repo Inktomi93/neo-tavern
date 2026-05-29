@@ -1,0 +1,44 @@
+{
+  "$schema": "https://raw.githubusercontent.com/kucherenko/jscpd/master/apps/jscpd/jscpd-schema.json",
+
+  "path": ["src"],
+
+  "// formats": "Only check the languages actually in play; skips migration SQL noise.",
+  "format": ["typescript", "css"],
+
+  "// minTokens": "50 (default) catches real duplication; lower → more noise.",
+  "minTokens": 50,
+
+  "// minLines": "5 lines minimum — below this it's just coincidence.",
+  "minLines": 5,
+
+  "// maxLines": "Bump from 1000 → 2000 to handle large generated files.",
+  "maxLines": 2000,
+
+  "// maxSize": "Skip files over 200kb (snapshots, fixtures, etc.).",
+  "maxSize": "200kb",
+
+  "// threshold": "CI gate: fail if duplication exceeds 5%. Adjust as you tighten things up.",
+  "threshold": 5,
+
+  "// gitignore": "Respect .gitignore — no analysis of node_modules, dist, .models, etc.",
+  "gitignore": true,
+
+  "ignore": [
+    "**/*.test.ts",
+    "**/*.spec.ts",
+    "**/migrations/**",
+    "**/snapshots/**",
+    "**/__fixtures__/**",
+    "**/references/**"
+  ],
+
+  "// reporters": "Console for interactive use. Use 'cpd:report' for the full HTML output.",
+  "reporters": ["console"],
+
+  "// skipComments": "Strip comments before tokenising — avoids matching comment boilerplate.",
+  "skipComments": true,
+
+  "// noTips": "Suppress the AI/sponsor tips in CI output.",
+  "noTips": true
+}

@@ -3,7 +3,7 @@ import { expect, test } from "vitest";
 import { chatDigests, chatSegments, messages } from "../../src/db/schema";
 import { newId } from "../../src/server/domain/_shared/ids";
 import { createChatService } from "../../src/server/domain/chat";
-import { generateDigests, generateSegments } from "../../src/server/domain/chat/memory";
+import { generateDigests, generateSegments } from "../../src/server/domain/chat/memory/generate";
 import { computeDigestHubScores, computeSegmentHubScores } from "../../src/server/domain/corpus";
 import type { Embedder } from "../../src/server/embeddings/embedder";
 import type { Summarizer } from "../../src/server/embeddings/summarizer";

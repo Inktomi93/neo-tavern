@@ -1,3 +1,4 @@
+import { playwright } from "@vitest/browser-playwright";
 import { defineConfig } from "vitest/config";
 
 // Testing doctrine lives in tests/AGENTS.md. When client/component tests land,
@@ -22,12 +23,17 @@ export default defineConfig({
       {
         test: {
           name: "client",
-          environment: "happy-dom",
+          browser: {
+            enabled: true,
+            provider: playwright(),
+            instances: [{ browser: "chromium" }],
+          },
           include: ["src/client/**/*.test.{ts,tsx}"],
           setupFiles: ["tests/support/setup-dom.ts"],
         },
       },
     ],
+    isolate: false,
     exclude: ["**/node_modules/**", "**/dist/**", "references/**", "tests/e2e/**"],
     restoreMocks: true,
     passWithNoTests: true,

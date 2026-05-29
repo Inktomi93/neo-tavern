@@ -4,7 +4,7 @@ import type { Db } from "../../src/db/client";
 import { chatSegments, messages } from "../../src/db/schema";
 import { newId } from "../../src/server/domain/_shared/ids";
 import { createChatService } from "../../src/server/domain/chat";
-import { generateDigests, generateSegments } from "../../src/server/domain/chat/memory";
+import { generateDigests, generateSegments } from "../../src/server/domain/chat/memory/generate";
 import { createSearchService } from "../../src/server/domain/search/service";
 import type { Embedder } from "../../src/server/embeddings/embedder";
 import type { Reranker } from "../../src/server/embeddings/reranker";

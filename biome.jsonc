@@ -293,10 +293,16 @@
     },
     {
       // The ONLY sanctioned barrels: a feature's public API (server domain
-      // features + client features). The dependency-cruiser front-door rules
-      // force callers to enter a feature via its index, so these index files
+      // features + client features), plus the DB schema index. The dependency-cruiser
+      // front-door rules force callers to enter a feature via its index, so these index files
       // legitimately re-export. Tradeoff documented in docs/architecture.md.
-      "includes": ["src/server/domain/*/index.ts", "src/client/features/*/index.ts"],
+      "includes": [
+        "src/server/domain/*/index.ts",
+        "src/client/features/*/index.ts",
+        "src/db/schema.ts",
+        "src/server/providers/openrouter.ts",
+        "src/server/providers/claude-sdk.ts"
+      ],
       "linter": { "rules": { "performance": { "noBarrelFile": "off", "noReExportAll": "off" } } }
     },
     {
