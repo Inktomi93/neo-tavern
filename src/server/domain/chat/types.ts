@@ -1,5 +1,10 @@
+import type { ChatApi, ChatSource } from "../../../shared/chat-routing";
 import type { TurnErrorKind } from "../../providers/turn";
 import { DomainNotFoundError, DomainOperationError } from "../_shared/errors";
+
+// The chat-routing vocabulary now lives in one place (shared/chat-routing.ts) — re-exported here so
+// existing importers of ChatApi/ChatSource from this module keep working unchanged.
+export type { ChatApi, ChatSource };
 
 // Shaped, client-safe view of a message row. Carries the per-turn provenance the chat UI needs
 // (the context-fill meter off contextWindow, a cost/latency readout, the edited marker) — the
@@ -124,10 +129,6 @@ export interface SendParams {
   expectedSeq: number;
   content: string;
 }
-
-/** The api/source a chat runs as (matches chats.api/source; see domain/chat/routing). */
-export type ChatApi = "agent-sdk" | "chat-completions" | "responses";
-export type ChatSource = "max-pro-sub" | "openrouter";
 
 export interface ForkChatParams {
   username: string;

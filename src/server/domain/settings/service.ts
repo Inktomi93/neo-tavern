@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import type { Db } from "../../../db/client";
 import { settings, userSettings } from "../../../db/schema";
+import { parseUserSettings, USER_SETTINGS_SCHEMA_VERSION } from "../../../shared/user-settings";
 import { logAudit } from "../_shared/audit";
 import { ensureUser } from "../_shared/users";
 import type {
@@ -17,10 +18,11 @@ export function createSettingsService(db: Db): SettingsService {
     let row = rows[0];
 
     if (!row) {
-      // Create default settings if none exist
+      // First touch: persist an empty blob at the current schema version. parseUserSettings fills
+      // every default on read, so the stored row stays minimal ({}) while callers get the full contract.
       const defaultSettings = {
         userId: ownerId,
-        schemaVersion: 1,
+        schemaVersion: USER_SETTINGS_SCHEMA_VERSION,
         config: {},
         updatedAt: Date.now(),
       };
@@ -28,7 +30,12 @@ export function createSettingsService(db: Db): SettingsService {
       row = defaultSettings;
     }
 
-    return row;
+    return {
+      userId: row.userId,
+      schemaVersion: row.schemaVersion,
+      config: parseUserSettings(row.config),
+      updatedAt: row.updatedAt,
+    };
   }
 
   async function updateUserSettings(

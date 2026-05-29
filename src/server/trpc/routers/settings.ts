@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { userSettingsSchema } from "../../../shared/user-settings";
 import { publicProcedure, t } from "../trpc";
 
 export const settingsRouter = t.router({
@@ -9,7 +10,7 @@ export const settingsRouter = t.router({
   updateUserSettings: publicProcedure
     .input(
       z.object({
-        config: z.any(),
+        config: userSettingsSchema,
         schemaVersion: z.number().int().optional(),
       }),
     )

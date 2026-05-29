@@ -1,12 +1,16 @@
+import type { UserSettings } from "../../../shared/user-settings";
+
 export interface UserSettingsView {
   userId: string;
   schemaVersion: number;
-  config: unknown;
+  /** Parsed + defaulted (via `parseUserSettings`) — callers get the typed contract, not a raw blob. */
+  config: UserSettings;
   updatedAt: number;
 }
 
 export interface UpdateUserSettingsInput {
-  config: unknown;
+  /** Validated against `userSettingsSchema` at the router/service boundary (full-replace semantics). */
+  config: UserSettings;
   schemaVersion?: number | undefined;
 }
 
