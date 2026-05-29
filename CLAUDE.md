@@ -16,20 +16,22 @@ RAG / analytics superpower** over my entire RP corpus — 300+ characters, hundr
 semantic search, theme analysis, co-occurrence. The corpus layer is the **killer
 differentiator** no other ST client has; the chat is the daily driver. Both matter.
 
-**Auth & tenancy.** *No cookies, ever → no CSRF by construction* — identity is resolved
-per-request, from a forward-auth header or a **bearer token** the SPA sends in `Authorization`
-(never a `Set-Cookie`; a forged cross-site request carries no ambient credential to ride, so no
-CSRF machinery exists). The app only ever *consumes* identity — it is **never an IdP** (no
-passwords, no local login form). **Auth model = a pluggable `AUTH_MODE`:** `single-user`
-(DEFAULT, zero-infra → identity = `DEFAULT_USER_HANDLE`, the owner) · `forward-header`
-(caddy+authentik forward-auth; trust the forwarded `X-Authentik-*` identity by **verifying the
-`X-Authentik-Jwt` against authentik's JWKS**) · `oidc` (the app is an authentik OIDC client, so
-real per-account login works even on direct LAN). Identity keys on the **stable `sub` /
-`X-Authentik-Uid`** (`users.externalId`); handle = `preferred_username`. **Built today:** a
+**Auth & tenancy.** The app only ever *consumes* identity — **never an IdP** (no passwords, no local
+login form). The browser session is an **HttpOnly, Secure, `SameSite=Lax` cookie** holding an opaque,
+revocable session id — the **BFF pattern** (we're a confidential OIDC client), which is what OWASP +
+the IETF *OAuth 2.0 for Browser-Based Apps* BCP recommend. **Not** a JS-readable/localStorage token
+(any XSS would steal it). CSRF is mitigated *cheaply*: `SameSite=Lax` + a required custom request
+header on mutations + server-side PKCE state — no heavy CSRF framework. **Auth model = a pluggable
+`AUTH_MODE`:** `single-user` (DEFAULT, zero-infra → identity = `DEFAULT_USER_HANDLE`, the owner; the
+home-via-raw-`http://LAN-IP` path — no session/cookie, so plaintext-http is fine) · `forward-header`
+(caddy+authentik forward-auth; trust `X-Authentik-*` by **verifying `X-Authentik-Jwt` against the
+JWKS**) · `oidc` (the app is an authentik OIDC client over HTTPS; works on a LAN HTTPS host too).
+Identity keys on the **stable `sub` / `X-Authentik-Uid`** (`users.externalId`); handle =
+`preferred_username`. **Built today:** a
 `users` table (+ `role` admin/user), `ownerId` scoping enforced in the `domain` layer, typed
 per-user `user_settings`, admin-gated AppSettings. **Locked but NOT yet built** (full spec:
 `docs/auth-and-credentials-plan.md`): the three `AUTH_MODE`s, `users.externalId`/`enabled`,
-server-side bearer **sessions** (revocable), encrypted **per-user credentials** (bring-your-own
+revocable server-side **sessions** (cookie-backed), encrypted **per-user credentials** (bring-your-own
 OpenRouter key), and ONE turn-time **credential resolver** that gates everything — `max-pro-sub`
 (the owner's single host `claude login`) is admin/owner-only; non-owners bring their own
 OpenRouter key. **Correction (hard-won):** the old `X-Neo-Proxy` shared-secret trust is **NOT

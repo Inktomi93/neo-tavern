@@ -33,10 +33,15 @@ OpenRouter key and generate on its own dime, on any access path, without touchin
 - **`AUTH_MODE` env enum**: `single-user` (DEFAULT, zero-infra) · `forward-header` (today's
   caddy+authentik) · `oidc` (app is an OIDC client; works on direct LAN too).
 - **OIDC sessions are BEARER TOKENS, never cookies** — and **server-side / revocable** (an opaque
-  token backed by a `sessions` row, §4), not a throwaway stateless JWT. The bearer the SPA sends as
-  `Authorization: Bearer …` has **no ambient credential** for a forged cross-site request to ride →
-  **no CSRF, by construction**, with zero CSRF middleware. Server-side = logout/disable/kick-a-device
-  take effect *immediately*. "No cookies" is the rule; "session state" is fine. (See §4, §11.)
+  session id backed by a `sessions` row, §4), carried in an **HttpOnly, Secure, SameSite=Lax
+  cookie** — the **BFF pattern, which we already are** (confidential OIDC client, server-side). This
+  is what OWASP + the IETF *OAuth 2.0 for Browser-Based Apps* BCP recommend; **NOT** a localStorage
+  bearer (any single XSS would steal it — HttpOnly means an XSS can't exfiltrate the credential).
+  CSRF is then mitigated *cheaply and invisibly*: `SameSite=Lax` (blocks cross-site POST) + a required
+  **custom request header** on mutations + server-side PKCE state — no heavy CSRF middleware, no
+  user-visible "dance". Server-side sessions = logout/disable/kick-a-device take effect *immediately*.
+  (Authenticated modes are HTTPS-only; the raw-`http://LAN-IP` path is `single-user`, which has no
+  session/cookie at all — §5a.) (See §4, §11.)
 - **Auth ⟂ push.** Multi-device live sync (the SSE/subscription, keyed by chatId, scoped to identity)
   is independent of how identity is established. SSO does NOT disable push. (See §5.)
 - **Per-user secrets encrypted at rest** (AES-256-GCM, key from env `CREDENTIALS_KEY`). This is an
@@ -140,13 +145,13 @@ build must NOT reintroduce them. Why each disappears:
    rows; assets = a **global content-addressed CAS (no `ownerId`, dedup by hash)**. Identity keys on
    the stable `externalId` (`sub`/uid). That entire `map { … }` block is *gone* — structurally.
 3. **No `-Clear-Site-Data` ES-module workaround** on our origin: the SPA bundle is served **outside**
-   forward-auth (and `oidc` uses bearers, no authentik app-cookie on our origin), so the
-   callback-cache-bust never races our module loads.
+   forward-auth (and in `oidc` mode authentik isn't in front of our origin at all), so authentik's
+   callback `Clear-Site-Data` never touches our module loads.
 
 **The blocks:**
 - **`oidc` mode** (like `@openwebui`/`@grafana`): **no `import authentik`** — the app owns auth. Serve
   everything to `neo-tavern:8788`; the app makes the SPA + `/blob/*` + `/api/auth/*` + `/api/healthz`
-  public and requires the bearer only on `/api/trpc/*`. Add `flush_interval -1` + long read/write
+  public and requires the session (cookie) only on `/api/trpc/*`. Add `flush_interval -1` + long read/write
   timeouts for SSE (copy the Open WebUI transport block).
 - **`forward-header` mode**: run the authentik outpost, but **scope forward-auth to `/api/*` only** —
   serve the SPA bundle + `/blob/*` without it (`handle /api/* { import authentik; reverse_proxy … }`
@@ -178,61 +183,87 @@ Refactor `src/server/auth/trust-header.ts` into a strategy dispatch returning a 
 - **`forward-header`** → read `X-Authentik-Uid` (externalId) + `X-Authentik-Username` (handle) +
   `X-Authentik-Groups`. **Trust = verify `X-Authentik-Jwt` against the JWKS** when present
   (`FORWARD_AUTH_VERIFY_JWT`, default on); else network-isolation trust (§1c). Invalid → 401.
-- **`oidc`** → read `Authorization: Bearer <token>`, verify the app session token (§4) → its claims.
-  **No/invalid token → 401** (this mode has no owner fallback). Public routes: `/api/healthz`,
-  `/api/auth/*`.
+- **`oidc`** → read the **session cookie** (§4), hash → `sessions` lookup → identity. **No/invalid
+  session → 401** (this mode has no owner fallback). Public routes: `/api/healthz`, `/api/auth/*`.
 - The **disabled-user** check (§6) lives here: resolved → disabled → 401/403.
 
-## §4. The app session — REVOCABLE SERVER-SIDE BEARER, NEVER A COOKIE
+## §4. The app session — REVOCABLE SERVER-SIDE, CARRIED IN AN HttpOnly COOKIE (BFF)
 
-**CSRF exists only because browsers auto-attach cookies; a bearer token the SPA puts in the
-`Authorization` header is never sent on a forged cross-site request → CSRF is structurally impossible,
-zero CSRF code.** This holds whether the token is stateless or server-backed — *the point is no
-cookie.* We choose **server-backed** (build it right the first time):
-- After the OIDC callback, mint an **opaque** random token (32 bytes, base64url) and store only its
-  **hash** in a **`sessions`** row: `id`, `userId → users.id`, `tokenHash`, `createdAt`, `lastSeenAt`,
-  `expiresAt`, `revokedAt?`, `userAgent`/`label?`. Hand the raw token to the SPA (callback response
-  body / redirect fragment — **NOT `Set-Cookie`**); it stores it (memory + `localStorage`) and sends
-  `Authorization: Bearer …` on every tRPC call + the SSE stream.
-- The `oidc` strategy validates by **hashing the bearer → `sessions` lookup**: row exists, not
-  `revokedAt`, not past `expiresAt`, and the owning `users.enabled` — else 401. **Sliding expiry:** bump
-  `expiresAt`/`lastSeenAt` on use (long-lived, no nagging re-logins). One indexed lookup/request —
-  negligible on one box; memoize with a short TTL only if it ever shows up hot.
-- **Why server-side, not a stateless JWT:** revocation is *immediate and real* — logout drops the row,
-  **disabling a user kills their live sessions now** (not in up-to-7-days), and you can list/revoke a
-  specific device (multi-device management). Defining the `sessions` schema **now** = no migration
-  later, which is the whole "do it right the first time" point.
-- `jose` is used **only** to verify *authentik's* ID token (OIDC leg) and the forward-auth
-  `X-Authentik-Jwt` — never to mint/verify our own session (it's opaque + DB-checked). `SESSION_SECRET`
-  optionally peppers the `tokenHash` (HMAC) so a DB leak alone can't forge a bearer.
-- **Deferred — and genuinely free to defer (no migration cost):** OIDC **refresh-token rotation**.
-  Sliding-expiry sessions + a silent OIDC re-auth cover the UX, and we avoid storing the IdP's refresh
-  token (a secret). Adding it later is a nullable column on `sessions` — additive, not debt.
+**We are a BFF** (confidential OIDC client, server-side) — so we do the thing OWASP + the IETF
+*OAuth 2.0 for Browser-Based Apps* BCP recommend for exactly that: the browser↔app session is an
+**HttpOnly, Secure, `SameSite=Lax` cookie**, never a JS-readable token. (localStorage bearer is the one
+choice a reviewer would flag — any XSS reads it; HttpOnly means an XSS can make requests but **cannot
+exfiltrate** the credential. We rejected localStorage for that reason.)
+- After the OIDC callback, mint an **opaque** random token (32 bytes, base64url), store only its
+  **hash** in a **`sessions`** row (`id`, `userId → users.id`, `tokenHash`, `createdAt`, `lastSeenAt`,
+  `expiresAt`, `revokedAt?`, `userAgent`/`label?`), and set it as the session cookie:
+  `Set-Cookie: neo_session=<token>; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=…`. The browser
+  sends it automatically — including on the **SSE stream** (EventSource sends cookies same-origin), so
+  push needs no extra auth plumbing.
+- Validate every request by **hashing the cookie → `sessions` lookup**: row exists, not `revokedAt`,
+  not past `expiresAt`, and the owning `users.enabled` — else 401. **Sliding expiry:** bump
+  `expiresAt`/`lastSeenAt` on use. One indexed lookup/request — negligible on one box.
+- **CSRF mitigation (small, standard, invisible to the user):** `SameSite=Lax` already blocks
+  cross-site POST (and still returns on the top-level OAuth callback redirect — that's why Lax, not
+  Strict). Defense-in-depth: require a **custom request header** the app's API client always sets
+  (e.g. `x-neo-csrf: 1`) — a cross-site page can't set it without a CORS preflight we don't grant. Keep
+  OAuth transaction state (PKCE verifier/`state`/`nonce`) **server-side keyed by `state`**, NOT in a
+  cookie, so `SameSite` never interferes with the callback. That is the entire CSRF story.
+- **Why server-side sessions, not a stateless JWT:** revocation is *immediate and real* — logout drops
+  the row, **disabling a user kills their live sessions now**, and you can list/revoke a specific
+  device. Defining the `sessions` schema **now** = no migration later.
+- **Non-browser/API clients (future):** if a CLI/script ever needs access, issue a **separate**
+  long-lived API token (its own `sessions`-like row, sent as `Authorization: Bearer`). The *browser*
+  always uses the cookie. Not built in v1; the seam is the same session store.
+- `jose` verifies *authentik's* ID token + the forward-auth `X-Authentik-Jwt` (JWKS) — never our own
+  session (opaque + DB-checked). `SESSION_SECRET` HMAC-peppers the `tokenHash` so a DB leak alone can't
+  forge a session.
+- **Deferred (free — no migration cost):** OIDC refresh-token rotation; sliding sessions + silent
+  re-auth cover the UX, and we avoid storing the IdP refresh token. Adding it later is a nullable
+  `sessions` column.
 - Library: `openid-client` (discovery + code exchange + ID-token verify) + `jose` (JWKS verify).
 
-## §5. Multi-device — and why auth doesn't break push
-- Each device logs in independently, holds its own bearer token, both resolve to the same user row
-  (same externalId) → same owned chats.
-- Convergence (DB-is-canon, stateless) is already true regardless of auth mode.
-- **Live push (SSE/subscription) is orthogonal to auth** — server→client, keyed by chatId, scoped to
-  the user. Carries the same bearer (or a short-lived query token where `EventSource` can't set
-  headers). SSO + multi-device + live push + no-CSRF all coexist.
+## §5. Multi-device — and why auth doesn't break push (cookies make it *easier*)
+- Each device logs in once (its own session cookie); both resolve to the same user row (same
+  externalId) → same owned chats. Phone + desktop are the same origin (the domain) → each just has its
+  own cookie jar. The sync dream is intact.
+- Convergence (DB-is-canon, stateless per-request) is already true regardless of auth mode.
+- **Live push (SSE/subscription) is auth-free to wire:** `EventSource` **sends the session cookie
+  automatically, same-origin** — so the stream is authenticated + user-scoped with zero extra work.
+  (This is why we no longer need a "short-lived token in the query string" — that hack only existed for
+  the bearer design. Gone.) Events flow server→client, keyed by chatId, scoped to the user.
 
-### §5a. Home / LAN access reality (OIDC works via IP too, with the right config)
-SSO works from home like the owner's existing Open WebUI/Grafana OIDC. **`oidc` works on ANY origin
-you (a) register in authentik's redirect-URI list and (b) include in `OIDC_REDIRECT_URIS`** (§10
-derives `redirect_uri` from the request origin), so **the LAN IP/host works just as well as the
-domain** — not domain-only. Requirements per origin: it's registered + allowlisted, and the scheme is
-correct (`X-Forwarded-Proto` honored behind caddy). authentik is reachable from the LAN regardless
-(browser + server both resolve it), so its dependency is fine at home.
-- **`oidc`** → register both the domain callback and the LAN callback(s) (§10). The only real
-  constraint is HTTPS for the bearer: prefer HTTPS on the LAN too (LAN cert / caddy); `http://<lan-ip>`
-  is an opt-in downgrade, not silent (§10).
-- **`forward-header`** → needs caddy+authentik in front (domain path).
-- **`single-user`** → any path, zero infra — the always-works fallback (e.g. truly bare `http://ip`).
-**Owner takeaway:** at home you can use `oidc` on the LAN IP *or* the domain — register both. Cleanest
-is still a LAN domain (split-horizon DNS / NAT-loopback) so you get HTTPS + one stable origin, but it
-is **not required** for OIDC to function. `single-user` remains the zero-config escape hatch.
+### §5a-push. Push lifecycle — it does NOT "endlessly blast"; keep it simple
+An SSE subscription carries events **only for the chat(s) the client has open, only when they actually
+change** — an idle open tab receives nothing; it's a cheap held connection, not a firehose. This is
+**not** OS push-notifications (we don't build those) — it's "the other open screen updates live."
+Standard, homelab-trivial lifecycle (a few devices = a few connections):
+- **Heartbeat** `: ping` every ~25s → keeps the connection through caddy (`flush_interval -1` + long
+  timeouts) and lets the server detect a dead client.
+- **Disconnect cleanup** — tab close / network drop / a phone backgrounding the tab (the OS suspends
+  it → connection closes) → the server drops that subscriber. No leaked connections, no drain.
+- **Auto-reconnect** — `EventSource` reconnects on drop; on reconnect the client **refetches the chat**
+  (DB-is-canon → converges). Self-healing; no missed-event bookkeeping needed.
+- **No elaborate inactivity logic needed** at this scale: the browser suspending backgrounded tabs is
+  the natural idle-cap. (If a leaked-connection cap is ever wanted, close after N idle hours and let
+  the client reconnect on next use — a defensive add, not v1.)
+
+### §5a. Home / LAN access reality (which mode per access path)
+SSO works from home like the owner's existing Open WebUI/Grafana OIDC. **`oidc` works on ANY HTTPS
+origin you (a) register in authentik's redirect-URI list and (b) include in `OIDC_REDIRECT_URIS`** (§10
+derives `redirect_uri` from the request origin), so a **LAN HTTPS host works just as well as the public
+domain** — not public-domain-only. authentik is reachable from the LAN regardless (browser + server
+both resolve it), so its dependency is fine at home.
+- **`oidc`** → over **HTTPS** on the public domain *and/or* a LAN HTTPS host (register both callbacks,
+  §10). The session cookie is `Secure`, so HTTPS is required — that's not a downgrade-knob, it's the
+  bar for an authenticated session.
+- **`forward-header`** → caddy+authentik in front (HTTPS domain path).
+- **`single-user`** → ANY path incl. truly bare `http://<lan-ip>:8788` — zero infra, **no session, no
+  cookie, no token** (just owner identity), so plaintext-http is fine *because nothing secret rides it*.
+**Owner takeaway:** at home, either run a **LAN HTTPS host** (split-horizon DNS / NAT-loopback + a cert,
+or just hit the public domain) → full SSO + multi-account; **or** hit the raw LAN IP over http →
+`single-user` (you, the owner). Both work; the only thing you can't do is an *authenticated* session
+over plaintext http — and you don't need one, since raw-IP is single-user anyway.
 
 ## §6. User layer (Part B)
 - **Admin/owner determination — two sources, group preferred (matches the Grafana pattern):**
@@ -250,9 +281,13 @@ is **not required** for OIDC to function. `single-user` remains the zero-config 
 - **tRPC `userAdmin` router** (all `requireAdmin`): `listUsers`, `setRole`, `setEnabled`. No UI.
 
 ## §7. Per-user credentials + crypto (Part C, storage half)
-- **`src/server/crypto/secrets.ts`** — `encrypt`/`decrypt`, AES-256-GCM, 12-byte random IV, key =
-  `base64decode(env.CREDENTIALS_KEY)` (32 bytes). `CREDENTIALS_KEY` unset ⇒ per-user creds **disabled**
-  (store rejects writes; resolver falls back to host key). Key lives in env, never the DB.
+- **`src/server/crypto/secrets.ts`** — `encrypt`/`decrypt`, AES-256-GCM, **fresh 12-byte random IV per
+  encryption** (never reuse an IV with a key), key = `base64decode(env.CREDENTIALS_KEY)` (32 bytes).
+  **Bind AAD = `${userId}|${provider}`** into the GCM seal so a ciphertext row can't be lifted into
+  another user's/provider's row and still decrypt. `CREDENTIALS_KEY` unset ⇒ per-user creds **disabled**
+  (store rejects writes; resolver falls back to host key). Key lives in env, never the DB. **Key
+  rotation is NOT handled** (re-encrypt-all on key change is a future op) — acceptable for homelab, but
+  stated, not silent.
 - **`user_credentials` table**: `id`, `userId → users.id` (cascade), `provider` (`'openrouter'`),
   `ciphertext`/`iv`/`tag`, `label?`, `createdAt`/`updatedAt`. **Unique `(userId, provider)`.** Plaintext
   key never stored, never returned by any API (only `hasMyOpenRouterKey: boolean`).
@@ -287,39 +322,49 @@ existing turn-error path.
   hardcoded domain. Build it from `X-Forwarded-Proto` (caddy sets it; fall back to the request scheme)
   + `X-Forwarded-Host`/`Host` + `/api/auth/callback`, then check it's in `OIDC_REDIRECT_URIS` (the
   allowlist). This is what lets you log in via the **domain OR the LAN IP/host** — you reached the app
-  on origin X, the callback returns to origin X, the bearer is stored on origin X. **Never reflect an
-  unvalidated Host** into `redirect_uri` (open-redirect / the CVE-2024-52289 class) — allowlist only.
+  on origin X, the callback returns to origin X, the session cookie is set on origin X. **Never reflect
+  an unvalidated Host** into `redirect_uri` (open-redirect / the CVE-2024-52289 class) — allowlist only.
 - `GET /api/auth/login` → discovery (cached) → authorize URL (PKCE `code_challenge`, `state`, `nonce`,
   `scope=openid profile email`, the derived+validated `redirect_uri`) → 302. Stash
   verifier/state/nonce/origin keyed by `state` (short-TTL in-memory; single-process assumption).
 - `GET /api/auth/callback` → validate state → exchange code (+verifier) at the token endpoint with the
   **same** `redirect_uri` → verify ID token (JWKS, iss, aud, exp, nonce) →
-  `ensureUser({ externalId: sub, handle: preferred_username })` → mint §4 bearer → return to the SPA on
-  the originating origin (redirect `#token=…` or postMessage).
-- `POST /api/auth/logout` (hit authentik end-session; revoke the §4 session row) · `GET /api/auth/me`.
+  `ensureUser({ externalId: sub, handle: preferred_username })` → mint the §4 session →
+  **`Set-Cookie`** (HttpOnly; Secure; SameSite=Lax) + **302 back to the app** on the originating
+  origin. **No token in the URL/fragment** (the cookie carries it — that's the BFF win; the
+  fragment-leak risk is gone).
+- `POST /api/auth/logout` (clear the cookie; revoke the §4 `sessions` row; hit authentik end-session)
+  · `GET /api/auth/me` (resolve the cookie → identity, for the SPA's "am I logged in" probe).
 - These routes are exempt from the §2 401 gate.
 - **authentik side:** register **every** origin's callback in the provider's redirect-URI list —
-  `https://neo-tavern.inktomi.tech/api/auth/callback` AND the LAN one(s) (e.g.
-  `https://neo-tavern.lan/api/auth/callback`, or `http://<lan-ip>:8788/api/auth/callback` if you accept
-  raw-IP). Use an **explicit strict list**, not a loose regex (CVE-2024-52289: dots aren't escaped).
-- **HTTPS note:** the bearer rides `Authorization`, so prefer HTTPS on every origin incl. the LAN
-  (a LAN cert / caddy on the LAN). Allowing `http://<private-ip>` is a deliberate downgrade — gate it
-  behind an explicit opt-in (e.g. only private ranges) and document the tradeoff; don't do it silently.
+  `https://neo-tavern.inktomi.tech/api/auth/callback` AND any LAN **HTTPS** one
+  (`https://neo-tavern.lan/api/auth/callback`). Use an **explicit strict list**, not a loose regex
+  (CVE-2024-52289: dots aren't escaped).
+- **HTTPS-only (no opt-in http):** the session cookie is `Secure`, so OIDC requires HTTPS on every
+  origin (public domain + any LAN domain via a LAN cert / caddy). **Raw `http://LAN-IP` is NOT an OIDC
+  path** — it's `single-user` (no cookie, no session; §5a). This deletes the earlier
+  `OIDC_ALLOW_INSECURE_LAN` knob — authenticated sessions never ride plaintext http.
 
 ## §11. WHAT TO AVOID (explicit anti-list — honor every line)
-- **NO cookie sessions.** Bearer in `Authorization` only. (The whole CSRF-avoidance strategy.)
-- **NO CSRF middleware/tokens.** Not needed given bearer-only.
+- **NO token in JS-readable storage** — `localStorage`/`sessionStorage`/a JS variable for the session.
+  The session is an **HttpOnly cookie** (OWASP/BCP: any XSS would steal a JS-readable token). This is
+  the single most important line — it's the thing a reviewer flags.
+- **The session cookie MUST be `HttpOnly; Secure; SameSite=Lax`.** Not Strict (Lax is needed for the
+  top-level OAuth callback redirect); never non-Secure (no plaintext-http sessions).
 - **NO passwords / hashing / salts / local login form.** We are an OIDC *client*, never an IdP.
-- **NO `Set-Cookie` / cookie sessions / express-session.** The bearer lives in `Authorization` only.
-  (Server-side **session state is YES** — a revocable `sessions` table backing the opaque bearer, §4.
-  The thing we avoid is *cookies*, not session state. Don't conflate them.)
-- **NO refresh-token rotation in v1** — deferred at *no* migration cost (sliding-expiry sessions cover
-  UX; adding it later is a nullable `sessions` column, §4). Not debt.
-- **NO plaintext secrets at rest.** AES-256-GCM only; never log a key; never return one (boolean only).
+- **NO heavy CSRF framework** — but DO the small mitigation (§4): `SameSite=Lax` + a required custom
+  request header on mutations + server-side PKCE state. Don't *skip* CSRF (cookies need it); don't
+  over-build it.
+- **NO token / session id in a URL or fragment** (`#token=`, query string) — `Set-Cookie` only. (No
+  SSE query-token either; EventSource sends the cookie.)
+- **NO storing the IdP's tokens in the browser** — they stay server-side (we're a BFF). No
+  refresh-token rotation in v1 (deferred at no migration cost — sliding sessions cover UX, §4).
+- **NO plaintext secrets at rest.** AES-256-GCM + AAD only; never log a key; never return one
+  (`hasMyOpenRouterKey` boolean only).
 - **NO per-user `max-pro-sub`.** Host's single `claude login`; admin/owner only, forever.
 - **Do NOT break the zero-infra default.** `single-user` + no `CREDENTIALS_KEY` + no OIDC env + no
   proxy must run exactly like today. Every new env var optional with a safe default / graceful-off.
-- **Do NOT regress push / multi-device.** Keep SSE/subscription auth-agnostic; don't couple to cookies.
+- **Do NOT regress push / multi-device.** SSE auth = the same-origin cookie (free); keep it that way.
 - **Do NOT trust `X-Authentik-*` blindly.** Verify `X-Authentik-Jwt` via JWKS (§1c) or rely on
   network-isolation. **`X-Neo-Proxy` is NOT deployed** — don't assume it exists.
 - **Do NOT change the owner's turn resolution.** Owner → host sub / host OR-key, byte-identical.
@@ -330,10 +375,11 @@ existing turn-error path.
   `DEFAULT_USER_HANDLE`); `FORWARD_AUTH_VERIFY_JWT` (default `true`); `CREDENTIALS_KEY` (optional,
   base64 32-byte; unset ⇒ per-user creds off). OIDC-only (required iff `AUTH_MODE=oidc`): `OIDC_ISSUER`
   (`https://authentik.inktomi.tech/application/o/<slug>/`), `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`,
-  **`OIDC_REDIRECT_URIS`** (comma-list **allowlist** of permitted callback origins — domain + LAN
-  IP/host — §10 derives the per-request one from this; NOT a single fixed URL), `SESSION_SECRET`,
-  `OIDC_ALLOW_INSECURE_LAN` (optional, default false; permit `http://<private-ip>` callbacks — opt-in
-  downgrade). `env.ts` refinement: `AUTH_MODE=oidc` ⇒ OIDC vars required.
+  **`OIDC_REDIRECT_URIS`** (comma-list **allowlist** of permitted callback origins — the public domain
+  + any LAN **HTTPS** origin; §10 derives the per-request one from this; NOT a single fixed URL),
+  `SESSION_SECRET` (32+ bytes; HMAC-peppers the session `tokenHash`, §4). `env.ts` refinement:
+  `AUTH_MODE=oidc` ⇒ OIDC vars required. (No `OIDC_ALLOW_INSECURE_LAN` — OIDC is HTTPS-only; raw-IP =
+  `single-user`.)
 
 ## §13. Migrations (`pnpm db:generate:force`)
 Define ALL the new schema up front so it's **one migration, no follow-ups** (the "do it right" point):
@@ -367,17 +413,23 @@ null, enabled true, role already admin from migration 0025; no sessions until fi
 - externalId migration: SSO keys on externalId, single-user on handle — `ensureUser` must handle both
   without duplicating rows on a username rename.
 
-## §16. Verification
-- **Unit:** crypto round-trip (+ wrong-key fails); resolver (host-key; BYO uses stored key not env;
-  max-pro-sub forbidden for `user`, allowed for `admin`); AUTH_MODE dispatch (single-user ignores
-  headers; forward-header verifies the JWT/trusts network; oidc 401 without/with-invalid token, ok
-  with a valid signed bearer); `ensureUser` rename (same externalId, new handle → same row).
-- **Integration:** a `role:'user'` with a stored OpenRouter key generates via the openrouter runner
-  using **its** key (assert the per-user key, not env) and is **refused** `max-pro-sub`; OIDC
-  `/callback` with mocked discovery+JWKS+token mints a usable bearer that authenticates a tRPC call.
-- **Session revocation (the build-it-right guarantee):** a valid bearer authenticates; after
-  `revokedAt` is set (logout) OR the owning `users.enabled=false`, the **same bearer is rejected on the
-  very next request** (not after expiry); a second device's session is unaffected by revoking the first.
+## §16. Verification — the three tests that ACTUALLY prove "is it secure"
+(The validation that matters is the build + these, not more plan prose.)
+1. **Resolver gate:** a `role:'user'` with a stored OpenRouter key generates via the openrouter runner
+   using **its** key (assert the per-user key, not `env`); the same user is **refused** `max-pro-sub`
+   (`DomainForbiddenError`); an admin/owner gets the host sub. Owner path byte-identical to today.
+2. **Session revocation:** a valid cookie authenticates; after `revokedAt` is set (logout) OR the
+   owning `users.enabled=false`, the **same cookie is rejected on the very next request** (not after
+   expiry); revoking device A's session leaves device B's working.
+3. **CSRF behavior:** a same-origin request with the cookie + the custom header succeeds; a
+   **cross-site POST without the custom header is rejected** (SameSite + header check); the cookie is
+   `HttpOnly; Secure; SameSite=Lax` (assert the `Set-Cookie` attributes on callback).
+
+- **Supporting unit:** crypto round-trip (+ wrong-key fails, + AAD mismatch fails); AUTH_MODE dispatch
+  (single-user ignores headers; forward-header verifies the JWT / trusts network; oidc 401 without a
+  valid cookie); `ensureUser` rename (same externalId, new handle → same row).
+- **OIDC leg:** `/callback` with mocked discovery+JWKS+ID-token → `Set-Cookie` + 302 (no token in the
+  URL); the resulting cookie authenticates a subsequent tRPC call.
 - **Origin-flexible OIDC redirect:** `redirect_uri` is derived from the request origin and accepted
   for an allowlisted origin (domain AND a LAN host both work); an **off-allowlist** origin is rejected
   (no open redirect); `X-Forwarded-Proto: https` yields an `https` redirect_uri behind the proxy.

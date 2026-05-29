@@ -165,7 +165,8 @@ one user, so a second user is a no-op not a rewrite. Global uniques become compo
 multi-user (`unique(ownerId, handle)` etc.). Identity is resolved per-request at one seam
 (`auth/trust-header.ts`); the **pluggable-`AUTH_MODE`** model (single-user / forward-header /
 oidc), keyed on the stable `sub`/`X-Authentik-Uid`, is specified in `docs/auth-and-credentials-plan.md`
-(locked, building). **No cookies → no CSRF, by construction** (bearer tokens, never `Set-Cookie`).
+(locked, building). The browser session is an **HttpOnly/Secure/SameSite=Lax cookie** (BFF pattern;
+revocable server-side `sessions`), CSRF mitigated by SameSite + a custom header — not a JS-readable token.
 Today the app effectively runs single-user-owner (the `X-Neo-Proxy` path exists in code but the live
 Caddyfile never injects it → see the plan's §1c; forward-header replaces it with JWKS verification).
 
