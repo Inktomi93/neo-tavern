@@ -6,6 +6,10 @@
       "env": {
         "LSP_LOG_LEVEL": "error"
       }
+    },
+    "shadcn": {
+      "command": "npx",
+      "args": ["shadcn@latest", "mcp"]
     }
   }
 }
