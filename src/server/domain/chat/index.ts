@@ -4,10 +4,11 @@ export { createChatService } from "./service";
 export { chatStreamEmitter } from "./stream";
 export type {
   ChatService,
-  CreateChatParams,
   ForkChatParams,
   MessageView,
   SendParams,
   SendResult,
+  StartChatParams,
+  StartChatResult,
 } from "./types";
 export { ChatNotFoundError, ChatOperationError } from "./types";

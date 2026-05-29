@@ -24,18 +24,19 @@ export function createChatService(db: Db, deps: ChatServiceDeps = {}): ChatServi
   const { send } = createSend(ctx, { runCompaction });
   const { swipe, selectVariant } = createSwipe(ctx);
   const { forkChat, setProvider } = createBranch(ctx);
+  // startChat's first turn delegates to `send` (the one turn pipeline) — injected like send→runCompaction.
   const {
-    create,
+    startChat,
     editMessage,
     delete: deleteChat,
     updateTitle,
     star,
     archive,
-  } = createLifecycle(ctx);
+  } = createLifecycle(ctx, { send });
   const { listChats, getChat, listMessages, previewAssembly } = createRead(ctx);
 
   return {
-    create,
+    startChat,
     listChats,
     getChat,
     previewAssembly,

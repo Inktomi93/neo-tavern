@@ -87,19 +87,41 @@ export type SendResult =
       messages: MessageView[];
     };
 
-export interface CreateChatParams {
+// Lazy chat creation. A chat row is written only at the FIRST canon-producing action — either the
+// user's first message (`firstUserMessage`) or `generateOpening` (the model writes the opening).
+// The new-chat *draft* (which character/persona/preset/provider, seeded from the user's settings)
+// lives CLIENT-side until then; this is the commit. References an EXISTING character version (the
+// `character` domain owns library entities — chat-start no longer creates characters inline).
+export interface StartChatParams {
   username: string;
-  title: string;
-  characterName: string;
-  characterDescription: string;
-  // `| undefined` (not bare optional) so a spread carrying `firstMessage: undefined`
-  // satisfies exactOptionalPropertyTypes.
-  firstMessage?: string | undefined;
-  // What to do when there's NO greeting (firstMessage empty). false (default) = the chat starts
-  // blank and the USER speaks first. true = "generate to open": the model writes the opening
-  // message in-character (a no-user-message turn). A per-chat toggle because auto-opening isn't
-  // always wanted. Ignored when firstMessage is set (that greeting is always used).
-  generateOpeningIfEmpty?: boolean | undefined;
+  // Client-supplied UUID so the client can subscribe to streamMessages before the first turn runs.
+  // Omitted → generated server-side.
+  chatId?: string | undefined;
+  // The existing character version this chat is with (owner-scoped). Required.
+  characterVersionId: string;
+  // Defaults to the character's name when omitted.
+  title?: string | undefined;
+  // Seeds (caller arg → user-settings default → schema/runtime default). A stale/unowned preset or
+  // persona id degrades to null (never fails creation). `presetId` is a preset IDENTITY (resolved to
+  // its current version). `max-pro-sub` is the owner's credential — guarded for non-owners.
+  personaId?: string | undefined;
+  presetId?: string | undefined;
+  api?: ChatApi | undefined;
+  source?: ChatSource | undefined;
+  model?: string | null | undefined;
+  // Which of the character version's greetings opens the chat (default 0). The greeting becomes seq 1
+  // and is persisted together with the first user message. Ignored on the `generateOpening` path.
+  greetingIndex?: number | undefined;
+  // Exactly ONE commit trigger must be set:
+  //  • firstUserMessage — the user's opening line; runs the first turn (any provider).
+  //  • generateOpening   — the model writes seq 1 in-character (no user message; any provider).
+  firstUserMessage?: string | undefined;
+  generateOpening?: boolean | undefined;
+}
+
+export interface StartChatResult {
+  chatId: string;
+  result: SendResult;
 }
 
 // Dry-run prompt assembly for a chat — what the NEXT turn would send, WITHOUT spending a turn.
@@ -182,7 +204,9 @@ export interface CompactParams {
 }
 
 export interface ChatService {
-  create(params: CreateChatParams): Promise<{ chatId: string }>;
+  /** Lazy creation: scaffold the chat from an existing character version + seeded defaults, then run
+   *  the FIRST turn (the user's message, or a generated opening). The only canon-creating entry. */
+  startChat(params: StartChatParams): Promise<StartChatResult>;
   /** The caller's chats, newest-updated first (owner-scoped). Drives the chat-list rail. */
   listChats(params: { username: string }): Promise<ChatSummary[]>;
   /** One owned chat's metadata (summary + pins/links). Throws ChatNotFoundError if unowned. */

@@ -15,7 +15,7 @@ import type { Reranker } from "../../src/server/embeddings/reranker";
 import type { Summarizer } from "../../src/server/embeddings/summarizer";
 import type { ChatTurnResult } from "../../src/server/providers/turn";
 import { DEFAULT_PROMPT_CONFIG } from "../../src/shared/prompt-config";
-import { freshDb } from "../support/db";
+import { freshDb, seedChatRow } from "../support/db";
 
 // Bag-of-words fake embedder: each word → a dim, summed + L2-normalized. Texts that SHARE words land
 // near each other (cosine ∝ overlap) — exercises retrieval deterministically without a GPU.
@@ -103,13 +103,7 @@ async function makeChat(
   script: { role: "user" | "assistant"; content: string }[],
 ): Promise<{ db: Db; chatId: string }> {
   const db = await freshDb();
-  const chat = createChatService(db, { embedder: fakeEmbedder });
-  const { chatId } = await chat.create({
-    username: "owner",
-    title: "t",
-    characterName: "Vermithrax",
-    characterDescription: "a dragon",
-  });
+  const { chatId } = await seedChatRow(db, { name: "Vermithrax", title: "t" });
   await insertMessages(db, chatId, script);
   return { db, chatId };
 }
@@ -280,12 +274,7 @@ test("send embeds the just-sent user message as the memory retrieval query (regr
     summarizer: fakeSummarizer,
     reranker: fakeReranker,
   });
-  const { chatId } = await chat.create({
-    username: "owner",
-    title: "t",
-    characterName: "Vermithrax",
-    characterDescription: "a dragon",
-  });
+  const { chatId } = await seedChatRow(db, { name: "Vermithrax", title: "t" });
 
   // Aged-out history + real digests, so retrieveMemory has candidates and reaches the query embed.
   await insertMessages(db, chatId, SCRIPT); // seq 0..7
@@ -558,12 +547,7 @@ test("a send with memory enabled fires background digest generation (digests mat
     summarizer: fakeSummarizer,
     reranker: fakeReranker,
   });
-  const { chatId } = await chat.create({
-    username: "owner",
-    title: "t",
-    characterName: "Vermithrax",
-    characterDescription: "a dragon",
-  });
+  const { chatId } = await seedChatRow(db, { name: "Vermithrax", title: "t" });
   await insertMessages(db, chatId, SCRIPT); // seq 0-7
   await pinPreset(db, chatId, memOn);
 
@@ -584,13 +568,7 @@ test("a send with memory enabled fires background digest generation (digests mat
 
 async function blankChat(): Promise<{ db: Db; chatId: string }> {
   const db = await freshDb();
-  const chat = createChatService(db, { embedder: fakeEmbedder });
-  const { chatId } = await chat.create({
-    username: "owner",
-    title: "t",
-    characterName: "Vermithrax",
-    characterDescription: "a dragon",
-  });
+  const { chatId } = await seedChatRow(db, { name: "Vermithrax", title: "t" });
   return { db, chatId };
 }
 

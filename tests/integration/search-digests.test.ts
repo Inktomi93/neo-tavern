@@ -1,15 +1,14 @@
-import { eq } from "drizzle-orm";
 import { expect, test } from "vitest";
 import type { Db } from "../../src/db/client";
-import { chatDigests, chats, messages } from "../../src/db/schema";
+import { chatDigests, messages } from "../../src/db/schema";
 import { newId } from "../../src/server/domain/_shared/ids";
-import { createChatService } from "../../src/server/domain/chat";
+
 import { generateDigests } from "../../src/server/domain/chat/memory/generate";
 import { createSearchService } from "../../src/server/domain/search/service";
 import type { Embedder } from "../../src/server/embeddings/embedder";
 import type { Reranker } from "../../src/server/embeddings/reranker";
 import type { Summarizer } from "../../src/server/embeddings/summarizer";
-import { freshDb } from "../support/db";
+import { freshDb, seedChatRow } from "../support/db";
 
 // Bag-of-words fake embedder (shared shape with chat-memory.test): word → dim, summed + normalized,
 // so texts sharing words land near each other under cosine. Exercises the chat_digests ANN + the
@@ -62,13 +61,7 @@ async function seedChatWithDigests(
   characterName: string,
   script: { role: "user" | "assistant"; content: string }[],
 ): Promise<string> {
-  const chat = createChatService(db, { embedder: fakeEmbedder });
-  const { chatId } = await chat.create({
-    username,
-    title: "t",
-    characterName,
-    characterDescription: "d",
-  });
+  const { chatId } = await seedChatRow(db, { ownerId: username, name: characterName, title: "t" });
   const now = Date.now();
   for (const [i, m] of script.entries()) {
     await db
@@ -146,16 +139,12 @@ async function chatIds(
   db: Db,
   username: string,
 ): Promise<{ chatId: string; ownerId: string; cvId: string }> {
-  const chat = createChatService(db, { embedder: fakeEmbedder });
-  const { chatId } = await chat.create({
-    username,
+  const { chatId, ownerId, characterVersionId } = await seedChatRow(db, {
+    ownerId: username,
+    name: "V",
     title: "t",
-    characterName: "V",
-    characterDescription: "d",
   });
-  const row = (await db.select().from(chats).where(eq(chats.id, chatId)))[0];
-  if (!row) throw new Error("chat row missing");
-  return { chatId, ownerId: row.ownerId, cvId: row.characterVersionId };
+  return { chatId, ownerId, cvId: characterVersionId };
 }
 
 async function insertDigestRow(
@@ -190,13 +179,7 @@ async function insertDigestRow(
 
 test("corpus digest search returns tier-1 arc digests, not only tier-0", async () => {
   const db = await freshDb();
-  const chat = createChatService(db, { embedder: fakeEmbedder });
-  const { chatId } = await chat.create({
-    username: "owner",
-    title: "t",
-    characterName: "Vermithrax",
-    characterDescription: "d",
-  });
+  const { chatId } = await seedChatRow(db, { name: "Vermithrax", title: "t" });
   const now = Date.now();
   for (const [i, m] of DRAGON.entries())
     await db

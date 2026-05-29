@@ -6,12 +6,17 @@ import {
   chats,
   messages,
   messageVariants,
+  personas,
+  presets,
 } from "../../../db/schema";
 import { assemblePrompt } from "../../../shared/prompt-assemble";
+import { env } from "../../env";
 import { getLog } from "../../observability/logger";
 import { TurnError } from "../../providers/turn";
+import { DomainNotFoundError, DomainOperationError } from "../_shared/errors";
 import { newId } from "../_shared/ids";
 import { withChatLock } from "../_shared/lock";
+import { loadUserSettings } from "../_shared/user-settings";
 import { ensureUser } from "../_shared/users";
 import { OPEN_SCENE_PROMPT } from "./constants";
 import type { ChatContext } from "./context/factory";
@@ -19,76 +24,104 @@ import { buildTurnProvenance } from "./helpers";
 import { resolveTurnRouting } from "./routing";
 import { buildSeedFrames, GREETING_USER_STUB } from "./seed";
 import { DbSessionStore } from "./store";
-import type { CreateChatParams, EditMessageParams, MessageView } from "./types";
+import type {
+  EditMessageParams,
+  MessageView,
+  SendParams,
+  SendResult,
+  StartChatParams,
+  StartChatResult,
+} from "./types";
 
 /**
- * Lifecycle ops: `create` (skeleton character + v1 + chat, opening via greeting/generated/blank),
- * its internal `generateOpening` helper (the "generate to open" toggle), and `editMessage`
- * (in-place edit + sdk re-seed).
+ * Lifecycle ops: `startChat` (LAZY creation — scaffold an existing character version into a chat,
+ * seed defaults from user settings, then run the FIRST turn), the internal `generateOpening` helper
+ * (the model writes the opening; any provider), and `editMessage` (in-place edit + sdk re-seed).
+ * `send` is injected (the one verb-to-verb dependency, like send→runCompaction) so the first turn
+ * reuses the entire send pipeline rather than duplicating it.
  */
-export function createLifecycle(ctx: ChatContext) {
+export function createLifecycle(
+  ctx: ChatContext,
+  ops: { send: (params: SendParams) => Promise<SendResult> },
+) {
   const { db, loadOwnedChat, loadOwnedMessage, listByChat, runTurn, recordTurnEvents } = ctx;
-  const { buildAssembleContext, resolveConfig, reseedSdkSession } = ctx;
+  const { buildAssembleContext, resolveConfig, reseedSdkSession, openRouterRunner } = ctx;
+  const { send } = ops;
 
-  async function create(params: CreateChatParams): Promise<{ chatId: string }> {
-    const ownerId = await ensureUser(db, params.username);
-    const now = Date.now();
-    const characterId = newId();
-    const versionId = newId();
-    const chatId = newId();
+  // Resolve an EXISTING, owned character version (chat-start references the library, never creates a
+  // character inline — the `character` domain owns that). Returns name + greetings for opening.
+  async function loadOwnedVersion(
+    ownerId: string,
+    characterVersionId: string,
+  ): Promise<{ name: string; greetings: string[] }> {
+    const rows = await db
+      .select({
+        name: characterVersions.name,
+        greetings: characterVersions.greetings,
+        ownerId: characters.ownerId,
+      })
+      .from(characterVersions)
+      .innerJoin(characters, eq(characters.id, characterVersions.characterId))
+      .where(eq(characterVersions.id, characterVersionId))
+      .limit(1);
+    const v = rows[0];
+    if (!v || v.ownerId !== ownerId) {
+      throw new DomainNotFoundError("character version", characterVersionId);
+    }
+    const greetings = Array.isArray(v.greetings)
+      ? v.greetings.filter((g): g is string => typeof g === "string")
+      : [];
+    return { name: v.name, greetings };
+  }
 
-    // Minimal character + v1 inline (the skeleton owns this; a real characters domain takes over
-    // later). The form's first message becomes greetings[0]. Circular FK (characters.currentVersionId
-    // ↔ character_versions.characterId, migration 0007): insert the character with a NULL
-    // currentVersionId, then the version, then repoint — same order the importer uses.
-    await db.insert(characters).values({
-      id: characterId,
-      ownerId,
-      handle: newId(),
+  // Seed defaults are LENIENT at consumption: a stale/unowned preset or persona id degrades to null
+  // (→ the system default prompt / no persona) rather than failing chat creation.
+  async function resolveOwnedPresetVersion(
+    ownerId: string,
+    presetId: string | null,
+  ): Promise<string | null> {
+    if (!presetId) return null;
+    const rows = await db
+      .select({ currentVersionId: presets.currentVersionId, ownerId: presets.ownerId })
+      .from(presets)
+      .where(eq(presets.id, presetId))
+      .limit(1);
+    const p = rows[0];
+    return p && p.ownerId === ownerId ? (p.currentVersionId ?? null) : null;
+  }
+
+  async function resolveOwnedPersona(
+    ownerId: string,
+    personaId: string | null,
+  ): Promise<string | null> {
+    if (!personaId) return null;
+    const rows = await db
+      .select({ ownerId: personas.ownerId })
+      .from(personas)
+      .where(eq(personas.id, personaId))
+      .limit(1);
+    return rows[0]?.ownerId === ownerId ? personaId : null;
+  }
+
+  // Write the greeting as seq 1. For agent-sdk, also seed the SDK session (so the first turn's resume
+  // sees it) via the ST invisible-user stub → the validated user→assistant seed shape. For openrouter
+  // there is NO session (it rebuilds from canon every turn), so just record the message.
+  async function seedGreeting(
+    chatId: string,
+    greeting: string,
+    api: "agent-sdk" | "chat-completions" | "responses",
+    now: number,
+  ): Promise<void> {
+    await db.insert(messages).values({
+      id: newId(),
+      chatId,
+      seq: 1,
+      role: "assistant",
+      content: greeting,
       createdAt: now,
     });
-    await db.insert(characterVersions).values({
-      id: versionId,
-      characterId,
-      version: 1,
-      name: params.characterName,
-      description: params.characterDescription,
-      greetings: params.firstMessage ? [params.firstMessage] : [],
-      createdAt: now,
-    });
-    await db
-      .update(characters)
-      .set({ currentVersionId: versionId })
-      .where(eq(characters.id, characterId));
-    await db.insert(chats).values({
-      id: chatId,
-      ownerId,
-      title: params.title,
-      characterVersionId: versionId,
-      // api/source default to agent-sdk + max-pro-sub (free Claude on the sub) via the schema;
-      // model left null → resolveTurnRouting falls back to DEFAULT_CHAT_MODEL_ID.
-      createdAt: now,
-      updatedAt: now,
-    });
-
-    // How the chat opens:
-    //  • greeting present → seed greetings[0] as the opening (message row #1 + sdk session seed).
-    //  • else + generateOpeningIfEmpty → the model writes the opening (a no-user-message turn).
-    //  • else → blank; the user speaks first.
-    const greeting = (params.firstMessage ?? "").trim();
-    if (greeting.length > 0) {
+    if (api === "agent-sdk") {
       const sessionId = randomUUID();
-      await db.insert(messages).values({
-        id: newId(),
-        chatId,
-        seq: 1,
-        role: "assistant",
-        content: greeting,
-        createdAt: now,
-      });
-      // Seed the sdk session so turn 1's resume sees the greeting. A greeting has no real user turn
-      // before it, so prefix the ST invisible-user stub → the validated user→assistant seed shape
-      // (./seed; the stub is session-only, never a messages row, so the UI never shows it).
       await new DbSessionStore(db, chatId).append(
         { projectKey: chatId, sessionId },
         buildSeedFrames(
@@ -100,17 +133,107 @@ export function createLifecycle(ctx: ChatContext) {
         ),
       );
       await db.update(chats).set({ sessionId, messageCount: 1 }).where(eq(chats.id, chatId));
-    } else if (params.generateOpeningIfEmpty === true) {
-      await generateOpening(ownerId, chatId);
+    } else {
+      await db.update(chats).set({ messageCount: 1 }).where(eq(chats.id, chatId));
     }
-
-    return { chatId };
   }
 
-  // "Generate to open" (the create-time toggle): the model writes the first message in-character via
-  // a no-user-message turn — a hidden open-scene prompt (never stored as a messages row) elicits the
-  // opening, and runTurn lets the SDK build the session. Graceful: a provider failure leaves the chat
-  // blank (the user can just speak first) rather than failing creation.
+  // Lazy creation + commit. Scaffolds the chat row (resolved + seeded routing/preset/persona), writes
+  // the greeting (user-message path only), then runs the FIRST turn — the user's message (delegated to
+  // the full `send` pipeline) or a generated opening. A chat row exists only after this is called.
+  async function startChat(params: StartChatParams): Promise<StartChatResult> {
+    const ownerId = await ensureUser(db, params.username);
+
+    // Exactly one commit trigger. A greeting-only / blank chat is a CLIENT draft and never reaches here.
+    const userMessage = params.firstUserMessage?.trim() ?? "";
+    const hasUserMessage = userMessage.length > 0;
+    const wantsOpening = params.generateOpening === true;
+    if (hasUserMessage === wantsOpening) {
+      throw new DomainOperationError(
+        "invalid_commit_trigger",
+        "startChat requires exactly one of firstUserMessage or generateOpening.",
+      );
+    }
+
+    const version = await loadOwnedVersion(ownerId, params.characterVersionId);
+    const settings = await loadUserSettings(db, ownerId);
+
+    // Seed routing: caller arg → user default → schema default (undefined ⇒ the column default applies).
+    const api = params.api ?? settings.defaultApi;
+    const source = params.source ?? settings.defaultSource;
+    const model = params.model ?? settings.defaultModel ?? null;
+
+    // MULTI-USER GUARD: `max-pro-sub` is the OWNER's single host credential (the `claude login` Max
+    // sub). A non-owner must not ride it — require an explicit paid source. The effective source is the
+    // resolved value, or the schema default (`max-pro-sub`) when none is set.
+    // TODO(multi-user): replace the owner-handle check with a per-user credential model.
+    const effectiveSource = source ?? "max-pro-sub";
+    if (params.username !== env.DEFAULT_USER_HANDLE && effectiveSource === "max-pro-sub") {
+      throw new DomainOperationError(
+        "source_not_permitted",
+        "max-pro-sub is the owner's credential; choose source 'openrouter'.",
+      );
+    }
+
+    const presetVersionId = await resolveOwnedPresetVersion(
+      ownerId,
+      params.presetId ?? settings.defaultPresetId ?? null,
+    );
+    const personaId = await resolveOwnedPersona(
+      ownerId,
+      params.personaId ?? settings.defaultPersonaId ?? null,
+    );
+
+    const chatId = params.chatId ?? newId();
+    const now = Date.now();
+    const title = (params.title ?? version.name).trim() || version.name;
+
+    await db.insert(chats).values({
+      id: chatId,
+      ownerId,
+      title,
+      characterVersionId: params.characterVersionId,
+      personaId,
+      // The persona pinned at open (what the card's {{user}} resolves against) = the active persona.
+      pinnedPersonaId: personaId,
+      presetVersionId,
+      // undefined keys fall through to the schema column defaults (api=agent-sdk, source=max-pro-sub).
+      ...(api !== undefined ? { api } : {}),
+      ...(source !== undefined ? { source } : {}),
+      ...(model !== null ? { model } : {}),
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    if (hasUserMessage) {
+      // Greeting (if the chosen index exists) becomes seq 1; the user's message follows via send.
+      let expectedSeq = 0;
+      const idx = params.greetingIndex ?? 0;
+      const greeting = (version.greetings[idx] ?? "").trim();
+      if (greeting.length > 0) {
+        await seedGreeting(chatId, greeting, api ?? "agent-sdk", now);
+        expectedSeq = 1;
+      }
+      // Delegate the first turn to the full send pipeline (regex, routing, provider, provenance,
+      // compaction, indexing, error rollback) — no duplication; send stays the single turn path.
+      const result = await send({
+        username: params.username,
+        chatId,
+        expectedSeq,
+        content: userMessage,
+      });
+      return { chatId, result };
+    }
+
+    // generateOpening: the model writes seq 1; no greeting, no user message.
+    await generateOpening(ownerId, chatId);
+    return { chatId, result: { status: "ok", messages: await listByChat(chatId) } };
+  }
+
+  // The model writes the opening message in-character via a no-user-message turn — a hidden open-scene
+  // prompt (never a messages row) elicits it. Runs on ANY provider: agent-sdk builds the session;
+  // openrouter rebuilds statelessly (the prompt rides as a single user turn). Graceful: a provider
+  // failure leaves the chat blank (the user can just speak first) rather than failing creation.
   async function generateOpening(ownerId: string, chatId: string): Promise<void> {
     const chat = await loadOwnedChat(ownerId, chatId);
     const [assembleCtx, promptConfig] = await Promise.all([
@@ -118,18 +241,26 @@ export function createLifecycle(ctx: ChatContext) {
       resolveConfig(chat),
     ]);
     const routing = resolveTurnRouting(chat, promptConfig);
-    if (routing.runner !== "agent-sdk") {
-      return; // create() only makes agent-sdk chats; an openrouter opening would route through runRaw
-    }
+    const systemPrompt = assemblePrompt(promptConfig, assembleCtx);
     try {
-      const turn = await runTurn({
-        prompt: OPEN_SCENE_PROMPT,
-        model: routing.model,
-        source: routing.source,
-        sessionStore: new DbSessionStore(db, chatId),
-        systemPrompt: assemblePrompt(promptConfig, assembleCtx),
-        generation: promptConfig.params,
-      });
+      const turn =
+        routing.runner === "agent-sdk"
+          ? await runTurn({
+              prompt: OPEN_SCENE_PROMPT,
+              model: routing.model,
+              source: routing.source,
+              sessionStore: new DbSessionStore(db, chatId),
+              systemPrompt,
+              generation: promptConfig.params,
+            })
+          : await openRouterRunner(routing.api)({
+              model: routing.model,
+              chatId,
+              systemPrompt,
+              history: [{ role: "user", content: OPEN_SCENE_PROMPT }],
+              generation: routing.params,
+              providerRouting: routing.providerRouting,
+            });
       const openingMsgId = newId();
       await db.insert(messages).values({
         id: openingMsgId,
@@ -147,7 +278,8 @@ export function createLifecycle(ctx: ChatContext) {
       await db
         .update(chats)
         .set({
-          sessionId: turn.sessionId,
+          // sessionId is an agent-sdk concept; the openrouter runner has none (rebuilds from canon).
+          ...(routing.runner === "agent-sdk" ? { sessionId: turn.sessionId } : {}),
           messageCount: 1,
           totalTokensIn: turn.usage.tokensIn,
           totalTokensOut: turn.usage.tokensOut,
@@ -260,5 +392,5 @@ export function createLifecycle(ctx: ChatContext) {
     return patchChat(params.username, params.chatId, { archived: params.archived });
   }
 
-  return { create, editMessage, delete: deleteChat, updateTitle, star, archive };
+  return { startChat, editMessage, delete: deleteChat, updateTitle, star, archive };
 }

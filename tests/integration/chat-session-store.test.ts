@@ -1,8 +1,7 @@
 import type { SessionKey, SessionStoreEntry } from "@anthropic-ai/claude-agent-sdk";
 import { expect, test } from "vitest";
-import { createChatService } from "../../src/server/domain/chat";
 import { DbSessionStore } from "../../src/server/domain/chat/store";
-import { freshDb } from "../support/db";
+import { freshDb, seedChatRow } from "../support/db";
 
 // The compaction artifact the SDK ACTUALLY persists (measured via scripts/sdk-compaction-probe.ts,
 // NOT from the type docs): a `system`/`compact_boundary` frame carrying only "Conversation
@@ -18,15 +17,7 @@ interface CompactMetadata {
 // never invoked — these tests exercise the store directly, not a turn.
 async function chatFixture() {
   const db = await freshDb();
-  const chat = createChatService(db, {
-    runTurn: () => Promise.reject(new Error("runner unused in store tests")),
-  });
-  const { chatId } = await chat.create({
-    username: "owner",
-    title: "T",
-    characterName: "Aria",
-    characterDescription: "a test character",
-  });
+  const { chatId } = await seedChatRow(db);
   return { db, chatId };
 }
 

@@ -3,13 +3,13 @@ import { expect, test } from "vitest";
 import type { Db } from "../../src/db/client";
 import { chatSegments, messages } from "../../src/db/schema";
 import { newId } from "../../src/server/domain/_shared/ids";
-import { createChatService } from "../../src/server/domain/chat";
+
 import { generateDigests, generateSegments } from "../../src/server/domain/chat/memory/generate";
 import { createSearchService } from "../../src/server/domain/search/service";
 import type { Embedder } from "../../src/server/embeddings/embedder";
 import type { Reranker } from "../../src/server/embeddings/reranker";
 import type { Summarizer } from "../../src/server/embeddings/summarizer";
-import { freshDb } from "../support/db";
+import { freshDb, seedChatRow } from "../support/db";
 
 const VOCAB = new Map<string, number>();
 function bow(text: string): Float32Array {
@@ -70,13 +70,7 @@ async function seedChat(
   characterName: string,
   script: { role: "user" | "assistant"; content: string }[],
 ): Promise<string> {
-  const chat = createChatService(db, { embedder: fakeEmbedder });
-  const { chatId } = await chat.create({
-    username,
-    title: "t",
-    characterName,
-    characterDescription: "d",
-  });
+  const { chatId } = await seedChatRow(db, { ownerId: username, name: characterName, title: "t" });
   const now = Date.now();
   for (const [i, m] of script.entries()) {
     await db

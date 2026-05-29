@@ -2,12 +2,11 @@ import { eq } from "drizzle-orm";
 import { expect, test } from "vitest";
 import { chatDigests, chatSegments, messages } from "../../src/db/schema";
 import { newId } from "../../src/server/domain/_shared/ids";
-import { createChatService } from "../../src/server/domain/chat";
 import { generateDigests, generateSegments } from "../../src/server/domain/chat/memory/generate";
 import { computeDigestHubScores, computeSegmentHubScores } from "../../src/server/domain/corpus";
 import type { Embedder } from "../../src/server/embeddings/embedder";
 import type { Summarizer } from "../../src/server/embeddings/summarizer";
-import { freshDb } from "../support/db";
+import { freshDb, seedChatRow } from "../support/db";
 
 const VOCAB = new Map<string, number>();
 function bow(text: string): Float32Array {
@@ -52,13 +51,7 @@ const SCRIPT: { role: "user" | "assistant"; content: string }[] = [
 
 test("CSLS hub scores are computed + stored on chat_digests and chat_segments", async () => {
   const db = await freshDb();
-  const chat = createChatService(db, { embedder });
-  const { chatId } = await chat.create({
-    username: "owner",
-    title: "t",
-    characterName: "Vermithrax",
-    characterDescription: "d",
-  });
+  const { chatId } = await seedChatRow(db, { name: "Vermithrax", title: "t" });
   const now = Date.now();
   for (const [i, m] of SCRIPT.entries()) {
     await db

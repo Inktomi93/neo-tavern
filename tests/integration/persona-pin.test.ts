@@ -2,9 +2,8 @@ import { eq } from "drizzle-orm";
 import { expect, test } from "vitest";
 import { chats, personas } from "../../src/db/schema";
 import { newId } from "../../src/server/domain/_shared/ids";
-import { ensureUser } from "../../src/server/domain/_shared/users";
 import { createChatService } from "../../src/server/domain/chat";
-import { freshDb } from "../support/db";
+import { freshDb, seedChatRow } from "../support/db";
 
 // Insert a persona directly (no create API yet) and return its id.
 async function makePersona(
@@ -21,14 +20,11 @@ async function makePersona(
 test("the CARD's {{user}} resolves to the PINNED persona; the persona marker to the ACTIVE one", async () => {
   const db = await freshDb();
   const chat = createChatService(db);
-  const ownerId = await ensureUser(db, "owner");
-
   // A card whose description references {{user}} — char_description renders against the PINNED persona.
-  const { chatId } = await chat.create({
-    username: "owner",
+  const { chatId, ownerId } = await seedChatRow(db, {
+    name: "Cae",
+    description: "adores {{user}}",
     title: "t",
-    characterName: "Cae",
-    characterDescription: "adores {{user}}",
   });
 
   const active = await makePersona(db, ownerId, "Alice", "the hero");
@@ -49,13 +45,10 @@ test("the CARD's {{user}} resolves to the PINNED persona; the persona marker to 
 test("pinnedPersonaId null falls back to the active persona (legacy / no persona at open)", async () => {
   const db = await freshDb();
   const chat = createChatService(db);
-  const ownerId = await ensureUser(db, "owner");
-
-  const { chatId } = await chat.create({
-    username: "owner",
+  const { chatId, ownerId } = await seedChatRow(db, {
+    name: "Cae",
+    description: "adores {{user}}",
     title: "t",
-    characterName: "Cae",
-    characterDescription: "adores {{user}}",
   });
   const active = await makePersona(db, ownerId, "Alice", "the hero");
   // only the active persona set; pinnedPersonaId stays null

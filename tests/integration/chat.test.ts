@@ -5,7 +5,7 @@ import { ChatNotFoundError, createChatService } from "../../src/server/domain/ch
 import type { ChatTurnParams } from "../../src/server/providers/claude-sdk";
 import type { RawTurnParams } from "../../src/server/providers/openrouter";
 import { type ChatTurnResult, TurnError } from "../../src/server/providers/turn";
-import { freshDb } from "../support/db";
+import { freshDb, seedCharacter, seedChatRow } from "../support/db";
 
 function cannedTurn(reply: string): ChatTurnResult {
   return {
@@ -96,8 +96,6 @@ function failingRawRunner(error: TurnError) {
   return { run, calls };
 }
 
-const baseChar = { characterName: "Aria", characterDescription: "a test character" };
-
 // Flip a freshly-created (agent-sdk) chat onto the openrouter Responses runner with a pinned model
 // — the shape setProvider produces. (create() only makes agent-sdk chats.)
 async function makeRaw(
@@ -116,7 +114,7 @@ test("create → send round-trips two messages with correct seq + roles", async 
   const { run, calls } = fakeRunner("hi from the fake model");
   const chat = createChatService(db, { runTurn: run });
 
-  const { chatId } = await chat.create({ username: "owner", title: "T", ...baseChar });
+  const { chatId } = await seedChatRow(db);
   const result = await chat.send({ username: "owner", chatId, expectedSeq: 0, content: "hello" });
 
   expect(result.status).toBe("ok");
@@ -135,7 +133,7 @@ test("stale send (wrong expectedSeq) returns 'stale' and does NOT run the model"
   const { run, calls } = fakeRunner("x");
   const chat = createChatService(db, { runTurn: run });
 
-  const { chatId } = await chat.create({ username: "owner", title: "T", ...baseChar });
+  const { chatId } = await seedChatRow(db);
   await chat.send({ username: "owner", chatId, expectedSeq: 0, content: "first" }); // tip now at seq 2
 
   const stale = await chat.send({
@@ -154,7 +152,7 @@ test("the next turn resumes the persisted session id", async () => {
   const { run, calls } = fakeRunner("ok");
   const chat = createChatService(db, { runTurn: run });
 
-  const { chatId } = await chat.create({ username: "owner", title: "T", ...baseChar });
+  const { chatId } = await seedChatRow(db);
   await chat.send({ username: "owner", chatId, expectedSeq: 0, content: "one" });
   await chat.send({ username: "owner", chatId, expectedSeq: 2, content: "two" });
 
@@ -166,7 +164,7 @@ test("a chat owned by another user is NOT_FOUND-scoped", async () => {
   const { run } = fakeRunner("x");
   const chat = createChatService(db, { runTurn: run });
 
-  const { chatId } = await chat.create({ username: "owner", title: "T", ...baseChar });
+  const { chatId } = await seedChatRow(db);
 
   await expect(chat.listMessages({ username: "intruder", chatId })).rejects.toBeInstanceOf(
     ChatNotFoundError,
@@ -186,7 +184,7 @@ test("a failed turn rolls the user message back out and returns a typed error", 
   );
   const chat = createChatService(db, { runTurn: run });
 
-  const { chatId } = await chat.create({ username: "owner", title: "T", ...baseChar });
+  const { chatId } = await seedChatRow(db);
   const result = await chat.send({ username: "owner", chatId, expectedSeq: 0, content: "hello" });
 
   expect(result.status).toBe("error");
@@ -208,7 +206,7 @@ test("a raw-mode chat generates through runRaw with provider=openrouter and no s
   const raw = fakeRawRunner("raw reply");
   const chat = createChatService(db, { runTurn: sdk.run, runRaw: raw.run });
 
-  const { chatId } = await chat.create({ username: "owner", title: "T", ...baseChar });
+  const { chatId } = await seedChatRow(db);
   await makeRaw(db, chatId, "deepseek/deepseek-chat");
 
   const result = await chat.send({ username: "owner", chatId, expectedSeq: 0, content: "hello" });
@@ -241,7 +239,7 @@ test("a failed raw turn rolls back identically to sdk (shared error path)", asyn
   );
   const chat = createChatService(db, { runRaw: raw.run });
 
-  const { chatId } = await chat.create({ username: "owner", title: "T", ...baseChar });
+  const { chatId } = await seedChatRow(db);
   await makeRaw(db, chatId, "deepseek/deepseek-chat");
 
   const result = await chat.send({ username: "owner", chatId, expectedSeq: 0, content: "hello" });
@@ -262,7 +260,7 @@ test("setProvider switches an agent-sdk chat onto the openrouter Responses runne
   const raw = fakeRawRunner("raw reply");
   const chat = createChatService(db, { runTurn: sdk.run, runRaw: raw.run });
 
-  const { chatId } = await chat.create({ username: "owner", title: "T", ...baseChar });
+  const { chatId } = await seedChatRow(db);
   await chat.send({ username: "owner", chatId, expectedSeq: 0, content: "hi" }); // agent-sdk turn, sets sessionId
 
   await chat.setProvider({ username: "owner", chatId, api: "responses", source: "openrouter" });
@@ -290,7 +288,7 @@ test("setProvider to chat-completions routes the next turn through the chat-comp
     runRaw: responses.run,
     runChatCompletion: chatCompletion.run,
   });
-  const { chatId } = await chat.create({ username: "owner", title: "T", ...baseChar });
+  const { chatId } = await seedChatRow(db);
 
   await chat.setProvider({
     username: "owner",
@@ -314,7 +312,7 @@ test("setProvider to an incoherent combo (chat-completions + max-pro-sub) throws
     runTurn: fakeRunner("x").run,
     runRaw: fakeRawRunner("y").run,
   });
-  const { chatId } = await chat.create({ username: "owner", title: "T", ...baseChar });
+  const { chatId } = await seedChatRow(db);
 
   await expect(
     chat.setProvider({ username: "owner", chatId, api: "chat-completions", source: "max-pro-sub" }),
@@ -326,7 +324,7 @@ test("setProvider entering agent-sdk from the openrouter runner seeds a session 
   const sdk = fakeRunner("sdk reply");
   const raw = fakeRawRunner("raw reply");
   const chat = createChatService(db, { runTurn: sdk.run, runRaw: raw.run });
-  const { chatId } = await chat.create({ username: "owner", title: "T", ...baseChar });
+  const { chatId } = await seedChatRow(db);
   await chat.send({ username: "owner", chatId, expectedSeq: 0, content: "hi" }); // seq 1,2 of canon
   // Leave agent-sdk (drops session), then come back — re-entry must re-seed from canon.
   await chat.setProvider({ username: "owner", chatId, api: "responses", source: "openrouter" });
@@ -346,7 +344,7 @@ test("fork to raw branches canon at a seq into a new, independent chat", async (
   const db = await freshDb();
   const chat = createChatService(db, { runTurn: fakeRunner("reply").run });
 
-  const { chatId } = await chat.create({ username: "owner", title: "Origin", ...baseChar });
+  const { chatId } = await seedChatRow(db, { title: "Origin" });
   await chat.send({ username: "owner", chatId, expectedSeq: 0, content: "one" }); // seq 1,2
   await chat.send({ username: "owner", chatId, expectedSeq: 2, content: "two" }); // seq 3,4
 
@@ -379,7 +377,7 @@ test("fork to raw branches canon at a seq into a new, independent chat", async (
 test("fork to sdk seeds session_entries from canon + sets a valid-UUID sessionId", async () => {
   const db = await freshDb();
   const chat = createChatService(db, { runTurn: fakeRunner("reply").run });
-  const { chatId } = await chat.create({ username: "owner", title: "Origin", ...baseChar });
+  const { chatId } = await seedChatRow(db, { title: "Origin" });
   await chat.send({ username: "owner", chatId, expectedSeq: 0, content: "one" }); // seq 1,2
 
   const { chatId: forkId } = await chat.forkChat({
@@ -404,45 +402,51 @@ test("fork to sdk seeds session_entries from canon + sets a valid-UUID sessionId
   expect(seeded.every((f) => f.chatId === forkId)).toBe(true);
 });
 
-test("a greeting (firstMessage) seeds an opening message + an sdk session", async () => {
+test("startChat keeps the greeting as seq 1, ahead of the first user message", async () => {
   const db = await freshDb();
-  const chat = createChatService(db, { runTurn: fakeRunner("x").run });
-
-  const { chatId } = await chat.create({
-    username: "owner",
-    title: "T",
-    ...baseChar,
-    firstMessage: "Welcome, traveler. I am Aria.",
+  const { run } = fakeRunner("hi from the model");
+  const chat = createChatService(db, { runTurn: run });
+  const { characterVersionId } = await seedCharacter(db, {
+    id: "c-greet",
+    ownerId: "owner",
+    name: "Aria",
+    greetings: ["Welcome, traveler. I am Aria."],
   });
 
-  // The greeting is messages row #1 (what the user sees).
-  const msgs = await chat.listMessages({ username: "owner", chatId });
-  expect(msgs).toHaveLength(1);
-  expect(msgs[0]?.role).toBe("assistant");
-  expect(msgs[0]?.seq).toBe(1);
-  expect(msgs[0]?.content).toBe("Welcome, traveler. I am Aria.");
+  const { chatId, result } = await chat.startChat({
+    username: "owner",
+    characterVersionId,
+    firstUserMessage: "hello",
+  });
 
-  // The sdk session is seeded so turn 1's resume sees the greeting; the invisible-user stub is
-  // session-only (NOT a messages row) — 2 frames (stub + greeting), 1 message.
+  expect(result.status).toBe("ok");
+  // Greeting (seq 1) → user (seq 2) → model reply (seq 3), persisted together at first send.
+  const msgs = await chat.listMessages({ username: "owner", chatId });
+  expect(msgs.map((m) => [m.seq, m.role])).toEqual([
+    [1, "assistant"],
+    [2, "user"],
+    [3, "assistant"],
+  ]);
+  expect(msgs[0]?.content).toBe("Welcome, traveler. I am Aria.");
+  // The greeting seeded the sdk session (so the first turn had context).
   const row = (await db.select().from(chats).where(eq(chats.id, chatId)))[0];
-  expect(row?.sessionId).toMatch(/^[0-9a-f-]{36}$/);
-  const frames = await db
-    .select()
-    .from(sessionEntries)
-    .where(eq(sessionEntries.sessionId, row?.sessionId ?? ""));
-  expect(frames).toHaveLength(2); // invisible user + the greeting
+  expect(row?.sessionId).toBeTruthy();
 });
 
-test("generateOpeningIfEmpty has the model write the opening (no greeting)", async () => {
+test("startChat with generateOpening has the model write seq 1 (no user message)", async () => {
   const db = await freshDb();
   const { run, calls } = fakeRunner("*The tavern door creaks open.* Welcome!");
   const chat = createChatService(db, { runTurn: run });
+  const { characterVersionId } = await seedCharacter(db, {
+    id: "c-open",
+    ownerId: "owner",
+    name: "Aria",
+  });
 
-  const { chatId } = await chat.create({
+  const { chatId } = await chat.startChat({
     username: "owner",
-    title: "T",
-    ...baseChar,
-    generateOpeningIfEmpty: true,
+    characterVersionId,
+    generateOpening: true,
   });
 
   // The hidden open-scene prompt ran one turn; its reply is the opening message (row #1).
@@ -453,15 +457,25 @@ test("generateOpeningIfEmpty has the model write the opening (no greeting)", asy
   expect(msgs[0]?.content).toBe("*The tavern door creaks open.* Welcome!");
 });
 
-test("no greeting + toggle off → blank chat, user speaks first (default)", async () => {
+test("startChat requires exactly one commit trigger (neither/both → no chat row)", async () => {
   const db = await freshDb();
-  const { run, calls } = fakeRunner("x");
-  const chat = createChatService(db, { runTurn: run });
+  const chat = createChatService(db, { runTurn: fakeRunner("x").run });
+  const { characterVersionId } = await seedCharacter(db, {
+    id: "c-none",
+    ownerId: "owner",
+    name: "Aria",
+  });
 
-  const { chatId } = await chat.create({ username: "owner", title: "T", ...baseChar });
-
-  expect(calls).toHaveLength(0); // nothing generated
-  expect(await chat.listMessages({ username: "owner", chatId })).toHaveLength(0);
+  await expect(chat.startChat({ username: "owner", characterVersionId })).rejects.toThrow();
+  await expect(
+    chat.startChat({
+      username: "owner",
+      characterVersionId,
+      firstUserMessage: "hi",
+      generateOpening: true,
+    }),
+  ).rejects.toThrow();
+  expect(await db.select().from(chats)).toHaveLength(0); // nothing committed
 });
 
 // ── 5E: swipes + edits ───────────────────────────────────────────────────────
@@ -471,7 +485,7 @@ test("swipe regenerates the last assistant turn as a new variant (migrating the 
   const { run } = seqRunner(["first reply", "second reply"]);
   const chat = createChatService(db, { runTurn: run });
 
-  const { chatId } = await chat.create({ username: "owner", title: "T", ...baseChar });
+  const { chatId } = await seedChatRow(db);
   await chat.send({ username: "owner", chatId, expectedSeq: 0, content: "hello" }); // assistant "first reply" @ seq 2
 
   // swipe mutates the tip — expectedSeq stays the chat's MAX (2), it does NOT advance seq.
@@ -490,7 +504,7 @@ test("selectVariant flips back to an earlier swipe without regenerating", async 
   const { run, calls } = seqRunner(["first reply", "second reply"]);
   const chat = createChatService(db, { runTurn: run });
 
-  const { chatId } = await chat.create({ username: "owner", title: "T", ...baseChar });
+  const { chatId } = await seedChatRow(db);
   await chat.send({ username: "owner", chatId, expectedSeq: 0, content: "hello" });
   await chat.swipe({ username: "owner", chatId, expectedSeq: 2 }); // now 2 variants, idx 1 active
   const callsAfterSwipe = calls.length;
@@ -514,12 +528,9 @@ test("a greeting (seq-1 assistant, no user) can be swiped via the open-scene pat
   const { run, calls } = seqRunner(["an alternate greeting"]);
   const chat = createChatService(db, { runTurn: run });
 
-  const { chatId } = await chat.create({
-    username: "owner",
-    title: "T",
-    ...baseChar,
-    firstMessage: "Welcome, traveler.",
-  }); // greeting is messages row #1 (seeded, NOT generated → runner not called yet)
+  // The transient "opened with a greeting, user hasn't replied yet" state (seq-1 assistant, session
+  // seeded), produced directly — startChat would also add a user turn, so this is seeded by hand.
+  const { chatId } = await seedChatRow(db, { greeting: "Welcome, traveler." });
   expect(calls).toHaveLength(0);
 
   const result = await chat.swipe({ username: "owner", chatId, expectedSeq: 1 });
@@ -537,7 +548,7 @@ test("editMessage updates content + editedAt in place, no model call", async () 
   const { run, calls } = seqRunner(["a reply"]);
   const chat = createChatService(db, { runTurn: run });
 
-  const { chatId } = await chat.create({ username: "owner", title: "T", ...baseChar });
+  const { chatId } = await seedChatRow(db);
   await chat.send({ username: "owner", chatId, expectedSeq: 0, content: "hello" });
   const userMsgId = (await chat.listMessages({ username: "owner", chatId }))[0]?.id ?? "";
 
@@ -557,7 +568,7 @@ test("editMessage updates content + editedAt in place, no model call", async () 
 test("swipe on a chat whose tip is not an assistant turn throws not_swipeable", async () => {
   const db = await freshDb();
   const chat = createChatService(db, { runTurn: seqRunner(["x"]).run });
-  const { chatId } = await chat.create({ username: "owner", title: "T", ...baseChar }); // blank chat, no messages
+  const { chatId } = await seedChatRow(db); // blank chat, no messages
 
   await expect(chat.swipe({ username: "owner", chatId, expectedSeq: 0 })).rejects.toMatchObject({
     name: "ChatOperationError",
@@ -571,7 +582,7 @@ test("updateTitle changes chat title", async () => {
   const db = await freshDb();
   const chat = createChatService(db, { runTurn: fakeRunner("x").run });
 
-  const { chatId } = await chat.create({ username: "owner", title: "Original", ...baseChar });
+  const { chatId } = await seedChatRow(db, { title: "Original" });
   await chat.updateTitle({ username: "owner", chatId, title: "New Title" });
 
   const summary = (await chat.listChats({ username: "owner" }))[0];
@@ -582,7 +593,7 @@ test("star toggles starred status", async () => {
   const db = await freshDb();
   const chat = createChatService(db, { runTurn: fakeRunner("x").run });
 
-  const { chatId } = await chat.create({ username: "owner", title: "T", ...baseChar });
+  const { chatId } = await seedChatRow(db);
 
   await chat.star({ username: "owner", chatId, starred: true });
   expect((await chat.getChat({ username: "owner", chatId })).starred).toBe(true);
@@ -595,7 +606,7 @@ test("archive toggles archived status", async () => {
   const db = await freshDb();
   const chat = createChatService(db, { runTurn: fakeRunner("x").run });
 
-  const { chatId } = await chat.create({ username: "owner", title: "T", ...baseChar });
+  const { chatId } = await seedChatRow(db);
 
   await chat.archive({ username: "owner", chatId, archived: true });
   expect((await chat.getChat({ username: "owner", chatId })).archived).toBe(true);
@@ -608,7 +619,7 @@ test("delete removes chat completely", async () => {
   const db = await freshDb();
   const chat = createChatService(db, { runTurn: fakeRunner("x").run });
 
-  const { chatId } = await chat.create({ username: "owner", title: "T", ...baseChar });
+  const { chatId } = await seedChatRow(db);
   await chat.delete({ username: "owner", chatId });
 
   await expect(chat.getChat({ username: "owner", chatId })).rejects.toThrow(/not found/i);

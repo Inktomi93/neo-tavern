@@ -1,5 +1,6 @@
 import { on } from "node:events";
 import { z } from "zod";
+import { chatApiSchema, chatSourceSchema } from "../../../shared/chat-routing";
 import { chatStreamEmitter } from "../../domain/chat";
 import { publicProcedure, t } from "../trpc";
 
@@ -7,18 +8,32 @@ import { publicProcedure, t } from "../trpc";
 // transport errors. No db/provider access here.
 
 export const chatRouter = t.router({
-  create: publicProcedure
+  // Lazy creation: the client holds the new-chat draft (seeded from user settings) and calls this only
+  // at the first canon action — the user's first message OR a generated opening (exactly one). The
+  // chatId may be client-supplied so the client can subscribe to streamMessages before the turn runs.
+  start: publicProcedure
     .input(
-      z.object({
-        title: z.string().min(1).max(200),
-        characterName: z.string().min(1).max(200),
-        characterDescription: z.string().min(1),
-        firstMessage: z.string().optional(),
-        // Toggle: when no firstMessage, have the model write the opening (vs the user speaking first).
-        generateOpeningIfEmpty: z.boolean().optional(),
-      }),
+      z
+        .object({
+          chatId: z.string().min(1).optional(),
+          characterVersionId: z.string().min(1),
+          title: z.string().min(1).max(200).optional(),
+          personaId: z.string().min(1).optional(),
+          presetId: z.string().min(1).optional(),
+          api: chatApiSchema.optional(),
+          source: chatSourceSchema.optional(),
+          model: z.string().min(1).nullable().optional(),
+          greetingIndex: z.number().int().nonnegative().optional(),
+          firstUserMessage: z.string().optional(),
+          generateOpening: z.boolean().optional(),
+        })
+        .refine((v) => (v.firstUserMessage != null) !== (v.generateOpening === true), {
+          message: "Provide exactly one of firstUserMessage or generateOpening.",
+        }),
     )
-    .mutation(({ ctx, input }) => ctx.services.chat.create({ username: ctx.username, ...input })),
+    .mutation(({ ctx, input }) =>
+      ctx.services.chat.startChat({ username: ctx.username, ...input }),
+    ),
 
   // The caller's chats, newest-updated first (owner-scoped) — the chat-list rail.
   list: publicProcedure.query(({ ctx }) => ctx.services.chat.listChats({ username: ctx.username })),

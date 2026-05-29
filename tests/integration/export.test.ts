@@ -8,7 +8,7 @@ import { messages as messagesTable, messageVariants } from "../../src/db/schema"
 import { newId } from "../../src/server/domain/_shared/ids";
 import { ensureUser } from "../../src/server/domain/_shared/users";
 import { createCharacterService } from "../../src/server/domain/character";
-import { createChatService } from "../../src/server/domain/chat";
+
 import { buildCardV3 } from "../../src/server/domain/export/card";
 import { buildChatJsonl, type ExportMessage } from "../../src/server/domain/export/chat";
 import { embedCardChunk } from "../../src/server/domain/export/png";
@@ -16,7 +16,7 @@ import { createExportService } from "../../src/server/domain/export/service";
 import { parseCardPng } from "../../src/server/domain/import/card";
 import { parseChatJsonl } from "../../src/server/domain/import/chat";
 import { createCas } from "../../src/server/storage/cas";
-import { freshDb } from "../support/db";
+import { freshDb, seedChatRow } from "../support/db";
 
 // Export ↔ import symmetry: the existing import parsers are the oracle. Whatever we export must
 // re-parse to the same data — that's the spec these builders target.
@@ -226,13 +226,7 @@ test("exportCharacter is owner-scoped (a different owner gets null)", async () =
 
 test("exportChat reads messages + variants and round-trips through the chat parser", async () => {
   const db = await freshDb();
-  const ownerId = await ensureUser(db, "owner");
-  const { chatId } = await createChatService(db).create({
-    username: "owner",
-    title: "Origin",
-    characterName: "Vermithrax",
-    characterDescription: "a dragon",
-  });
+  const { chatId, ownerId } = await seedChatRow(db, { name: "Vermithrax", title: "Origin" });
 
   const now = Date.now();
   const asstId = newId();
