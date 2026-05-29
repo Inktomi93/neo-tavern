@@ -54,6 +54,25 @@ export function toReasoningEffort(generation: GenerationParams | undefined): str
   return g.effort === "max" ? "xhigh" : (g.effort ?? "high");
 }
 
+// Map the unified sampling knobs → @openrouter/sdk chat-completions request fields. Conditional
+// spreads keep each field precisely typed (so the request stays assignable to `chat.send`) and omit
+// unset knobs entirely. Reasoning + provider routing are added separately by the caller. Pure +
+// exported so the mapping is unit-tested without a live client.
+export function chatSamplingFields(g: GenerationParams) {
+  return {
+    ...(g.temperature !== undefined ? { temperature: g.temperature } : {}),
+    ...(g.topP !== undefined ? { topP: g.topP } : {}),
+    ...(g.topK !== undefined ? { topK: g.topK } : {}),
+    ...(g.maxOutputTokens !== undefined ? { maxCompletionTokens: g.maxOutputTokens } : {}),
+    ...(g.frequencyPenalty !== undefined ? { frequencyPenalty: g.frequencyPenalty } : {}),
+    ...(g.presencePenalty !== undefined ? { presencePenalty: g.presencePenalty } : {}),
+    ...(g.repetitionPenalty !== undefined ? { repetitionPenalty: g.repetitionPenalty } : {}),
+    ...(g.seed !== undefined ? { seed: g.seed } : {}),
+    ...(g.logitBias !== undefined ? { logitBias: g.logitBias } : {}),
+    ...(g.stop !== undefined ? { stop: g.stop } : {}),
+  };
+}
+
 // Map @openrouter/sdk errors → our provider-agnostic kinds. Response errors carry a numeric
 // statusCode; transport errors (connection/timeout/abort) carry a name.
 export function mapOpenRouterError(error: unknown, model: string, endpoint: string): TurnError {

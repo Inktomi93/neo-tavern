@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { toSdkGeneration } from "./claude-sdk";
-import { toReasoningEffort } from "./openrouter";
+import { chatSamplingFields, toReasoningEffort } from "./openrouter";
 
 // Locks the provider-agnostic GenerationParams → native-surface translation for both runners (the
 // "one vocab, each runner translates" contract). Pure functions; no network/model.
@@ -76,5 +76,43 @@ describe("openrouter reasoning translation (toReasoningEffort)", () => {
 
   test("thinking on without an explicit effort defaults to 'high'", () => {
     expect(toReasoningEffort({ thinking: "adaptive" })).toBe("high");
+  });
+});
+
+describe("openrouter chat sampling translation (chatSamplingFields)", () => {
+  test("empty params → no sampler fields", () => {
+    expect(chatSamplingFields({})).toEqual({});
+  });
+
+  test("maxOutputTokens maps to the SDK's maxCompletionTokens field", () => {
+    expect(chatSamplingFields({ maxOutputTokens: 256 })).toEqual({ maxCompletionTokens: 256 });
+  });
+
+  test("maps every sampler to its SDK field name; unset knobs are omitted", () => {
+    expect(
+      chatSamplingFields({
+        temperature: 0.7,
+        topP: 0.9,
+        topK: 40,
+        maxOutputTokens: 512,
+        frequencyPenalty: 0.5,
+        presencePenalty: 0.3,
+        repetitionPenalty: 1.1,
+        seed: 42,
+        logitBias: { "123": -5 },
+        stop: ["\n\n", "END"],
+      }),
+    ).toEqual({
+      temperature: 0.7,
+      topP: 0.9,
+      topK: 40,
+      maxCompletionTokens: 512,
+      frequencyPenalty: 0.5,
+      presencePenalty: 0.3,
+      repetitionPenalty: 1.1,
+      seed: 42,
+      logitBias: { "123": -5 },
+      stop: ["\n\n", "END"],
+    });
   });
 });

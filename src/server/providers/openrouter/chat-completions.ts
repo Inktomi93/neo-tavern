@@ -4,6 +4,7 @@ import { type ChatTurnResult, type ChatTurnUsage, normalizeFinishReason } from "
 import { ANTHROPIC_CACHE, effectiveProviderRouting, isAnthropicModel } from "./caching";
 import { getOpenRouterClient } from "./client";
 import {
+  chatSamplingFields,
   lookupContextWindow,
   mapOpenRouterError,
   type RawTurnParams,
@@ -122,9 +123,7 @@ export async function runChatCompletionTurn(params: RawTurnParams): Promise<Chat
   const chatRequest = {
     model: params.model,
     messages,
-    ...(cfg.temperature !== undefined ? { temperature: cfg.temperature } : {}),
-    ...(cfg.topP !== undefined ? { topP: cfg.topP } : {}),
-    ...(cfg.maxOutputTokens !== undefined ? { maxCompletionTokens: cfg.maxOutputTokens } : {}),
+    ...chatSamplingFields(cfg),
     ...(reasoningEffort !== undefined ? { reasoning: { effort: reasoningEffort } } : {}),
     ...(chatProvider !== undefined ? { provider: chatProvider } : {}),
   };

@@ -21,6 +21,17 @@ export const generationParamsSchema = z.object({
   // knob, so these are no-ops in modes 1 & 2.
   temperature: z.number().min(0).max(2).optional(),
   topP: z.number().min(0).max(1).optional(),
+  // Extended samplers — OPENROUTER chat-completions ONLY (no-op on agent-sdk, which owns sampling,
+  // and on the openrouter `responses` runner). Names map 1:1 to the @openrouter/sdk request fields.
+  // The SDK exposes these (top_k/penalties/seed/logit_bias/stop) but NOT min_p/top_a, so those aren't
+  // here. Penalties follow the OpenAI range; repetitionPenalty is OpenRouter's multiplicative variant.
+  topK: z.number().int().nonnegative().optional(),
+  frequencyPenalty: z.number().min(-2).max(2).optional(),
+  presencePenalty: z.number().min(-2).max(2).optional(),
+  repetitionPenalty: z.number().min(0).max(2).optional(),
+  seed: z.number().int().optional(),
+  logitBias: z.record(z.string(), z.number()).optional(),
+  stop: z.array(z.string()).optional(),
   // Reply ceiling — BOTH runners (agent-sdk: CLAUDE_CODE_MAX_OUTPUT_TOKENS; openrouter: the request
   // field). Don't set absurdly low (64 errored to empty on agent-sdk — docs/sdk-notes.md).
   maxOutputTokens: z.number().int().positive().optional(),
