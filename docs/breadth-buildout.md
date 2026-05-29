@@ -1,0 +1,276 @@
+# Breadth build-out — security, corpus analytics, type-safety
+
+**What this is.** A self-contained, implement-from-cold spec for three tracks that a
+neo-tavern↔SillyTavern audit flagged as the remaining places we "lose points." It is written so a
+fresh session can pick up ANY track and build it **without the originating conversation**. Every
+current-state claim is cited `file:line`; every proposal is grounded in code that exists in this repo
+or in `references/` (the answer-keys). Build ambitiously (feature-breadth, not YAGNI) — these three
+are mission-aligned: corpus analytics is the stated **killer differentiator**, security is real
+hardening, type-safety is the rigor bar.
+
+**The three tracks (and why):**
+- **Track A — Security: SSRF + hardening.** The app makes outbound HTTP with zero egress guard, and
+  has no rate limiting. Two concrete holes vs ST.
+- **Track B — Corpus RAG analytics.** The RAG *engine* is built + validated; the headline *product*
+  (co-occurrence, theme analysis, duplicate detection) is "plumbing-not-product." This is the
+  differentiator no other ST client has.
+- **Track C — Type-safety.** ~14 real type-escapes (`z.any()`, post-Zod `as` casts, untyped DB JSON
+  reads) weaken the otherwise end-to-end-typed stack.
+
+**How to use this doc.** Pick a track. Read its "Current state" first (it's accurate as of writing —
+re-verify the `file:line`s, code drifts). Then implement in the listed order, **commit-per-step**,
+keeping `pnpm check` green. See "Working discipline" at the bottom — it's load-bearing (layer cake,
+migrations, the vector-index lesson, Serena editing).
+
+---
+
+## Working discipline (read once, applies to all tracks)
+
+- **Green-to-ship:** `pnpm check` = biome + `tsc --noEmit` + `pnpm arch` (dependency-cruiser) + vitest.
+  Must be green before every commit. Commit directly to `main`, one logical step per commit, with the
+  `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>` trailer.
+- **Editing:** Serena is the active LSP — prefer `replace_content` / `replace_symbol_body` /
+  `insert_*` over blind rewrites. Serena's `get_diagnostics_for_file` can be STALE after editing a
+  type-definition file (the LSP doesn't reload dependents) — trust `tsc` (fresh) over it.
+- **Layer cake (enforced by `.dependency-cruiser.cjs`):** `shared`/`db` are foundation. `domain`
+  features expose a front-door `index.ts`; callers never reach internals; features don't import each
+  other. tRPC routers are THIN (validate → call `ctx.services.*` → map domain errors); they can't
+  import `db`/infra. **Infra (auth, egress hooks) CANNOT import domain** — this bites Track A's audit
+  trail (use pino + an injected port). Run `pnpm arch` after structural changes.
+- **Migrations:** migrations are squashed to a single `src/db/migrations/0000_baseline.sql`. A new
+  schema change = edit `src/db/schema/*.ts` → `pnpm exec drizzle-kit generate --name <x>`. **Vector
+  tables:** declare the ANN index in-schema as an expression index —
+  `index("<t>_ann").on(sql`libsql_vector_idx(embedding)`)` (literal column, not `${t.col}`); see
+  `src/db/schema/search.ts` for the pattern. Clear a vector table ONLY via `clearVectorTable`
+  (`src/db/vector-ops.ts`) — a bare `DELETE FROM` poisons the DiskANN shadow table. Existing DBs on
+  deploy run `pnpm db:baseline` once (see `scripts/db-baseline.ts`).
+- **Time:** epoch-ms UTC everywhere; `src/shared/time.ts` is the only parser. Relevant to Track B's
+  timeline (the `msgMidAt` gap below).
+- **TS strictness:** `exactOptionalPropertyTypes` + `noUncheckedIndexedAccess` are ON. Optional object
+  props that may be `undefined` must be typed `T | undefined` (not bare `T?`). Array/typed-array index
+  access is `T | undefined`.
+- **Config tiers:** new deploy/secret knobs → `src/server/env.ts`. New admin-runtime knobs →
+  `src/shared/app-settings.ts` + `src/server/config/app-config.ts`. Per-user → `src/shared/user-settings.ts`.
+
+---
+
+# Track A — Security: SSRF + hardening
+
+## A.1 Current state (verified `file:line`)
+
+**Egress — zero SSRF protection.** All outbound is `fetch`/undici. Call sites:
+- `src/server/providers/openrouter/client.ts` — `@openrouter/sdk`, base URL env-fixed (`openrouter.ai`, public). Not user-controlled.
+- `src/server/auth-oidc.ts` — `client.discovery(new URL(env.OIDC_ISSUER))` + token grant; issuer env-fixed.
+- `src/server/auth/trust-header.ts:119` — `createRemoteJWKSet(new URL(trimmed))` where `trimmed` comes from the **`X-Authentik-Meta-Jwks` request header**. **This is the lone live user-influenced egress vector** (only reachable if the `forward-header` network-trust assumption breaks).
+- `src/server/embeddings/embedder.ts:11-12` — `hf.allowRemoteModels = true`, downloads from HF CDN (public). Model IDs hardcoded.
+
+**No rate limiting anywhere.** No body-size limits (`src/server/app.ts`; `import-http.ts:159` `parseBody` unbounded). No throttle on tRPC mutations or on `/api/auth/login`+`/callback` (`auth-oidc.ts`). NOTE: the OIDC callback already requires a matching in-memory PKCE `state`, so brute-force there is moot; **authentik owns credential brute-force**. The real value of rate-limiting here is **GPU/LLM-spend throttling**.
+
+**No security headers** — no CSP/HSTS/X-Frame-Options/X-Content-Type-Options (zero hits for `secureHeaders|helmet|cors`).
+
+**Audit substrate exists but unused for security:** `auditLogs` table (`src/db/schema/audit.ts`) + `logAudit` (`src/server/domain/_shared/audit.ts`) are used for domain mutations; security events (SSRF block, CSRF reject, auth fail, rate-limit) are not wired. `logAudit` requires a non-null `entityId` (security events often lack one) → schema relaxation needed.
+
+**IP lies behind Caddy** (`src/server/observability/debug.ts:83` notes this). IP-keying only works on the pre-auth `/api/auth/login` via Caddy's `X-Forwarded-For`. Everything authed must key on resolved identity (`ctx.auth`).
+
+**Timing-safe:** `timingSafeEqual` used correctly for `DEBUG_TOKEN` (`debug.ts:1,33`); session `tokenHash` is HMAC-peppered. No raw secret string-compares. Posture is fine.
+
+## A.2 Build-out
+
+### A.2.1 SSRF egress firewall — **CORE, effort M**
+**Critical:** ST's `private-request-filter.js` replaces `http.globalAgent`; **Node 24 `fetch`/undici ignore that** — porting it = silent no-op. Correct seam = `undici.setGlobalDispatcher(new Agent({ connect: { lookup } }))`. The custom `lookup` resolves DNS and rejects private IPs; passing the resolved address straight to connect closes the DNS-rebinding TOCTOU.
+
+New file `src/server/infra/egress-firewall.ts`:
+```ts
+import { lookup as dnsLookup } from "node:dns";
+import { setGlobalDispatcher, Agent } from "undici";   // add `undici` as an explicit dep (TS resolution)
+import { getLog } from "../observability/logger";
+// Reuse the private-range logic already in src/server/auth/trust-header.ts (isPrivateOrLoopbackHost).
+// Block: 127/8, 10/8, 172.16/12, 192.168/16, 169.254/16 (incl. 169.254.169.254 metadata), ::1, fc00::/7, fe80::/10.
+export function installEgressFirewall(allowlist: string[]): void {
+  setGlobalDispatcher(new Agent({ connect: { lookup(hostname, opts, cb) {
+    dnsLookup(hostname, (err, address, family) => {
+      if (err) return cb(err, address, family);
+      if (isPrivateAddress(address) && !allowlist.includes(hostname)) {
+        getLog().warn({ hostname, address }, "security: egress SSRF blocked");
+        return cb(new Error(`SSRF_BLOCKED: ${hostname} → ${address}`), address, family);
+      }
+      cb(null, address, family);
+    });
+  } } }));
+}
+```
+- Install as the **first** non-trivial statement in `src/server/index.ts` (before `buildApp`).
+- **Allowlist:** only the OIDC issuer host needs it (e.g. `auth.lan`). New env `EGRESS_ALLOWLIST` (comma-list) + surface as an AppSettings knob (`egressAllowlist: string[]`) so the owner can add internal hosts at runtime.
+- **Belt-and-suspenders / RISK:** if `@openrouter/sdk` or `openid-client` v6 instantiate their own undici `Pool`, they bypass `setGlobalDispatcher`. Both `openid-client` `discovery` and `jose` `createRemoteJWKSet` accept a custom `fetch`/`[customFetch]` — wire an egress-checking fetch there too as a redundant layer. **Add a test that a request from each lib is intercepted.**
+
+### A.2.2 Rate limiting — **CORE (B1), effort S**
+Library: `rate-limiter-flexible` (in-process `RateLimiterMemory`, ST's choice, no Redis). New `src/server/trpc/rate-limit.ts`. Two limiters, both keyed on `ctx.auth.identity?.handle` (NOT IP):
+- `generalMutationLimiter` (~120/min) on `authedProcedure` mutations.
+- `aiTurnLimiter` (~20/min) additionally on `chat.send`/`chat.swipe`/`chat.generateOpening` (the GPU/$ guard — the real point).
+On limit: `throw new TRPCError({ code: "TOO_MANY_REQUESTS" })`. Wire as a tRPC middleware on the procedure ladder in `src/server/trpc/trpc.ts`.
+- **B2 (nice-to-have):** `/api/auth/login` IP-keyed limit (~10/min) via Caddy's `X-Forwarded-For`. Low value (authentik owns brute-force).
+- **B3 (nice-to-have):** global request ceiling via a Hono middleware. Belt for a LAN box; set high.
+
+### A.2.3 Security headers — **CORE, effort XS**
+`hono/secure-headers` (no new dep). Add in `src/server/app.ts` after the observability middleware: CSP (`defaultSrc 'self'`; `styleSrc 'self' 'unsafe-inline'` for Tailwind), `xFrameOptions: DENY`, `xContentTypeOptions`, HSTS, `referrerPolicy`. **Gate HSTS behind `env.AUTH_MODE !== "single-user"`** (single-user is plain-http LAN). **CSP is iterative** — `scriptSrc 'self'` is correct for a chunked Vite prod build but may need a nonce/`'unsafe-inline'` once the frontend lands; ship a permissive dev CSP + strict prod CSP, tighten per frontend PR.
+
+### A.2.4 Body limits + zip-bomb guard — **CORE, effort XS**
+`hono/body-limit` **per-route** (a global limit breaks import): tRPC 1MB, asset upload 50MB, import zip 512MB (tune), import cards/chats 50MB. In `src/server/import-http.ts` the existing zip-slip guard (~`:154-165`) has **no decompressed-size check** — add a per-entry + total-decompressed-bytes counter in the unzip loop (zip-bomb defense). Land with the body limits.
+
+### A.2.5 Security-event audit trail — **CORE (partial), effort S**
+**Layer-cake:** infra (egress hook, CSRF gate) can't import domain `logAudit`. Use **pino** for infra events (the logger is foundation-layer, already redacts `cookie`/`token`/`apiKey`). For domain-layer DB-audit writes, inject a `SecurityAuditPort` interface at the composition root (same pattern as `DbInspector` in `debug.ts`). Events: SSRF block (egress hook, pino), CSRF reject (`trpc.ts` authMiddleware), rate-limit hit, failed OIDC exchange (`auth-oidc.ts:118`, add `event:"auth_failed"`), disabled-account reject (`auth-oidc.ts:140`), JWKS verify fail (`trust-header.ts:160`). Relax `logAudit`'s `entityId` to `string | null` (`audit.ts` + schema + migration) and add a `security` domain value.
+
+### A.2.6 JWKS hardening — **CORE, effort S**
+After the firewall: in `src/server/auth/trust-header.ts`, pre-flight the `X-Authentik-Meta-Jwks` URL (require `https:` + host ∈ allowlist) before `createRemoteJWKSet`. New env `FORWARD_AUTH_JWKS_ALLOWLIST` (default = OIDC issuer host). Add `issuer: env.OIDC_ISSUER` (and `audience: env.OIDC_CLIENT_ID` if present) to the `jwtVerify` options — `iss`/`aud` are currently unchecked (two lines).
+
+## A.3 Cool-shit breadth
+- **Outbound request logging** (debug-level): log `{method,url,status,ms}` from an extra dispatcher interceptor — diagnoses OpenRouter routing + model-download stalls.
+- **Host-header allowlist** (`ALLOWED_HOST_NAMES`) — Caddy already does this; belt for the raw-LAN-IP path.
+- **`pnpm audit --audit-level=high`** added to `pnpm check` — CVE surfacing without CI (one line).
+- **Account lockout** — OVERKILL for the homelab (authentik owns it); skip unless multi-user grows.
+
+## A.4 Sequencing (A)
+1. Security headers (XS) + body limits & zip-bomb guard (XS) — independent, land together.
+2. Per-user rate limiting (S) — needs `rate-limiter-flexible`.
+3. SSRF egress firewall (M) — needs `undici` dep, affects `index.ts` boot order.
+4. JWKS hardening (S) + `jwtVerify` iss/aud (XS).
+5. Security-event audit trail (S) — after 2+3 so events exist.
+6. Nice-to-haves (login limit, global ceiling, outbound logging, host allowlist, pnpm audit).
+
+**Files touched:** new `src/server/infra/egress-firewall.ts`, `src/server/trpc/rate-limit.ts`; modified `src/server/index.ts`, `src/server/app.ts`, `src/server/trpc/trpc.ts`, `src/server/auth/trust-header.ts`, `src/server/auth-oidc.ts`, `src/server/import-http.ts`, `src/server/env.ts`, `src/shared/app-settings.ts` + `src/server/config/app-config.ts`, `src/db/schema/audit.ts` + `src/server/domain/_shared/audit.ts` (+ migration). Deps: `undici`, `rate-limiter-flexible`.
+
+## A.5 Risks
+undici global-vs-library dispatcher (test interception). CSP vs Vite build (iterate). Zip-bomb size cap tuning. Rate-limit middleware must sit on `authedProcedure` (identity present), not `publicProcedure`. Audit from infra violates the layer cake (pino + injected port). `logAudit` entityId nullability (migration). Most of B2/B3/lockout are belt for a single-user LAN box — build the knobs, set them loose.
+
+---
+
+# Track B — Corpus RAG analytics (the differentiator)
+
+## B.1 Current state — what the engine already gives you (`file:line`)
+- **Character embeds:** `src/server/domain/corpus/service.ts` (`embedAndStore`/`embedAndStoreMany`/`existingKeys`) → `character_embeddings` (1024-dim, model-tagged). Targets from `src/server/domain/corpus/targets.ts` + `embed-text.ts`. Resumable GPU pass `scripts/embed-corpus.ts`.
+- **Chat memory substrate (live, incremental):** `src/server/domain/chat/memory/generate.ts` — `generateDigests` (LLM-summarized tier-0 blocks of `blockSize=8`, + consolidation tiers 1–3) → `chat_digests` (with `topicAnchor`, `keywords[]`, `seqStart/seqEnd`, `hubScore`); `generateSegments` (embed-only, full coverage) → `chat_segments`. Backfill: `scripts/memory-backfill.ts`.
+- **CSLS hubness:** `src/server/domain/corpus/hubness.ts` — `computeCharacterHubScores`/`computeDigestHubScores`/`computeSegmentHubScores`, exact pairwise cosine top-K mean per (type,model) via `computeGroupHubs` (loads vectors in-process, L2-normalizes, full dot-product matrix). Run by `scripts/csls.ts`. **This already computes the pairwise matrix dedup needs.** Ported from `references/card-curator/src/card_curator/index.py:62-89`; cross-ref `references/st-bridge/src/st_bridge/embeddings.py:149-177`.
+- **Search (live tRPC, `src/server/trpc/routers/search.ts`):** `knn`, `find`, `discover` (segment pool → group by character → ranked; the killer feature) in `src/server/domain/search/core.ts`; `digests`, `segments`, `corpus` (hybrid pool of both substrates, CSLS-ranked, cross-encoder reranked, block-deduped) in `src/server/domain/search/memory.ts`.
+- **Tags:** `src/db/schema/tags.ts` — `tags` has `source: "manual"|"auto"` (already anticipates auto-tagging) + typed junction tables.
+- **Summarizer (generative):** `src/server/embeddings/summarizer.ts` — `summarize(system,user,opts)`, local GGUF (GBNF-grammar JSON) + Haiku fallback. Used by `generateDigests` with `DIGEST_SCHEMA`.
+- **Vector schema:** `src/db/schema/search.ts` (native F32_BLOB + `libsql_vector_idx`, `hubScore real`, `topicAnchor`, `keywords` json).
+- **Reference ports (use these — don't re-derive):** `references/card-curator/src/card_curator/server.py:925-987` (`find_duplicates`, threshold 0.92), `index.py:62-89` (hub scores), `analyze.py:36-46` (compare schema) + `:135-146` (genre classify); `references/st-bridge/src/st_bridge/embeddings.py:179-220` (CSLS-corrected `find_duplicates`).
+
+## B.2 The data-model constraint that reframes "co-occurrence"
+**A chat has exactly ONE character** — `chats.characterVersionId` is a singular non-null FK (`src/db/schema/chats.ts`); there is NO group-chat junction. Literal character×character co-presence is **not representable**. So co-occurrence means: **keyword×keyword** (within `chat_digests.keywords`), **theme co-membership**, **character×theme/keyword profiles**, and a **character similarity graph** (kNN edges via cosine), NOT co-presence.
+
+## B.3 Pillar A — Co-occurrence — **effort S (pure SQL/JS, no GPU)**
+Unit: keyword×keyword within `chat_digests.keywords` (each digest has 4–20 scene tokens). Pair co-occurs when both appear in a digest's `keywords[]`; strength = count across digests.
+**New tables** (additive migration): `keyword_cooccurrence(id, owner_id, keyword_a, keyword_b, count, character_ids json, computed_at, UNIQUE(owner,a,b))` + indexes on (owner,a)/(owner,b); `character_keyword_profiles(id, owner_id, character_id→cascade, keyword, count, computed_at, UNIQUE(owner,char,kw))`.
+**Precompute** `scripts/compute-cooccurrence.ts`: load digests (join → characterId), normalize keywords (lowercase/trim; fold leading the/a/an + trailing punct; **filter <4 chars and any keyword in >50% of an owner's digests** = hub token, mirror CSLS logic), accumulate pair counts (O(k²)/digest, k≤20), upsert, truncate to top-N (~10k) pairs/owner. *Optional quality pass:* embed the ~few-hundred unique keywords (one batch, ~100ms GPU) and merge near-dups by cosine >0.95 before counting.
+**tRPC `analytics` router:** `topKeywords(limit,minCount)`, `cooccurringKeywords(keyword,limit)`, `characterKeywords(characterId,limit)`.
+
+## B.4 Pillar B — Theme analysis — **effort M**
+Unit: cluster the ~2,500 tier-0 digest embeddings into themes. **k-means** in **pure TS over Float32Arrays** (same pattern as `computeGroupHubs`; ~1s at 2,500×1024×k=30×50 iters; k-means++ init). HDBSCAN is not portable — skip. Community detection (Louvain on a kNN graph) is a stretch.
+**Naming:** per cluster, take the 5 centroid-nearest digests' `topicAnchor` strings → `summarizer.summarize` with a `THEME_NAMING_SCHEMA {theme_name, sub_themes[], description}` (port `analyze.py:classify_genre`). ~30–40 one-time LLM calls.
+**New tables:** `theme_clusters(id, owner_id, model, cluster_idx, theme_name, sub_themes json, description, centroid F32_BLOB(1024), member_count, computed_at, UNIQUE(owner,model,cluster_idx))` — centroids are few (~30), query by **loading direct**, no ANN index needed; `digest_theme_assignments(digest_id→cascade PK, cluster_idx, owner_id, distance, computed_at)` + index (owner,cluster_idx).
+**Precompute** `scripts/compute-themes.ts` (`--k` CLI + emit inertia/silhouette for elbow): load digests → k-means → name clusters → upsert. Tag `model`; re-run on embedder swap or after `memory:backfill`.
+**tRPC:** `themes()`, `themeTimeline(clusterId,bucketDays?)`, `characterThemeProfile(characterId)`, `themeCharacters(clusterId,limit)`.
+**DATA-MODEL GAP (decide early):** `chat_digests.createdAt` is *compute* time, not *story* time. The timeline needs a new **`msgMidAt integer`** column on `chat_digests` (median/midpoint message epoch-ms of the block's `seqStart..seqEnd`), populated by `generateDigests`. Cheap to add now while near the schema; epoch-ms UTC per `shared/time.ts`.
+
+## B.5 Pillar C — Duplicate / near-duplicate detection — **effort S (80% built)**
+- **Characters:** new `src/server/domain/corpus/duplicates.ts` `findDuplicateCharacters({threshold=0.92})` — port `server.py:926-987` + `st-bridge embeddings.py:179-220`. Reuse `computeGroupHubs`'s load+normalize+matmul; emit pairs with **CSLS-adjusted** cosine ≥ threshold, deduped (a,b)/(b,a), sorted desc. 310² trivial.
+- **Chats:** load `chat_segments` grouped by chatId → per-chat centroid (mean of segment vectors) → pairwise cosine ≥ threshold. **Filter to chats with messageCount>20** (short-chat centroids = false positives).
+- **Import-time (live):** on new card import, embed → `vector_top_k('character_embeddings_ann', vec, 5)` + CSLS → if top ≥0.92, surface "similar to X (0.94)" warning before write. Sub-second, uses existing ANN index. (corpus-import.md deferred `#47`.)
+**New table:** `duplicate_pairs(id, owner_id, entity_type 'character'|'chat', entity_id_a, entity_id_b, similarity, model, computed_at, UNIQUE(owner,type,a,b))` + indexes.
+**Precompute** `scripts/find-duplicates.ts` (like `csls`). **tRPC:** `duplicateCharacters(threshold?)`, `duplicateChats(threshold?)`, `similarCards(characterId,limit?)` (port `server.py:663`).
+
+## B.6 Cool-shit breadth
+- **Character similarity graph** (CORE): a low-threshold (~0.65) `duplicate_pairs` sweep → nodes+edges → force-directed client view; edge click → LLM "compare these two" (`analyze.py:compare_cards`). `analytics.similarityGraph(minSimilarity,maxNodes?)`.
+- **"More like this"** (CORE): `analytics.similarChats(chatId,limit?)` via chat-centroid kNN / existing `corpus()` with a digest-text query.
+- **Per-character profile** (CORE): pure SQL aggregate (chat_count, total_messages, tokens, first/last, digest_count) + theme profile + top keywords + existing `refineryScore`/`refineryAnalysis` columns (`characters.ts`). `analytics.characterProfile(characterId)`.
+- **Corpus dashboard** (CORE): pure SQL — totals, per-model usage (`messages.model`), activity timeline (`messages.createdAt`), top characters, tag distribution. `analytics.corpusStats()`.
+- **Forgotten gems** (STRETCH): high `totalTokensOut` + old `updatedAt` + distinctive themes → revisit score. `analytics.forgottenGems(limit?)`.
+- **Tag auto-suggestion** (STRETCH): top themes per character → candidate `{name, source:'auto'}` tags (the `tags.source='auto'` column exists for this). User confirms.
+- **LLM card comparison** (STRETCH): port `analyze.py:compare_cards` + `COMPARISON_SCHEMA`.
+
+## B.7 Compute constraints (load-bearing)
+- **All pairwise analytics must load vectors DIRECTLY from the DB, NOT via the ANN index** — `vector_top_k` is budget-capped (`DISCOVER_SEGMENT_POOL_CAP=400`, `src/server/domain/search/constants.ts`). Exactly what `hubness.ts` already does.
+- O(n²) is fine NOW (310 chars, 124 chats, 2.5k digests, 2.8k segments). The **segment-level hubness** pass (`csls.ts`) starts to bite (~minutes) at ~10k+ segments → then switch to an ANN-approx top-K (accepting minority-type bias). Dedup/graph passes stay bounded.
+- **Model-tag every rollup** (`theme_clusters.model`, `duplicate_pairs.model`) and stale-check at run vs `character_embeddings.model`/`chat_digests.model` — an embedder swap invalidates them.
+
+## B.8 Sequencing (B)
+1. **Dedup characters+chats** (`duplicates.ts` + `duplicate_pairs` + `scripts/find-duplicates.ts`) — S, biggest payoff, mostly built.
+2. **Semantic dedup on import** — S.
+3. **Co-occurrence** (tables + `scripts/compute-cooccurrence.ts` + endpoints) — S.
+4. **Corpus stats + character profile** — S (pure SQL).
+5. **Similarity graph + similar-cards** — S (lower-threshold sweep).
+6. **Themes** (schema incl. `msgMidAt`, `scripts/compute-themes.ts` k-means, naming, endpoints) — M; requires `pnpm memory:backfill` first.
+7. **Tag auto-suggest, forgotten gems, card-comparison** — stretch.
+Each step = precompute script → rollup table → tRPC → (later) UI; independently shippable. Endpoints are ready before the UI (`docs/ui-direction.md` Corpus/Analytics panel). Total: pillars+core breadth ~3–4 wk; stretch +1–2 wk.
+
+## B.9 Risks / open questions
+Keyword normalization depth (cheap regex vs embed-merge). Chat-centroid validity for short chats (filter >20 msgs). Keyword data quality (filter hub tokens). Choosing k (elbow/silhouette, expose `--k`). Theme-naming quality depends on `topicAnchor` distinctiveness (it's well-prompted in `memory/constants.ts TIER0_SYSTEM`). The `msgMidAt` gap (B.4) is the one real schema add.
+
+---
+
+# Track C — Type-safety (eliminate the real escape hatches)
+
+## C.1 The split
+47 escapes inventoried. **~14 are real holes; the rest are correct SDK-boundary patterns — KEEP them** (chasing SDK type-churn is a treadmill). Keep-list with justification in C.5.
+
+## C.2 Real holes + fixes (grouped)
+**Group A — Settings KV (`z.any()`):** `src/server/trpc/routers/settings.ts:26` `setGlobalSetting`. Fix: a discriminated-union registry keyed by setting name —
+```ts
+// src/shared/settings-registry.ts (new)
+export const globalSettingSchema = z.discriminatedUnion("key", [
+  z.object({ key: z.literal("app_settings"), value: appSettingsSchema }),
+  // future keys here, each with its value schema
+]);
+```
+Type `SettingsService.setGlobalSetting`'s value per-key.
+
+**Group B — Metadata blobs (`z.any()`):** `world-info.ts:65,82`, `persona.ts:8`. Fix: `z.record(z.string(), z.unknown()).nullable().optional()` (constrains to a JSON object). Align `CreatePersonaInput.metadata` (`persona/types.ts`) to `Record<string,unknown> | null` — this also kills the persona casts (#6,#7) because the inferred type now matches.
+
+**Group C — Post-Zod casts:** `character.ts:37,45` `as Create/UpdateCharacterInput`, `persona.ts:24,32`. Root cause: Zod-inferred type ≠ hand-written domain interface (optional-vs-null under `exactOptionalPropertyTypes`). Fix: **derive the domain input type FROM the schema** — move the schema to `*/types.ts`, `export type CreateCharacterInput = z.infer<typeof createCharacterSchema>`. Cast disappears.
+
+**Group D — Non-null assertions:** `settings/service.ts:88` `rows[0]!` → guard-and-throw. `custom-types.ts:18` `value[i]!` is provably in-bounds — keep (or `?? 0`).
+
+**Group E — Drizzle JSON-column casts:** `store.ts:90`, `character/service.ts:78,82` (`greetings`/`tags`), `world-info/service.ts:94,115` (`legacyKeys`), `memory/db.ts:34` (`keywords`). Fix: per-column Zod parsers at the read boundary — new `src/db/schema/parsers.ts` (`greetingsSchema = z.array(z.string()).nullable().catch(null)`, etc.); `store.ts` entry stays `z.custom<SessionStoreEntry>()` (see keep-list).
+
+**Group F — Lift-chain casts:** `prompt-config.ts:115`, `user-settings.ts:66` — already guarded; add an `isPlainObject` guard helper to drop the cast.
+
+**Group G — Import casts:** `import/chat.ts:191,208,243,254` `asObj(x) as RawFoo` → `asTyped<T>(v, zodSchema)` helper returning `T|null`; translate the `RawXxx` interfaces to Zod.
+
+**Group H — OIDC env casts:** `auth-oidc.ts:77-79` `env.* as string`. Fix: `assertOidcEnv(env): asserts e is ... & OidcEnv` called before `oidcRoutes`; narrows the 3 casts away.
+
+**Group I — debug ctx:** `app.ts:61` `ctx as any` → build a properly-typed `MacroContext` stub.
+
+**Group J — generic fetch:** `_shared/helpers.ts:30` `result[0] as TRow` → use Drizzle `typeof table.$inferSelect` inference (drop the `TRow` generic).
+
+**Group K — HF tensor casts:** `embedder.ts`/`reranker.ts`/`image-embedder.ts` (#33-38) + `hubness.ts:88,93,103` — loose `@huggingface/transformers` Tensor types + `noUncheckedIndexedAccess` hot loops. Convert to `number[]` once at the boundary / `?? 0` in loops. Low priority.
+
+## C.3 Breadth rigor
+- **Branded IDs (the marquee upgrade, effort L):** `src/server/domain/_shared/ids.ts` — `type ChatId = Branded<string,"ChatId">` etc.; `newId<T>()` mints branded; tRPC `.transform(s => s as ChatId)` at the boundary; domain signatures take `ChatId` not `string`. So a `chatId` can't be passed where a `characterId` is expected. Mint seam + tRPC boundary already centralized → tractable.
+- **Schema-as-single-source-of-truth** for all JSON blobs (follow `presetVersions.config`→`parsePromptConfig` model): `worldEntries.metadata`, `chats.metadata` (→ typed `providerRouting`), `messages.toolCalls/rawRequest/rawResponse`.
+- **`OpenRouterProviderRouting`** interface + Zod (replaces 6 `Record<string,unknown>` sites across `providers/openrouter/*` + `routing.ts`).
+- **`MacroEnv`** typed bag instead of `env: Record<string,unknown>` (`shared/macro/types.ts`).
+- **`satisfies`** on each `TurnRouting` branch in `routing.ts` (catches future api additions).
+
+## C.4 Sequencing (C)
+Mechanical first (all S unless noted): B (metadata schemas) → C (derive-from-Zod) → A (settings registry, M) → E (JSON parsers) → D (guard) → H (OIDC assert) → I (debug ctx) → G (asTyped, M) → breadth `OpenRouterProviderRouting` → F (lift guard) → J (helpers) → `MacroEnv` (M) → schema-SoT (M) → HF casts → `satisfies`. **Then** branded IDs (L, do it deliberately when not mid-feature).
+
+## C.5 KEEP (justified — do NOT "fix")
+Agent-SDK `SessionStoreEntry` casts (`seed.ts:67,84`, `store.ts:90`) — opaque SDK type, empirically validated (`scripts/seed-probe.ts`). Drizzle `prepare()` `WeakMap<Db,any>` (`context/queries.ts:49,131,172`) — unstable generic. OpenRouter SDK `*View` projections (`chat-completions.ts`, `responses.ts`, `catalog.ts`, `account.ts`) — the local `*View` interfaces ARE the typed projection over an unstable v0.x SDK. PRAGMA rows `Record<string,unknown>` (`debug/service.ts:113`). Undocumented `rate_limit_info` fields guard-and-cast (`claude-sdk/api.ts:232`). ST `RawCard` permissive projection (`import/card.ts`). Standard jose `JWTPayload` narrowing (`trust-header.ts:149`). Test fixtures. `scripts/` and `.tsx` are clean.
+
+---
+
+# Cross-track recommendation & open decisions
+
+**Recommended order:** (1) Track A **security core** — self-contained, closes the only real quality
+security gap, UI-independent. (2) Track B **dedup + co-occurrence** — fastest differentiator payoff
+(dedup ~80% built, co-occurrence pure SQL). (3) Track C **mechanical cleanup** — interleave, low-risk
+clean commits. (4) Track B **themes + breadth** — the bigger build (needs `msgMidAt` + backfill).
+(5) **Branded IDs** — once, deliberately.
+
+**Decide before building:**
+- **`msgMidAt` digest column** (Track B.4) — add now while near the schema (cheap; the theme timeline needs it).
+- **Branded IDs** (Track C.3) — high safety, domain-wide churn; opt in explicitly.
+
+Effort totals (rough): Track A core ~1 wk; Track B pillars+core breadth ~3–4 wk (+1–2 stretch);
+Track C mechanical ~2–3 days + branded IDs ~few days.

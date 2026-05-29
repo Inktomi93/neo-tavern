@@ -161,6 +161,9 @@ these → stop and ask.
 - **`docs/architecture.md`** — the enforced layer cake + folder map. Read before touching imports.
 - **`docs/conventions.md`** — recurring tooling/lint/logging traps (READ before fighting Biome/tsc).
 - **`docs/build-plan.md`** — the de-risk spike results + the **deferred backlog** (what's left).
+- **`docs/breadth-buildout.md`** — the implement-from-cold spec for the three audit-flagged breadth
+  tracks: security (SSRF + rate-limit + hardening), corpus RAG analytics (co-occurrence/themes/dedup +
+  the cool-shit surface), and full type-safety. Self-contained; pick a track and build it.
 - **`docs/data-model.md`** — schema design notes (the *why*). The schema *itself* lives in
   `src/db/schema.ts` (heavily commented — that's the source of truth, not a parallel spec).
 - **`docs/corpus-import.md`** — the ST import + RAG answer key (parsers/ranking lifted from
