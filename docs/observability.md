@@ -13,6 +13,11 @@ Two things: **structured logging** (pino) and an **in-process debug API** you
   `pino.multistream` destination carries its OWN `level` tied to `LOG_LEVEL` — without that
   multistream defaults streams to `info` and silently drops `debug` even when the logger is
   `debug`. Don't remove the per-stream `level`.
+- **`LOG_LEVEL` is also a runtime AppSetting** (`docs/settings-audit.md`): an admin can override it in
+  the DB via `updateAppSettings`, and **per-call** readers (e.g. the agent-sdk env builder's
+  debug-observability gate) pick it up immediately via `getAppConfig().logLevel`. The **boot-time
+  logger init still reads `env.LOG_LEVEL`**, so the multistream `level` only changes on restart —
+  live overrides affect per-call consumers, not the already-constructed pino streams.
 - **Use it, don't bypass it** (enforced — see below):
   - In a tRPC procedure: `ctx.log.info({ chatId }, "message appended")`.
   - Anywhere server-side: `import { getLog } from "../observability/logger"; getLog().warn(...)`.

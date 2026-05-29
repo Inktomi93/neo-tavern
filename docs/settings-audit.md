@@ -1,10 +1,12 @@
 # Settings / profile / config audit — toward ST parity
 
+> **STATUS: RESOLVED + IMPLEMENTED** (commits `f687c17`, `5e7bb4c`, `ed05474`). The audit's findings
+> stood; the proposal shipped with owner-signed-off refinements. See **"What shipped"** at the bottom
+> for the as-built surface and decisions. The original audit is kept below for the *why*.
+
 Audit of the config surface (env knobs, user settings, user profile) against the "bring settings up
-to SillyTavern parity" goal. **Read-only findings + a proposal** — the schema *shape* below is a
-product decision awaiting owner sign-off before implementation. Written autonomously (see the
-`★ SESSION GOAL` task); the headline correction is that **`env.ts` is not the problem** — the gap is
-that **user settings are a schemaless blob**.
+to SillyTavern parity" goal. The headline correction is that **`env.ts` is not the problem** — the
+gap was that **user settings were a schemaless blob**.
 
 ## The three config tiers (where things live)
 
@@ -68,7 +70,45 @@ auto-save/streaming toggles, and assorted behavior flags. The **in-scope** subse
   would expose them per-user.
 - Do **not** add instruct/context-template or theme settings — out of scope (chat-native APIs; one dark theme).
 
-## Open decisions for the owner
-- Exact `UserSettings` field set (the list above is a starting point).
-- Profile: separate `users` columns vs a `profile` block inside user settings.
-- Whether per-user defaults should override or merely seed `chat.create`.
+## Open decisions for the owner (now resolved — see "What shipped")
+- Exact `UserSettings` field set · Profile home · seed-vs-override · the AppSettings subset · admin gate.
+
+---
+
+# What shipped
+
+## Three config tiers, all typed now
+| Tier | Mechanism | Contract |
+| --- | --- | --- |
+| **Deploy-time / box / secret** | `env.ts` (Zod) | unchanged — bootstrap, GPU infra, secrets, identity/trust. |
+| **App-wide runtime toggles** | `AppSettings` over the `settings` KV (`shared/app-settings.ts` + `server/config/app-config.ts`) | typed; env is the default FLOOR, an admin DB override wins at runtime. **Admin-gated** (`requireAdmin`). |
+| **Per-user** | `user_settings.config` → `UserSettings` (`shared/user-settings.ts`) | typed, lenient (`parseUserSettings`), versioned. Seeds new-chat defaults. |
+
+## UserSettings (per-user)
+Fields: `defaultPresetId`, `defaultPersonaId`, `defaultApi/Source/Model`, `defaultGeneration`
+(**stored, not consumed** — your default preset's params ARE your samplers; see [[the lazy-create
+note]]), `profile.avatarAssetId` (`displayName` stays on `users`), `regexScripts`. Per-field `.catch`
+so one bad field self-heals. **Seed semantics** (caller arg → user default → schema default): wired
+into `chat.startChat`; lenient at consumption (a stale preset/persona id degrades to null).
+
+## AppSettings (admin runtime config) + the server-config triage
+The DB-backable subset of `env.ts`: `corpusAutoindex`, `importSkipCharacters`, `logLevel`,
+`idleUnloadMin`. The **boundary rule**: env stays the home for (a) bootstrap (can't read DB config
+before the DB exists; caddy serves `ASSETS_DIR`), (b) physical GPU/box infra (need `LD_LIBRARY_PATH`
+before onnxruntime loads; restart-required), (c) secrets/identity/trust (`OPENROUTER_API_KEY`,
+`DEBUG_TOKEN`, `NEO_PROXY_SECRET`, `DEFAULT_USER_HANDLE`). AppSettings is only runtime operational
+toggles.
+
+**Why the surface is small (ST `config.yaml` triage):** ~90% of ST's 394-line `config.yaml` is
+network/TLS/auth/SSO/whitelist/rate-limit — **delegated entirely to caddy + authentik** in our
+deploy (ST even has `sso.authentikAuth` + `trustedProxies` — literally our model, in-app). The
+provider-caching block (`claude.enableSystemPromptCache`/`cachingAtDepth`/`extendedTTL`) we **fix in
+code + per-preset by design** (a misconfigurable money-waster as a toggle). The rest (`backups`,
+`thumbnails`, `extensions`, `performance`) is config for features we don't have. What remained that's
+a genuine runtime toggle *and* applies to us is the 4 knobs above.
+
+## Admin gate (multi-user seam)
+`users.role` (`'admin'|'user'`, migration 0025; default `'user'` — backfill promoted the owner).
+`ensureUser` provisions `role:'admin'` iff `handle === DEFAULT_USER_HANDLE` (the one access decision,
+in one place — no escalation-by-default). `requireAdmin` (`_shared/admin.ts`) → `DomainForbiddenError`
+→ tRPC FORBIDDEN gates the AppSettings read/write.

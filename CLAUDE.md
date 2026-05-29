@@ -193,5 +193,26 @@ is the main thing missing. Run `pnpm check` (must be green) and skim recent comm
   every provider/import boundary (Agent-SDK `resetsAt` is epoch SECONDS; ST imports parse as UTC;
   the old local-tz `new Date(y,mo,d)` was a bug). Client renders local via `Intl`. The lone ISO
   string we emit is the Agent SDK's session-frame `timestamp` (its shape). (`docs/conventions.md`)
+- **Chat creation is LAZY: `chat.startChat` (NOT `create` — retired).** A chat row is written only at
+  the first canon action — the user's first message OR a generated opening (exactly one trigger). The
+  new-chat draft lives CLIENT-side (seeded from `UserSettings`); this is the commit. References an
+  EXISTING `characterVersionId` (the `character` domain owns library entities — no inline char). The
+  client may supply the chatId (so it can subscribe to `streamMessages` first). startChat seeds
+  routing/preset/persona (`arg ?? userDefault ?? schemaDefault`, lenient on stale ids) then delegates
+  the first turn to `send` (byte-identical; no duplication). `forkChat`/import still create rows
+  eagerly (direct insert) — that's a commit. Tests scaffold via `seedChatRow` (`tests/support/db.ts`).
+- **`max-pro-sub` is the OWNER's single host credential** (the `claude login` Max sub). startChat +
+  `resolveTurnRouting` guard: a non-owner defaulting into it is rejected (`DomainOperationError`).
+  Per-user credential isolation is a future multi-user workstream (TODO at the seam).
+- **Three typed config tiers** (`docs/settings-audit.md`): `env.ts` (deploy/box/secret/identity —
+  unchanged) · **AppSettings** (admin-editable runtime toggles over the `settings` KV;
+  `shared/app-settings.ts` + `server/config/app-config.ts`; env is the default FLOOR, DB override wins;
+  the 4 knobs = `corpusAutoindex/importSkipCharacters/logLevel/idleUnloadMin`) · **UserSettings**
+  (per-user, `shared/user-settings.ts`; typed/lenient/versioned; seeds new-chat defaults;
+  `defaultGeneration` is stored-not-consumed). Everything else (ST `config.yaml`'s network/TLS/auth)
+  is delegated to caddy+authentik.
+- **`users.role` (`'admin'|'user'`) is the multi-user access seam** (migration 0025; default `'user'`).
+  `ensureUser` sets `admin` iff `handle === DEFAULT_USER_HANDLE` (the one access decision). `requireAdmin`
+  (`_shared/admin.ts`) → `DomainForbiddenError` → tRPC FORBIDDEN gates admin surfaces (AppSettings).
 
 When unclear, ask. Don't re-litigate locked decisions — raise a question if you disagree.

@@ -106,3 +106,28 @@ The skeleton with the right bones, not polish: the **nav rail** (`Chat | Corpus 
 **chat surface**, and the **message-actions + swipe toolbar** — because that's what makes the core
 *feel* like ST and renders the backend already built. Card grid, editors, and the preset manager layer
 on after the core chat loop feels right.
+
+## New-chat flow: client-side draft → commit on first send
+
+Chat creation is **lazy** (see `CLAUDE.md` / `docs/data-model.md`). The "New chat" surface is a
+**client-side draft** — no server row yet:
+
+1. Open the draft for a chosen library character. Pre-fill provider/model, persona, and preset from
+   `getUserSettings` defaults (the user's saved preferences); let the user tweak ("lock in").
+2. Show the character's greeting (if any) as a preview — it is **not** committed yet.
+3. On the user's **first send** (or a "generate the opening" action), call `chat.start` with a
+   **client-generated `chatId`** (so the client can subscribe to `streamMessages` first), the chosen
+   `characterVersionId`, the locked-in routing/persona/preset, and the commit trigger
+   (`firstUserMessage` XOR `generateOpening`). That single call writes the chat row + greeting (as
+   seq 1) + runs the first turn.
+
+The draft is **ephemeral** — refreshing or switching devices before the first send discards it (no
+orphan rows, no GC). This is intended for the single-user posture.
+
+## Admin surface: AppSettings
+
+A small admin-only settings view (gated by `requireAdmin`) edits the runtime AppSettings
+(`corpusAutoindex`, `importSkipCharacters`, `logLevel`, `idleUnloadMin`) via `getAppSettings` /
+`updateAppSettings`. Everything else stays in `env.ts` (deploy/box/secret) — not user-editable. This
+is the *only* config "page"; per the slop guard, there are no settings pages for one-obvious-default
+toggles.

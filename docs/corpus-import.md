@@ -154,3 +154,17 @@ message/word/token counts, swipe count, first/last dates, `models_used` / `apis_
 reasoning + time-to-first-token + gen-time aggregates. **Don't add columns
 speculatively** (slop guard) — `chats.metadata` JSON holds extras until a real question
 needs a real column.
+
+## Import as a feature (not just the CLI)
+
+The CLI (`scripts/import-st.ts`) is the bulk-migration path; the import *domain*
+(`domain/import` — `parseCardPng`/`parseChatJsonl`/`collectBundlesFromDir`/`importCharacter`) is the
+reusable core. **`IMPORT_SKIP_CHARACTERS` is now a runtime AppSetting** (`docs/settings-audit.md`),
+not just env — the CLI reads it via `getAppConfig().importSkipCharacters` (after `reloadAppConfig`),
+so an admin's stored skip-list applies to imports without redeploying.
+
+**First-class import** (planned) exposes the domain over HTTP (owner-scoped, mirroring the export
+routes): individual PNG/JSON cards, individual JSONL chats (matched to an existing character by
+`slugifyHandle`), and a **zip** of an ST profile (unzip → `collectBundlesFromDir`). Real test
+fixtures live in `tests/fixtures/sillytavern/` (a true ST export — V2+V3 card + 7 chats incl. a
+branch+checkpoint) so the suite tests against the actual on-disk format.

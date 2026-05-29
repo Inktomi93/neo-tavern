@@ -165,6 +165,17 @@ one user, so a second user is a no-op not a rewrite. Global uniques become compo
 multi-user (`unique(ownerId, handle)` etc.). Identity = `X-Authentik-Username` at one auth seam:
 trusted-proxy header → that user; else `DEFAULT_USER_HANDLE`. No session, no CSRF.
 
+**Access role** (`users.role`, migration 0025): `'admin'|'user'`, default `'user'`. `ensureUser` (the
+JIT provisioning seam) sets `admin` iff the handle is `DEFAULT_USER_HANDLE` — the one access decision,
+in one place; default `'user'` avoids escalation-by-default when multi-user lands. `requireAdmin`
+(`_shared/admin.ts`) gates admin surfaces (AppSettings). **Owner-only credential:** `max-pro-sub` (mode
+1) is the host's single `claude login` — `chat.startChat`/`resolveTurnRouting` reject a non-owner
+defaulting into it; per-user credentials are a future workstream.
+
+**Lazy chat creation:** a `chats` row is written only at the first canon action (`chat.startChat` — the
+user's first message or a generated opening). The new-chat draft is CLIENT-side (seeded from
+`UserSettings`); `forkChat`/import are the eager exceptions (they cross canon, so they insert directly).
+
 ## Versioning — three kinds, don't conflate
 1. **Table/column shape → Drizzle migrations** (the migration history *is* the version; no
    per-table version column).
