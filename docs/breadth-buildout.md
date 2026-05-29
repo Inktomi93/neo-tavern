@@ -189,9 +189,27 @@ Unit: cluster the ~2,500 tier-0 digest embeddings into themes. **k-means** in **
 - **Tag auto-suggestion** (STRETCH): top themes per character → candidate `{name, source:'auto'}` tags (the `tags.source='auto'` column exists for this). User confirms.
 - **LLM card comparison** (STRETCH): port `analyze.py:compare_cards` + `COMPARISON_SCHEMA`.
 
-## B.7 Compute constraints (load-bearing)
-- **All pairwise analytics must load vectors DIRECTLY from the DB, NOT via the ANN index** — `vector_top_k` is budget-capped (`DISCOVER_SEGMENT_POOL_CAP=400`, `src/server/domain/search/constants.ts`). Exactly what `hubness.ts` already does.
-- O(n²) is fine NOW (310 chars, 124 chats, 2.5k digests, 2.8k segments). The **segment-level hubness** pass (`csls.ts`) starts to bite (~minutes) at ~10k+ segments → then switch to an ANN-approx top-K (accepting minority-type bias). Dedup/graph passes stay bounded.
+## B.7 Compute constraints (load-bearing) — why all-pairs analytics LOAD vectors, not use the ANN
+The ANN (`libsql_vector_idx` + `vector_top_k`) is for RETRIEVAL (one query → ~k nearest) and we DO use
+it there (`knn`/`discover`/`corpus`/images). For ALL-PAIRS analytics (hubness/CSLS, dedup, k-means) it's
+the wrong tool — for three reasons, the first two **measured on the live DB (296 char vectors)**:
+- **(1) Hard ~200 result cap.** `vector_top_k(k)` returns at most ~200 rows regardless of `k` —
+  measured: k=296→201, k=500→200, k=1000→200 on a 296-row table. You literally cannot enumerate every
+  neighbor through the index. Dedup needs ALL pairs ≥ threshold; hubness needs each row's full top-K →
+  the cap makes that impossible. (It's the DiskANN search-list default — a build-time param, ~200 by
+  default; raising it is a rabbit hole.) `DISCOVER_SEGMENT_POOL_CAP=400` (`search/constants.ts`) is the
+  app's tuning knob that lives WITH this cap, NOT the root cause.
+- **(2) WHERE filters apply AFTER the k nearest are chosen** (Turso AI&Embeddings docs + the
+  JOIN-then-WHERE pattern at `search/core.ts:47`). Same-type / same-owner scoping bleeds results inside
+  the ~200 budget — the "minority-type" bug `hubness.ts` documents (a hub card surrounded by its own
+  segments exhausts the budget before other types/owners surface).
+- **(3) All-pairs = N separate top-k queries.** Measured: 296 per-row ANN queries = 1464ms vs ONE exact
+  in-process matmul = 38ms (~38× faster) AND complete. `hubness.ts` already does the exact matmul.
+- **NOT the reason: approximation.** Measured ANN recall@10 vs exact = **100%** at this scale — the
+  index is accurate here. The reasons are the cap + the all-pairs shape, full stop.
+- **Crossover:** exact O(n²) is 38ms at 296 rows but scales quadratically; the **segment-level** pass
+  (`csls.ts`) bites (~minutes) at ~10k+ segments → THERE flip to ANN-approx top-K (accepting the ~200
+  cap + approximation). Character/chat dedup + graph passes stay bounded well below that.
 - **Model-tag every rollup** (`theme_clusters.model`, `duplicate_pairs.model`) and stale-check at run vs `character_embeddings.model`/`chat_digests.model` — an embedder swap invalidates them.
 
 ## B.8 Sequencing (B)
