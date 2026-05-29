@@ -56,6 +56,39 @@ OpenRouter key and generate on its own dime, on any access path, without touchin
 
 ---
 
+## §0.5. Build order — proper reusable seams, not ad-hoc (do it right the first time)
+
+**Read first (orient before writing a line):** `src/server/auth/trust-header.ts` (the seam) ·
+`src/server/trpc/trpc.ts` (the procedure/middleware pattern) + `trpc/context.ts` + `trpc/routers/*` ·
+`src/server/app.ts` (`createContext` + the Hono routes + every `resolveUsername` call site) ·
+`src/server/env.ts` · `_shared/users.ts` (`ensureUser`) + `_shared/admin.ts` (`requireAdmin`, already
+built) · the chat verbs `domain/chat/{send,swipe,compaction,lifecycle}.ts` + the two host-OR-key sites
+`providers/openrouter/client.ts` & `providers/claude-sdk/config.ts` · the migration flow
+(`pnpm db:generate:force`). The plan points to all of these inline; confirm them, don't assume.
+
+**Build these as real, reusable systems — IN THIS ORDER — each its own green `pnpm check` commit:**
+1. **Schema in ONE migration** (§13): `users.externalId`/`enabled` + `sessions` + `user_credentials`.
+   Generate once; build code on it. No dribbled follow-up migrations.
+2. **env** (§12): all new vars + the `AUTH_MODE=oidc ⇒ OIDC vars required` refinement, up front.
+3. **The auth resolver seam** (§2): `resolveIdentity` (layered: cookie → forward-header → fallback) +
+   the `resolveUsername` string wrapper + `provisionIdentity`. The ONE identity source; everything
+   consumes it.
+4. **The tRPC procedure ladder** (canonical — build ONCE, every router uses it; no scattered per-route
+   auth): `publicProcedure` (exists) → **`authedProcedure`** (resolved identity required + the CSRF
+   mutation-header check, §4/§2) → **`adminProcedure`** (`requireAdmin`). Retrofit existing routers onto
+   it where they should be gated.
+5. **The sessions domain** (§4): a real service — `create / validateByHash / revoke / revokeAllForUser /
+   slideExpiry`. Reused by OIDC, the `userAdmin` revoke, and any future API token. Cookie I/O via Hono's
+   `getCookie`/`setCookie`.
+6. **`crypto/secrets` + the credential resolver** (§7/§8): the resolver is the SINGLE turn-time
+   credential chokepoint — build it, THEN wire the turn path (§9). Never scatter key reads.
+7. **OIDC routes** (§10) LAST, on top of 3–6.
+
+The point: 4 (the procedure ladder), 5 (sessions), 6 (the resolver) are *systems other code hangs off* —
+build them as clean seams now so nothing has to be migrated/re-plumbed later.
+
+---
+
 ## §1. Authentik integration reference — GROUND TRUTH from the owner's live stack
 
 Read from the deployed `inktomi-stack/docker-compose.yaml` and `inktomi-stack/caddy/conf/Caddyfile`
