@@ -76,7 +76,7 @@ export async function buildAssembleContext(
   // the query reflects the message being answered (it can't reorder the insert — the stored content
   // depends on macroCtx → this context). Other callers (swipe/read/compaction) have no in-flight
   // turn, so they retrieve inline against committed rows here.
-  opts: { deferMemory?: boolean } = {},
+  opts: { deferMemory?: boolean; timezone?: string | undefined } = {},
 ): Promise<AssembleContext> {
   const cvRows = await db
     .select()
@@ -159,6 +159,7 @@ export async function buildAssembleContext(
     lastMessage,
     lastUserMessage,
     lastCharMessage,
+    timezone: opts.timezone,
     compactSummary: chat.api === "agent-sdk" ? null : chat.compactSummary,
     memory,
   };

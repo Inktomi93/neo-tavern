@@ -215,12 +215,13 @@ export function createLifecycle(
         chatId,
         expectedSeq,
         content: userMessage,
+        timezone: params.timezone,
       });
       return { chatId, result };
     }
 
     // generateOpening: the model writes seq 1; no greeting, no user message.
-    await generateOpening(ownerId, chatId);
+    await generateOpening(ownerId, chatId, params.timezone);
     return { chatId, result: { status: "ok", messages: await listByChat(chatId) } };
   }
 
@@ -228,10 +229,14 @@ export function createLifecycle(
   // prompt (never a messages row) elicits it. Runs on ANY provider: agent-sdk builds the session;
   // openrouter rebuilds statelessly (the prompt rides as a single user turn). Graceful: a provider
   // failure leaves the chat blank (the user can just speak first) rather than failing creation.
-  async function generateOpening(ownerId: string, chatId: string): Promise<void> {
+  async function generateOpening(
+    ownerId: string,
+    chatId: string,
+    timezone?: string,
+  ): Promise<void> {
     const chat = await loadOwnedChat(ownerId, chatId);
     const [assembleCtx, promptConfig] = await Promise.all([
-      buildAssembleContext(chat),
+      buildAssembleContext(chat, { timezone }),
       resolveConfig(chat),
     ]);
     const routing = resolveTurnRouting(chat, promptConfig);

@@ -79,7 +79,7 @@ export function createSwipe(ctx: ChatContext) {
       });
 
       const [assembleCtx, promptConfig] = await Promise.all([
-        buildAssembleContext(chat),
+        buildAssembleContext(chat, { timezone: params.timezone }),
         resolveConfig(chat),
       ]);
       const systemPrompt = assemblePrompt(promptConfig, assembleCtx);

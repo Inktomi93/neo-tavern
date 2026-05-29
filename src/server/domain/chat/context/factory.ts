@@ -59,8 +59,10 @@ export function createChatContext(db: Db, deps: ChatServiceDeps = {}) {
     maxSeq: (chatId: string) => maxSeq(db, chatId),
     recordTurnEvents: (chatId: string, messageId: string | null, events: TurnEvent[]) =>
       recordTurnEvents(db, chatId, messageId, events),
-    buildAssembleContext: (chat: typeof chats.$inferSelect, opts?: { deferMemory?: boolean }) =>
-      buildAssembleContext(db, embedder, reranker, chat, opts),
+    buildAssembleContext: (
+      chat: typeof chats.$inferSelect,
+      opts?: { deferMemory?: boolean; timezone?: string | undefined },
+    ) => buildAssembleContext(db, embedder, reranker, chat, opts),
     // Memory retrieval, exposed so `send` can run it with the in-flight (regex-processed) user turn,
     // AFTER that turn is known — the query then reflects the message being answered.
     retrieveMemory: (chatId: string, params: MemoryConfig, pendingUserText: string) =>

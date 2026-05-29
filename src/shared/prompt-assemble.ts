@@ -61,6 +61,8 @@ export interface AssembleContext {
   lastMessage?: string | undefined;
   lastUserMessage?: string | undefined;
   lastCharMessage?: string | undefined;
+  /** IANA timezone for {{time}}/{{date}} — threaded from the request (browser zone). Absent → server-local. */
+  timezone?: string | undefined;
   /** The chat's compaction summary, when in a mode that injects it (the stateless openrouter path).
    *  Rendered by the {{compact_summary}} marker; null/absent → nothing rendered. */
   compactSummary?: string | null;
@@ -115,6 +117,7 @@ function renderMacros(
     lastMessage: ctx.lastMessage,
     lastUserMessage: ctx.lastUserMessage,
     lastCharMessage: ctx.lastCharMessage,
+    timezone: ctx.timezone,
     env: {},
   });
 }

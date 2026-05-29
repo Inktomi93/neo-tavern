@@ -31,6 +31,9 @@ export interface MacroContext {
   lastMessage?: string | undefined; // most recent message of any role (excl. the in-flight one)
   lastUserMessage?: string | undefined;
   lastCharMessage?: string | undefined;
+  // IANA timezone (e.g. "America/New_York") for {{time}}/{{date}} — supplied per-request by the
+  // browser (Intl.DateTimeFormat().resolvedOptions().timeZone). Absent/invalid → server-local.
+  timezone?: string | undefined;
   // Allows extensions (like Regex) or future features to pass arbitrary runtime state
   env: Record<string, unknown>;
   // Recursively evaluate strings (e.g. for nested macros in args)

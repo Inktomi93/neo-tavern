@@ -1,5 +1,18 @@
 import { DateTime } from "luxon";
-import type { MacroHandler, MacroRegistry } from "./types";
+import type { MacroContext, MacroHandler, MacroRegistry } from "./types";
+
+// {{time}}/{{date}} clock source. Honors a per-request IANA `ctx.timezone` (the browser's zone,
+// threaded from the chat-send path); an absent or invalid zone falls back to the server-local
+// clock (Luxon's default zone, which respects the container's `TZ`). Single-user homelab default:
+// server-local ≈ user-local. The browser supplies the live zone once the send UI passes it.
+function nowInZone(ctx: MacroContext): DateTime {
+  if (ctx.timezone !== undefined && ctx.timezone !== "") {
+    const zoned = DateTime.now().setZone(ctx.timezone);
+    if (zoned.isValid) return zoned;
+    ctx.onWarn?.(`macro: invalid timezone "${ctx.timezone}" — falling back to server-local`);
+  }
+  return DateTime.now();
+}
 
 export class SimpleMacroRegistry implements MacroRegistry {
   private handlers = new Map<string, MacroHandler>();
@@ -68,9 +81,9 @@ export function createDefaultRegistry(): MacroRegistry {
     children ? ctx.evaluateAST(children).trim() : "",
   );
 
-  // Clock — locale-independent formats (testable; server-local ≈ user-local on the homelab box).
-  registry.register("time", () => DateTime.now().toFormat("HH:mm:ss"));
-  registry.register("date", () => DateTime.now().toFormat("yyyy-MM-dd"));
+  // Clock — locale-independent formats. Zone = ctx.timezone (browser) → server-local fallback.
+  registry.register("time", (_args, ctx) => nowInZone(ctx).toFormat("HH:mm:ss"));
+  registry.register("date", (_args, ctx) => nowInZone(ctx).toFormat("yyyy-MM-dd"));
 
   // Dice: {{roll::NdM}} (sum of N M-sided dice) or {{roll::N}} (1..N). Empty/invalid → "".
   registry.register("roll", (args) => {

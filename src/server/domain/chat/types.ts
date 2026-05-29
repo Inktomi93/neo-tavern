@@ -109,6 +109,8 @@ export interface StartChatParams {
   api?: ChatApi | undefined;
   source?: ChatSource | undefined;
   model?: string | null | undefined;
+  /** Browser IANA timezone for {{time}}/{{date}} on the first turn (Intl…timeZone). Absent → server-local. */
+  timezone?: string | undefined;
   // Which of the character version's greetings opens the chat (default 0). The greeting becomes seq 1
   // and is persisted together with the first user message. Ignored on the `generateOpening` path.
   greetingIndex?: number | undefined;
@@ -150,6 +152,8 @@ export interface SendParams {
   /** The client's last-seen tip (MAX seq it knows). Mismatch → "stale". */
   expectedSeq: number;
   content: string;
+  /** Browser IANA timezone for {{time}}/{{date}} this turn (Intl…timeZone). Absent → server-local. */
+  timezone?: string | undefined;
 }
 
 export interface ForkChatParams {
@@ -179,6 +183,8 @@ export interface SwipeParams {
   chatId: string;
   /** The chat's current MAX seq (swipe MUTATES the tip — it does NOT advance seq). Mismatch → stale. */
   expectedSeq: number;
+  /** Browser IANA timezone for {{time}}/{{date}} this turn (Intl…timeZone). Absent → server-local. */
+  timezone?: string | undefined;
 }
 
 export interface SelectVariantParams {

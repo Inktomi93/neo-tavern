@@ -26,6 +26,8 @@ export const chatRouter = t.router({
           greetingIndex: z.number().int().nonnegative().optional(),
           firstUserMessage: z.string().optional(),
           generateOpening: z.boolean().optional(),
+          // Browser IANA zone for {{time}}/{{date}} on the first turn; invalid → server-local (graceful).
+          timezone: z.string().optional(),
         })
         .refine((v) => (v.firstUserMessage != null) !== (v.generateOpening === true), {
           message: "Provide exactly one of firstUserMessage or generateOpening.",
@@ -65,6 +67,8 @@ export const chatRouter = t.router({
         chatId: z.string().min(1),
         expectedSeq: z.number().int().nonnegative(),
         content: z.string().min(1),
+        // Browser IANA zone for {{time}}/{{date}} this turn; invalid → server-local (graceful).
+        timezone: z.string().optional(),
       }),
     )
     .mutation(({ ctx, input }) => ctx.services.chat.send({ username: ctx.username, ...input })),
@@ -113,7 +117,14 @@ export const chatRouter = t.router({
 
   // Swipe: regenerate the last assistant turn as a new variant (same result shape as send).
   swipe: authedProcedure
-    .input(z.object({ chatId: z.string().min(1), expectedSeq: z.number().int().nonnegative() }))
+    .input(
+      z.object({
+        chatId: z.string().min(1),
+        expectedSeq: z.number().int().nonnegative(),
+        // Browser IANA zone for {{time}}/{{date}} this turn; invalid → server-local (graceful).
+        timezone: z.string().optional(),
+      }),
+    )
     .mutation(({ ctx, input }) => ctx.services.chat.swipe({ username: ctx.username, ...input })),
 
   // Make an existing variant active (swipe ← →).

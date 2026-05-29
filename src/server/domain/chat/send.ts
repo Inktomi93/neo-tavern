@@ -60,7 +60,7 @@ export function createSend(ctx: ChatContext, ops: { runCompaction: RunCompaction
       // Defer memory retrieval: it must run with the regex-processed user turn (computed below), so
       // the {{memory}} query reflects the message being answered.
       const [assembleCtx, promptConfig] = await Promise.all([
-        buildAssembleContext(chat, { deferMemory: true }),
+        buildAssembleContext(chat, { deferMemory: true, timezone: params.timezone }),
         resolveConfig(chat),
       ]);
 
@@ -104,6 +104,7 @@ export function createSend(ctx: ChatContext, ops: { runCompaction: RunCompaction
         lastMessage: assembleCtx.lastMessage,
         lastUserMessage: assembleCtx.lastUserMessage,
         lastCharMessage: assembleCtx.lastCharMessage,
+        timezone: params.timezone,
         env: {},
         onWarn: (msg, err) => getLog().warn({ err }, msg),
       });
