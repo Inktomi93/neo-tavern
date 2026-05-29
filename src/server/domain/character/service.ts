@@ -5,8 +5,9 @@
 
 import { and, desc, eq } from "drizzle-orm";
 import type { Db } from "../../../db/client";
-import { assets, characters, characterVersions, chats } from "../../../db/schema";
+import { characters, characterVersions, chats } from "../../../db/schema";
 import { getLog } from "../../observability/logger";
+import { fetchOwned, stripUndefined } from "../_shared/helpers";
 import { newId } from "../_shared/ids";
 import { ensureUser } from "../_shared/users";
 import {
@@ -14,7 +15,6 @@ import {
   CharacterNotFoundError,
   CharacterOperationError,
   type CharacterService,
-  type CharacterSummary,
 } from "./types";
 
 type CharacterRow = typeof characters.$inferSelect;
@@ -27,23 +27,28 @@ export function createCharacterService(db: Db): CharacterService {
     ownerId: string,
     characterId: string,
   ): Promise<CharacterRow | undefined> {
-    return (
-      await db
-        .select()
-        .from(characters)
-        .where(and(eq(characters.id, characterId), eq(characters.ownerId, ownerId)))
-        .limit(1)
-    )[0];
+    return fetchOwned(db, characters, characterId, ownerId);
+  }
+
+  // Throw CharacterOperationError if `handle` is already taken by another character owned by ownerId.
+  async function checkHandleConflict(ownerId: string, handle: string): Promise<void> {
+    const existing = await db
+      .select({ id: characters.id })
+      .from(characters)
+      .where(and(eq(characters.handle, handle), eq(characters.ownerId, ownerId)))
+      .limit(1);
+    if (existing.length > 0) {
+      throw new CharacterOperationError("handle_conflict", `handle '${handle}' already in use`);
+    }
   }
 
   // A version is "pinned" once a chat records it as its characterVersionId.
   async function versionPinned(versionId: string): Promise<boolean> {
-    const byChat = await db
-      .select({ id: chats.id })
-      .from(chats)
-      .where(eq(chats.characterVersionId, versionId))
-      .limit(1);
-    return byChat.length > 0;
+    const byChat = await db.query.chats.findFirst({
+      columns: { id: true },
+      where: eq(chats.characterVersionId, versionId),
+    });
+    return byChat !== undefined;
   }
 
   // Build the detail view (identity + current version content + pinned flag).
@@ -51,17 +56,10 @@ export function createCharacterService(db: Db): CharacterService {
     const current =
       character.currentVersionId === null
         ? undefined
-        : (
-            await db
-              .select({
-                cv: characterVersions,
-                hash: assets.hash,
-              })
-              .from(characterVersions)
-              .leftJoin(assets, eq(assets.id, characterVersions.avatarAssetId))
-              .where(eq(characterVersions.id, character.currentVersionId))
-              .limit(1)
-          )[0];
+        : await db.query.characterVersions.findFirst({
+            where: eq(characterVersions.id, character.currentVersionId),
+            with: { avatar: true },
+          });
 
     return {
       id: character.id,
@@ -71,21 +69,21 @@ export function createCharacterService(db: Db): CharacterService {
       archived: character.archived ?? false,
       createdAt: character.createdAt,
 
-      pinned: current === undefined ? false : await versionPinned(current.cv.id),
+      pinned: current === undefined ? false : await versionPinned(current.id),
 
-      version: current?.cv.version ?? null,
-      name: current?.cv.name ?? null,
-      description: current?.cv.description ?? null,
-      personality: current?.cv.personality ?? null,
-      scenario: current?.cv.scenario ?? null,
-      greetings: (current?.cv.greetings as string[]) ?? null,
-      exampleMessages: current?.cv.exampleMessages ?? null,
-      systemPrompt: current?.cv.systemPrompt ?? null,
-      postHistoryInstructions: current?.cv.postHistoryInstructions ?? null,
-      tags: (current?.cv.tags as string[]) ?? null,
-      creatorNotes: current?.cv.creatorNotes ?? null,
-      avatarAssetId: current?.cv.avatarAssetId ?? null,
-      avatarHash: current?.hash ?? null,
+      version: current?.version ?? null,
+      name: current?.name ?? null,
+      description: current?.description ?? null,
+      personality: current?.personality ?? null,
+      scenario: current?.scenario ?? null,
+      greetings: (current?.greetings as string[]) ?? null,
+      exampleMessages: current?.exampleMessages ?? null,
+      systemPrompt: current?.systemPrompt ?? null,
+      postHistoryInstructions: current?.postHistoryInstructions ?? null,
+      tags: (current?.tags as string[]) ?? null,
+      creatorNotes: current?.creatorNotes ?? null,
+      avatarAssetId: current?.avatarAssetId ?? null,
+      avatarHash: current?.avatar?.hash ?? null,
     };
   }
 
@@ -95,18 +93,7 @@ export function createCharacterService(db: Db): CharacterService {
       const now = Date.now();
 
       // Check for handle conflicts.
-      const existing = await db
-        .select({ id: characters.id })
-        .from(characters)
-        .where(and(eq(characters.handle, input.handle), eq(characters.ownerId, ownerId)))
-        .limit(1);
-
-      if (existing.length > 0) {
-        throw new CharacterOperationError(
-          "handle_conflict",
-          `handle '${input.handle}' already in use`,
-        );
-      }
+      await checkHandleConflict(ownerId, input.handle);
 
       const characterId = newId();
       await db.insert(characters).values({
@@ -149,59 +136,29 @@ export function createCharacterService(db: Db): CharacterService {
 
     async list({ username }) {
       const ownerId = await ensureUser(db, username);
-      const rows = await db
-        .select()
-        .from(characters)
-        .where(eq(characters.ownerId, ownerId))
-        .orderBy(desc(characters.createdAt));
+      const rows = await db.query.characters.findMany({
+        where: eq(characters.ownerId, ownerId),
+        orderBy: desc(characters.createdAt),
+        with: {
+          currentVersion: {
+            with: { avatar: true },
+          },
+        },
+      });
 
-      const summaries: CharacterSummary[] = [];
-      for (const c of rows) {
-        let v: number | null = null;
-        let name: string | null = null;
-        let descText: string | null = null;
-        let avatarAssetId: string | null = null;
-        let avatarHash: string | null = null;
-
-        if (c.currentVersionId !== null) {
-          const cv = (
-            await db
-              .select({
-                version: characterVersions.version,
-                name: characterVersions.name,
-                description: characterVersions.description,
-                avatarAssetId: characterVersions.avatarAssetId,
-                avatarHash: assets.hash,
-              })
-              .from(characterVersions)
-              .leftJoin(assets, eq(assets.id, characterVersions.avatarAssetId))
-              .where(eq(characterVersions.id, c.currentVersionId))
-              .limit(1)
-          )[0];
-          if (cv) {
-            v = cv.version;
-            name = cv.name;
-            descText = cv.description;
-            avatarAssetId = cv.avatarAssetId;
-            avatarHash = cv.avatarHash;
-          }
-        }
-
-        summaries.push({
-          id: c.id,
-          handle: c.handle,
-          name,
-          description: descText,
-          avatarAssetId,
-          avatarHash,
-          currentVersionId: c.currentVersionId,
-          version: v,
-          starred: c.starred ?? false,
-          archived: c.archived ?? false,
-          createdAt: c.createdAt,
-        });
-      }
-      return summaries;
+      return rows.map((c) => ({
+        id: c.id,
+        handle: c.handle,
+        name: c.currentVersion?.name ?? null,
+        description: c.currentVersion?.description ?? null,
+        avatarAssetId: c.currentVersion?.avatarAssetId ?? null,
+        avatarHash: c.currentVersion?.avatar?.hash ?? null,
+        currentVersionId: c.currentVersionId,
+        version: c.currentVersion?.version ?? null,
+        starred: c.starred ?? false,
+        archived: c.archived ?? false,
+        createdAt: c.createdAt,
+      }));
     },
 
     async get({ username }, characterId) {
@@ -218,25 +175,15 @@ export function createCharacterService(db: Db): CharacterService {
       const now = Date.now();
 
       // Identity edits (handle/starred/archived) — always in place.
-      const idEdits: Partial<Pick<CharacterRow, "handle" | "starred" | "archived">> = {};
-      if (input.handle !== undefined) {
-        if (input.handle !== row.handle) {
-          const existing = await db
-            .select({ id: characters.id })
-            .from(characters)
-            .where(and(eq(characters.handle, input.handle), eq(characters.ownerId, ownerId)))
-            .limit(1);
-          if (existing.length > 0) {
-            throw new CharacterOperationError(
-              "handle_conflict",
-              `handle '${input.handle}' already in use`,
-            );
-          }
-        }
-        idEdits.handle = input.handle;
+      const idEdits = stripUndefined({
+        handle: input.handle !== row.handle ? input.handle : undefined,
+        starred: input.starred,
+        archived: input.archived,
+      });
+
+      if (input.handle !== undefined && input.handle !== row.handle) {
+        await checkHandleConflict(ownerId, input.handle);
       }
-      if (input.starred !== undefined) idEdits.starred = input.starred;
-      if (input.archived !== undefined) idEdits.archived = input.archived;
 
       // Extract version fields
       const {
@@ -336,19 +283,19 @@ export function createCharacterService(db: Db): CharacterService {
           log.info({ characterId, version: maxV + 1 }, "character: forked version (was pinned)");
         } else {
           // Unpinned — mutate in place.
-          const vEdits: Partial<typeof characterVersions.$inferInsert> = {};
-          if (name !== undefined) vEdits.name = name;
-          if (description !== undefined) vEdits.description = description;
-          if (personality !== undefined) vEdits.personality = personality;
-          if (scenario !== undefined) vEdits.scenario = scenario;
-          if (greetings !== undefined) vEdits.greetings = greetings;
-          if (exampleMessages !== undefined) vEdits.exampleMessages = exampleMessages;
-          if (systemPrompt !== undefined) vEdits.systemPrompt = systemPrompt;
-          if (postHistoryInstructions !== undefined)
-            vEdits.postHistoryInstructions = postHistoryInstructions;
-          if (tags !== undefined) vEdits.tags = tags;
-          if (creatorNotes !== undefined) vEdits.creatorNotes = creatorNotes;
-          if (avatarAssetId !== undefined) vEdits.avatarAssetId = avatarAssetId;
+          const vEdits = stripUndefined({
+            name,
+            description,
+            personality,
+            scenario,
+            greetings,
+            exampleMessages,
+            systemPrompt,
+            postHistoryInstructions,
+            tags,
+            creatorNotes,
+            avatarAssetId,
+          });
 
           await db
             .update(characterVersions)

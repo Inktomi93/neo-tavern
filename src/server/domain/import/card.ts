@@ -16,6 +16,7 @@
 //   • optional text fields normalize empty/whitespace-only → null (one consistent policy).
 
 import { Buffer } from "node:buffer";
+import { nullIfEmpty, str } from "./_utils";
 
 const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a] as const;
 
@@ -154,14 +155,6 @@ function normalizeCardJson(card: RawCard): RawCard {
   }
 
   return card;
-}
-
-function str(v: unknown): string {
-  return typeof v === "string" ? v : "";
-}
-
-function nullIfEmpty(s: string): string | null {
-  return s.trim().length > 0 ? s : null;
 }
 
 function firstNonEmpty(...vals: string[]): string | null {

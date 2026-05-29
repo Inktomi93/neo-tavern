@@ -16,6 +16,7 @@
 // docker cp / partial writes happen).
 
 import { epochToMs, isoToMs } from "../../../shared/time";
+import { nullIfEmpty, str } from "./_utils";
 
 export type MessageRole = "user" | "assistant" | "system";
 
@@ -103,12 +104,6 @@ const MONTHS: Record<string, number> = {
   december: 12,
 };
 
-function str(v: unknown): string {
-  return typeof v === "string" ? v : "";
-}
-function nullIfEmpty(s: string): string | null {
-  return s.trim().length > 0 ? s : null;
-}
 function asObj(v: unknown): Record<string, unknown> | null {
   return typeof v === "object" && v !== null ? (v as Record<string, unknown>) : null;
 }

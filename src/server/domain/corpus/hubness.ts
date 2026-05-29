@@ -188,6 +188,8 @@ export async function computeDigestHubScores(db: Db, opts: { k?: number } = {}):
       embedding: chatDigests.embedding,
     })
     .from(chatDigests);
+
+  // Group by (tier, model) so coarse tiers aren't mixed with fine tier-0 digests.
   const groups = new Map<string, { ids: string[]; vecs: Float32Array[] }>();
   for (const r of rows) {
     if (!r.embedding) continue;
@@ -197,6 +199,7 @@ export async function computeDigestHubScores(db: Db, opts: { k?: number } = {}):
     g.vecs.push(r.embedding);
     groups.set(key, g);
   }
+
   let written = 0;
   for (const { ids, vecs } of groups.values()) {
     for (const [id, hub] of computeGroupHubs(ids, vecs, k)) {
@@ -221,6 +224,8 @@ export async function computeSegmentHubScores(db: Db, opts: { k?: number } = {})
       embedding: chatSegments.embedding,
     })
     .from(chatSegments);
+
+  // Group by model (segments have no tier — all verbatim, same distribution).
   const groups = new Map<string, { ids: string[]; vecs: Float32Array[] }>();
   for (const r of rows) {
     if (!r.embedding) continue;
@@ -229,6 +234,7 @@ export async function computeSegmentHubScores(db: Db, opts: { k?: number } = {})
     g.vecs.push(r.embedding);
     groups.set(r.model, g);
   }
+
   let written = 0;
   for (const { ids, vecs } of groups.values()) {
     for (const [id, hub] of computeGroupHubs(ids, vecs, k)) {

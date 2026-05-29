@@ -5,7 +5,7 @@
 // Identity edits (name/kind) are always in place. Owner-scoped in this layer (every read/write
 // bakes WHERE owner_id = the resolved user), exercised even single-user.
 
-import { and, desc, eq } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import type { Db } from "../../../db/client";
 import { chats, messages, presets, presetVersions } from "../../../db/schema";
 import {
@@ -15,6 +15,7 @@ import {
 } from "../../../shared/prompt-config";
 import { getLog } from "../../observability/logger";
 import { logAudit } from "../_shared/audit";
+import { fetchOwned, stripUndefined } from "../_shared/helpers";
 import { newId } from "../_shared/ids";
 import { ensureUser } from "../_shared/users";
 import {
@@ -33,13 +34,7 @@ export function createPresetService(db: Db): PresetService {
 
   // Owner-scoped fetch of the identity row (the scoping seam — unowned ⇒ treated as not found).
   async function ownedPreset(ownerId: string, presetId: string): Promise<PresetRow | undefined> {
-    return (
-      await db
-        .select()
-        .from(presets)
-        .where(and(eq(presets.id, presetId), eq(presets.ownerId, ownerId)))
-        .limit(1)
-    )[0];
+    return fetchOwned(db, presets, presetId, ownerId);
   }
 
   // A version is "pinned" once a chat or message records it as the basis of a turn — after that it
@@ -162,9 +157,7 @@ export function createPresetService(db: Db): PresetService {
       const now = Date.now();
 
       // Identity edits (name/kind) — always in place; they're not provenance.
-      const idEdits: Partial<Pick<PresetRow, "name" | "kind">> = {};
-      if (name !== undefined) idEdits.name = name;
-      if (kind !== undefined) idEdits.kind = kind;
+      const idEdits = stripUndefined({ name, kind });
 
       if (config !== undefined) {
         const pinned = row.currentVersionId !== null && (await versionPinned(row.currentVersionId));

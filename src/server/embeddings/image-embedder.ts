@@ -12,6 +12,7 @@ import {
 } from "@huggingface/transformers";
 import { env } from "../env";
 import { getLog } from "../observability/logger";
+import { sessionOptions } from "./session-options";
 import { WarmModel } from "./warm-model";
 
 hf.cacheDir = env.MODEL_CACHE_DIR;
@@ -23,15 +24,6 @@ export interface ImageEmbedder {
   readonly model: string;
   embed(imageInput: unknown): Promise<Float32Array>;
   embedText(text: string): Promise<Float32Array>;
-}
-
-function sessionOptions(): Record<string, unknown> {
-  return {
-    graphOptimizationLevel: "all",
-    ...(env.EMBED_DEVICE === "cuda"
-      ? { executionProviders: [{ name: "cuda", deviceId: env.EMBED_GPU_ID }] }
-      : {}),
-  };
 }
 
 interface ImageModelBundle {

@@ -8,6 +8,7 @@ import {
   tags,
   worldBookTags,
 } from "../../../db/schema";
+import { fetchOwned, stripUndefined } from "../_shared/helpers";
 import { newId } from "../_shared/ids";
 import { ensureUser } from "../_shared/users";
 import {
@@ -27,11 +28,7 @@ export function createTagService(db: Db): TagService {
 
   async function getTag(params: { username: string }, tagId: string): Promise<TagView> {
     const ownerId = await ensureUser(db, params.username);
-    const rows = await db
-      .select()
-      .from(tags)
-      .where(and(eq(tags.id, tagId), eq(tags.ownerId, ownerId)));
-    const tag = rows[0];
+    const tag = await fetchOwned<TagView>(db, tags, tagId, ownerId);
     if (!tag) throw new TagNotFoundError(`tag not found: ${tagId}`);
     return tag;
   }
@@ -57,10 +54,7 @@ export function createTagService(db: Db): TagService {
     const ownerId = await ensureUser(db, params.username);
     await getTag({ username: params.username }, tagId);
 
-    const updates: Partial<typeof tags.$inferInsert> = {};
-    if (input.name !== undefined) updates.name = input.name;
-    if (input.color !== undefined) updates.color = input.color;
-    if (input.source !== undefined) updates.source = input.source;
+    const updates = stripUndefined(input);
 
     if (Object.keys(updates).length > 0) {
       await db

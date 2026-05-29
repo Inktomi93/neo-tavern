@@ -10,9 +10,6 @@ export class CharacterNotFoundError extends DomainNotFoundError {
 
 export class CharacterOperationError extends DomainOperationError {
   declare readonly code: "character_in_use" | "handle_conflict";
-  constructor(code: "character_in_use" | "handle_conflict", message: string) {
-    super(code, message);
-  }
 }
 
 export interface CreateCharacterInput {
@@ -30,22 +27,13 @@ export interface CreateCharacterInput {
   avatarAssetId?: string | null;
 }
 
-export interface UpdateCharacterInput {
+// UpdateCharacterInput is CreateCharacterInput with every field optional, plus the
+// identity-only fields that are not part of the versioned card (handle, starred, archived).
+export type UpdateCharacterInput = Partial<CreateCharacterInput> & {
   handle?: string;
-  name?: string;
-  description?: string;
-  personality?: string | null;
-  scenario?: string | null;
-  greetings?: string[] | null;
-  exampleMessages?: string | null;
-  systemPrompt?: string | null;
-  postHistoryInstructions?: string | null;
-  tags?: string[] | null;
-  creatorNotes?: string | null;
-  avatarAssetId?: string | null;
   starred?: boolean;
   archived?: boolean;
-}
+};
 
 export interface CharacterDetail {
   id: string;

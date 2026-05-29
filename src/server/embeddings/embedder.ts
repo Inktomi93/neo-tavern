@@ -2,6 +2,7 @@ import { performance } from "node:perf_hooks";
 import { type FeatureExtractionPipeline, env as hf, pipeline } from "@huggingface/transformers";
 import { env } from "../env";
 import { getLog } from "../observability/logger";
+import { sessionOptions } from "./session-options";
 import { WarmModel } from "./warm-model";
 
 // Keep ALL model downloads self-contained in a repo-local, gitignored dir (not the OS HF
@@ -36,18 +37,6 @@ export interface Embedder {
   embed(text: string): Promise<Float32Array>;
   /** Batched embed — one GPU pass for many texts. Returns vectors in input order. */
   embedBatch(texts: string[]): Promise<Float32Array[]>;
-}
-
-// graphOptimizationLevel "all" everywhere; on CUDA also pin the physical GPU via an explicit
-// executionProviders entry (transformers.js keeps a caller-provided EP — the `??=` seam). On CPU
-// we omit it (no CUDA EP available).
-function sessionOptions(): Record<string, unknown> {
-  return {
-    graphOptimizationLevel: "all",
-    ...(env.EMBED_DEVICE === "cuda"
-      ? { executionProviders: [{ name: "cuda", deviceId: env.EMBED_GPU_ID }] }
-      : {}),
-  };
 }
 
 // Shared warm/idle-unload lifecycle (see warm-model.ts). One pipeline serves all callers.

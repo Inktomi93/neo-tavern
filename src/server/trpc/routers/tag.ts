@@ -1,6 +1,13 @@
 import { z } from "zod";
 import { publicProcedure, t } from "../trpc";
 
+// Shared input for tag attachment mutations — attach and detach take the same three fields.
+const tagTargetInput = z.object({
+  tagId: z.string().min(1),
+  targetType: z.enum(["character", "chat", "worldBook", "persona", "preset"]),
+  targetId: z.string().min(1),
+});
+
 export const tagRouter = t.router({
   list: publicProcedure.query(({ ctx }) => ctx.services.tag.listTags({ username: ctx.username })),
 
@@ -38,39 +45,23 @@ export const tagRouter = t.router({
       ctx.services.tag.removeTag({ username: ctx.username }, input.tagId),
     ),
 
-  attach: publicProcedure
-    .input(
-      z.object({
-        tagId: z.string().min(1),
-        targetType: z.enum(["character", "chat", "worldBook", "persona", "preset"]),
-        targetId: z.string().min(1),
-      }),
-    )
-    .mutation(async ({ ctx, input }) => {
-      await ctx.services.tag.attachTag(
-        { username: ctx.username },
-        input.tagId,
-        input.targetType,
-        input.targetId,
-      );
-      return { success: true };
-    }),
+  attach: publicProcedure.input(tagTargetInput).mutation(async ({ ctx, input }) => {
+    await ctx.services.tag.attachTag(
+      { username: ctx.username },
+      input.tagId,
+      input.targetType,
+      input.targetId,
+    );
+    return { success: true };
+  }),
 
-  detach: publicProcedure
-    .input(
-      z.object({
-        tagId: z.string().min(1),
-        targetType: z.enum(["character", "chat", "worldBook", "persona", "preset"]),
-        targetId: z.string().min(1),
-      }),
-    )
-    .mutation(async ({ ctx, input }) => {
-      await ctx.services.tag.detachTag(
-        { username: ctx.username },
-        input.tagId,
-        input.targetType,
-        input.targetId,
-      );
-      return { success: true };
-    }),
+  detach: publicProcedure.input(tagTargetInput).mutation(async ({ ctx, input }) => {
+    await ctx.services.tag.detachTag(
+      { username: ctx.username },
+      input.tagId,
+      input.targetType,
+      input.targetId,
+    );
+    return { success: true };
+  }),
 });

@@ -31,3 +31,12 @@ export async function ensureUser(db: Db, handle: string): Promise<string> {
     .limit(1);
   return after[0]?.id ?? id;
 }
+
+export async function withOwner<T>(
+  db: Db,
+  username: string,
+  fn: (ownerId: string) => Promise<T>,
+): Promise<T> {
+  const ownerId = await ensureUser(db, username);
+  return fn(ownerId);
+}

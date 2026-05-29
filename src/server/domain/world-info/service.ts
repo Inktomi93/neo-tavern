@@ -1,6 +1,7 @@
 import { and, desc, eq } from "drizzle-orm";
 import type { Db } from "../../../db/client";
 import { worldBooks, worldEntries } from "../../../db/schema";
+import { fetchOwned, stripUndefined } from "../_shared/helpers";
 import { newId } from "../_shared/ids";
 import { ensureUser } from "../_shared/users";
 import {
@@ -27,11 +28,7 @@ export function createWorldInfoService(db: Db): WorldInfoService {
 
   async function getBook(params: { username: string }, bookId: string): Promise<WorldBookView> {
     const ownerId = await ensureUser(db, params.username);
-    const rows = await db
-      .select()
-      .from(worldBooks)
-      .where(and(eq(worldBooks.id, bookId), eq(worldBooks.ownerId, ownerId)));
-    const book = rows[0];
+    const book = await fetchOwned<WorldBookView>(db, worldBooks, bookId, ownerId);
     if (!book) throw new WorldInfoNotFoundError(`book not found: ${bookId}`);
     return book;
   }
@@ -60,9 +57,7 @@ export function createWorldInfoService(db: Db): WorldInfoService {
     const ownerId = await ensureUser(db, params.username);
     await getBook({ username: params.username }, bookId);
 
-    const updates: Partial<typeof worldBooks.$inferInsert> = {};
-    if (input.name !== undefined) updates.name = input.name;
-    if (input.description !== undefined) updates.description = input.description;
+    const updates = stripUndefined(input);
 
     if (Object.keys(updates).length > 0) {
       await db
@@ -151,13 +146,7 @@ export function createWorldInfoService(db: Db): WorldInfoService {
   ): Promise<WorldEntryView> {
     await getEntry({ username: params.username }, entryId);
 
-    const updates: Partial<typeof worldEntries.$inferInsert> = {};
-    if (input.title !== undefined) updates.title = input.title;
-    if (input.content !== undefined) updates.content = input.content;
-    if (input.legacyKeys !== undefined) updates.legacyKeys = input.legacyKeys ?? null;
-    if (input.enabled !== undefined) updates.enabled = input.enabled;
-    if (input.priority !== undefined) updates.priority = input.priority;
-    if (input.metadata !== undefined) updates.metadata = input.metadata ?? null;
+    const updates = stripUndefined(input);
 
     if (Object.keys(updates).length > 0) {
       await db.update(worldEntries).set(updates).where(eq(worldEntries.id, entryId));

@@ -1,10 +1,11 @@
 // Simple CRUD for personas. No versions needed.
 
-import { and, desc, eq } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import type { Db } from "../../../db/client";
 import { personas } from "../../../db/schema";
 import { getLog } from "../../observability/logger";
 import { logAudit } from "../_shared/audit";
+import { fetchOwned, stripUndefined } from "../_shared/helpers";
 import { newId } from "../_shared/ids";
 import { ensureUser } from "../_shared/users";
 import { type PersonaDetail, PersonaNotFoundError, type PersonaService } from "./types";
@@ -15,13 +16,7 @@ export function createPersonaService(db: Db): PersonaService {
   const log = getLog();
 
   async function ownedPersona(ownerId: string, personaId: string): Promise<PersonaRow | undefined> {
-    return (
-      await db
-        .select()
-        .from(personas)
-        .where(and(eq(personas.id, personaId), eq(personas.ownerId, ownerId)))
-        .limit(1)
-    )[0];
+    return fetchOwned(db, personas, personaId, ownerId);
   }
 
   function detailOf(row: PersonaRow): PersonaDetail {
@@ -82,11 +77,7 @@ export function createPersonaService(db: Db): PersonaService {
       const row = await ownedPersona(ownerId, personaId);
       if (row === undefined) throw new PersonaNotFoundError(personaId);
 
-      const edits: Partial<typeof personas.$inferInsert> = {};
-      if (input.name !== undefined) edits.name = input.name;
-      if (input.description !== undefined) edits.description = input.description;
-      if (input.avatarAssetId !== undefined) edits.avatarAssetId = input.avatarAssetId;
-      if (input.metadata !== undefined) edits.metadata = input.metadata;
+      const edits = stripUndefined(input);
 
       if (Object.keys(edits).length > 0) {
         await db.update(personas).set(edits).where(eq(personas.id, personaId));

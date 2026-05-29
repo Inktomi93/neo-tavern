@@ -2,6 +2,14 @@ import { z } from "zod";
 import { promptConfigSchema } from "../../../shared/prompt-config";
 import { publicProcedure, t } from "../trpc";
 
+const createSchema = z.object({
+  name: z.string().min(1).max(200),
+  kind: z.string().min(1).max(100),
+  config: promptConfigSchema.optional(),
+});
+
+const updateSchema = createSchema.partial().extend({ presetId: z.string().min(1) });
+
 // Thin driver: validate input, call the domain service, translate domain errors. No db access.
 
 export const presetRouter = t.router({
@@ -14,27 +22,13 @@ export const presetRouter = t.router({
     .query(({ ctx, input }) => ctx.services.preset.get({ username: ctx.username, ...input })),
 
   create: publicProcedure
-    .input(
-      z.object({
-        name: z.string().min(1).max(200),
-        kind: z.string().min(1).max(100),
-        // Omitted → seeded from DEFAULT_PROMPT_CONFIG. Validated here (the wire boundary).
-        config: promptConfigSchema.optional(),
-      }),
-    )
+    .input(createSchema)
     .mutation(({ ctx, input }) => ctx.services.preset.create({ username: ctx.username, ...input })),
 
   // Copy-on-write: editing config forks a new version if the current one is pinned, else mutates
   // in place. name/kind edit the identity row directly. NOT_FOUND if unowned.
   update: publicProcedure
-    .input(
-      z.object({
-        presetId: z.string().min(1),
-        name: z.string().min(1).max(200).optional(),
-        kind: z.string().min(1).max(100).optional(),
-        config: promptConfigSchema.optional(),
-      }),
-    )
+    .input(updateSchema)
     .mutation(({ ctx, input }) => ctx.services.preset.update({ username: ctx.username, ...input })),
 
   // Hard delete. BAD_REQUEST (preset_in_use) if a version is pinned by a chat/message.
