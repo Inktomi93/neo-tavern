@@ -5,6 +5,7 @@
 
 export * from "./schema/assets";
 export * from "./schema/audit";
+export * from "./schema/auth";
 export * from "./schema/characters";
 export * from "./schema/chats";
 export * from "./schema/config";

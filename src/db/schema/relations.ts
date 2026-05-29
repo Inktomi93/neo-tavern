@@ -1,5 +1,6 @@
 import { relations } from "drizzle-orm";
 import { assets } from "./assets";
+import { sessions, userCredentials } from "./auth";
 import { characters, characterVersions, personas } from "./characters";
 import { chatEvents, chats, messages, messageVariants } from "./chats";
 import { presets, presetVersions } from "./config";
@@ -15,6 +16,22 @@ export const usersRelations = relations(users, ({ many }) => ({
   personas: many(personas),
   presets: many(presets),
   worldBooks: many(worldBooks),
+  sessions: many(sessions),
+  credentials: many(userCredentials),
+}));
+
+export const sessionsRelations = relations(sessions, ({ one }) => ({
+  user: one(users, {
+    fields: [sessions.userId],
+    references: [users.id],
+  }),
+}));
+
+export const userCredentialsRelations = relations(userCredentials, ({ one }) => ({
+  user: one(users, {
+    fields: [userCredentials.userId],
+    references: [users.id],
+  }),
 }));
 
 export const chatsRelations = relations(chats, ({ one, many }) => ({

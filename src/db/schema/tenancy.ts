@@ -7,8 +7,17 @@ import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 // domain layer. assets/embeddings are global (see below).
 export const users = sqliteTable("users", {
   id: text("id").primaryKey(),
-  handle: text("handle").notNull().unique(), // = X-Authentik-Username
+  handle: text("handle").notNull().unique(), // = X-Authentik-Username / preferred_username
+  // The STABLE external identity (authentik `sub` / X-Authentik-Uid) — immutable across username
+  // renames, so it's the real key for SSO modes. Nullable + unique-when-set: single-user keys on
+  // `handle` (this stays null); SSO `provisionIdentity` upserts on this. In SQLite a UNIQUE column
+  // permits multiple NULLs, so "unique-when-set" needs no partial index.
+  externalId: text("external_id").unique(),
   displayName: text("display_name"),
+  // Soft access gate. false → rejected at the auth seam IMMEDIATELY (the per-request session check
+  // reads this; admins also revoke the user's `sessions` rows on disable, so a ban takes effect on
+  // the next request, not at token expiry). Admins toggle; we never hard-delete a user.
+  enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
   // Access role. The DESIGNED-multi-user hook (gates admin surfaces like AppSettings). Default
   // "user" is deliberate: ensureUser JIT-provisions a row per authentik username, so an "admin"
   // default would auto-admin every future user (escalation-by-default). The owner becomes admin via
