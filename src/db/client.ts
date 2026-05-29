@@ -1,5 +1,6 @@
 import { fileURLToPath } from "node:url";
 import { createClient } from "@libsql/client";
+import { sql } from "drizzle-orm";
 import { drizzle, type LibSQLDatabase } from "drizzle-orm/libsql";
 import { migrate } from "drizzle-orm/libsql/migrator";
 import * as schema from "./schema";
@@ -14,7 +15,8 @@ const PRAGMAS = [
   "PRAGMA busy_timeout = 5000",
   "PRAGMA synchronous = NORMAL",
   "PRAGMA foreign_keys = ON",
-  "PRAGMA cache_size = -64000",
+  "PRAGMA cache_size = -1048576", // 1GB cache (negative is KiB)
+  "PRAGMA mmap_size = 2147483648", // 2GB memory-mapped I/O
   "PRAGMA temp_store = MEMORY",
 ].join("; ");
 
@@ -30,4 +32,8 @@ export async function createDb(url: string): Promise<Db> {
 
 export async function runMigrations(db: Db): Promise<void> {
   await migrate(db, { migrationsFolder: MIGRATIONS_DIR });
+}
+
+export async function optimizeDb(db: Db): Promise<void> {
+  await db.run(sql`PRAGMA optimize`);
 }
