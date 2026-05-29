@@ -8,7 +8,11 @@ import { z } from "zod";
 // Load a local .env BEFORE parsing. override:true so a checked-in .env (dev) wins over a stale
 // shell export (e.g. an old OPENROUTER_API_KEY lingering in the environment). In prod there's no
 // .env file, so this is a no-op and the deployment's real env vars stand. .env is gitignored.
-dotenv.config({ override: true });
+// UNDER VITEST: override:false — the test runner pins a known auth env (DEFAULT_USER_HANDLE/AUTH_MODE/
+// AUTH_FALLBACK, see vitest.config.ts) so the suite is deterministic and NOT broken by a developer's
+// local deployment .env; .env's other keys (OPENROUTER_API_KEY, model knobs) still load since they're
+// absent from process.env.
+dotenv.config({ override: !process.env["VITEST"] });
 
 // The ONLY place that touches process.env. Everything else imports `env` and
 // reads known, typed keys (env.PORT) — which is dot access on a real property,

@@ -198,13 +198,13 @@
   },
   "overrides": [
     {
-      // Config files legitimately default-export, and read process.env with
-      // bracket access (tsc's noPropertyAccessFromIndexSignature requires it),
-      // which would otherwise trip useLiteralKeys.
+      // Config files legitimately default-export, and read/define process.env keys (CONSTANT_CASE,
+      // e.g. vitest's test `env` block) with bracket access (tsc's noPropertyAccessFromIndexSignature
+      // requires it), which would otherwise trip useLiteralKeys + useNamingConvention.
       "includes": ["*.config.ts", "*.config.js", "vite.config.ts", "vitest.config.ts"],
       "linter": {
         "rules": {
-          "style": { "noDefaultExport": "off" },
+          "style": { "noDefaultExport": "off", "useNamingConvention": "off" },
           "complexity": { "useLiteralKeys": "off" }
         }
       }

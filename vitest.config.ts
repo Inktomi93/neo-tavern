@@ -13,6 +13,14 @@ export default defineConfig({
         test: {
           name: "server",
           environment: "node",
+          // Pin a deterministic auth env so the suite is independent of a developer's local .env
+          // (which carries deployment config — AUTH_MODE=oidc, a real DEFAULT_USER_HANDLE, etc.).
+          // env.ts uses override:false under VITEST so these win over .env (other .env keys still load).
+          env: {
+            DEFAULT_USER_HANDLE: "owner",
+            AUTH_MODE: "single-user",
+            AUTH_FALLBACK: "owner",
+          },
           include: [
             "src/server/**/*.test.ts",
             "src/shared/**/*.test.ts",
