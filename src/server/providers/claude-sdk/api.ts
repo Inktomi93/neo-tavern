@@ -62,7 +62,7 @@ export async function runChatTurn(params: ChatTurnParams): Promise<ChatTurnResul
   const stream = query({
     prompt: params.prompt,
     options: {
-      ...disciplineOptions(params.source, gen.envOverrides),
+      ...disciplineOptions(params.source, gen.envOverrides, params.openRouterApiKey),
       ...observabilityOptions(),
       ...gen.options,
       includePartialMessages: Boolean(params.onDelta),

@@ -6,10 +6,12 @@ import process from "node:process";
 import { zipSync } from "fflate";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { buildApp } from "../../src/server/app";
+import { createSecretBox } from "../../src/server/crypto/secrets";
 import { createAdminService } from "../../src/server/domain/admin";
 import { createCharacterService } from "../../src/server/domain/character";
 import { createChatService } from "../../src/server/domain/chat";
 import { createCorpusService } from "../../src/server/domain/corpus";
+import { createCredentialsService } from "../../src/server/domain/credentials";
 import { createModelsService } from "../../src/server/domain/models";
 import { createPersonaService } from "../../src/server/domain/persona";
 import { createPresetService } from "../../src/server/domain/preset";
@@ -37,9 +39,11 @@ async function setupApp() {
   const db = await freshDb();
   const cas = createCas(casRoot);
   const sessions = createSessionsService(db);
+  const secretBox = createSecretBox(null); // these routes don't run turns / touch credentials
   const services = {
     admin: createAdminService(db, sessions),
     sessions,
+    credentials: createCredentialsService(db, secretBox),
     character: createCharacterService(db),
     chat: createChatService(db),
     corpus: createCorpusService(db),

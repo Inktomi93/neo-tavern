@@ -10,14 +10,17 @@ import {
   buildClaudeOpenRouterEnv,
   buildClaudeSdkEnv,
   type ClaudeGenerationOverrides,
-  env,
 } from "../../env";
 import { getLog } from "../../observability/logger";
 import type { ClaudeSource } from "./types";
 
+// `openRouterApiKey` is the resolved key for mode 2 (source=openrouter — the Anthropic skin); the
+// caller (runChatTurn, fed by the turn-time resolver) supplies it. mode 1 (max-pro-sub) ignores it
+// and authenticates via the host `claude login`. No env read here — the key arrives resolved.
 export function disciplineOptions(
   source: ClaudeSource = "max-pro-sub",
   overrides: ClaudeGenerationOverrides = {},
+  openRouterApiKey?: string,
 ) {
   return {
     tools: [],
@@ -26,7 +29,7 @@ export function disciplineOptions(
     settingSources: [],
     env:
       source === "openrouter"
-        ? buildClaudeOpenRouterEnv(env.OPENROUTER_API_KEY ?? "", overrides)
+        ? buildClaudeOpenRouterEnv(openRouterApiKey ?? "", overrides)
         : buildClaudeSdkEnv(overrides),
   };
 }

@@ -1,5 +1,5 @@
 import { getLog } from "../../observability/logger";
-import { getOpenRouterClient } from "./client";
+import { getHostOpenRouterClient } from "./client";
 
 // ── Dynamic model catalog (via the SDK) ───────────────────────────────────────
 // GET /models through sdk.models.list() — the live OpenRouter catalog (~hundreds of models). We
@@ -42,7 +42,7 @@ export async function listOpenRouterModels(force = false): Promise<RawModel[]> {
   }
   let data: ModelCatalogView["data"];
   try {
-    const res = (await getOpenRouterClient().models.list()) as unknown as ModelCatalogView;
+    const res = (await getHostOpenRouterClient().models.list()) as unknown as ModelCatalogView;
     data = res.data ?? [];
   } catch (error) {
     getLog().error(

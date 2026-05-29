@@ -31,7 +31,7 @@ export function createSend(ctx: ChatContext, ops: { runCompaction: RunCompaction
   const { db, loadOwnedChat, maxSeq, listByChat, openRouterRunner, runTurn, recordTurnEvents } =
     ctx;
   const { buildAssembleContext, resolveConfig, loadCanonHistory, embedder, summarizer } = ctx;
-  const { retrieveMemory } = ctx;
+  const { retrieveMemory, resolveCredential } = ctx;
   const { runCompaction } = ops;
 
   async function send(params: SendParams): Promise<SendResult> {
@@ -63,6 +63,30 @@ export function createSend(ctx: ChatContext, ops: { runCompaction: RunCompaction
         buildAssembleContext(chat, { deferMemory: true }),
         resolveConfig(chat),
       ]);
+
+      // Resolve routing + the turn-time credential BEFORE any side effect (the user-message insert),
+      // so a credential denial (a non-owner defaulting into max-pro-sub; no OpenRouter key) fails
+      // cleanly with nothing written. resolveCredential is THE access chokepoint (§8) — it replaces
+      // the old startChat handle-guard. A routing throw is a config invariant (incoherent combo).
+      let routing: ReturnType<typeof resolveTurnRouting>;
+      try {
+        routing = resolveTurnRouting(chat, promptConfig);
+      } catch (error) {
+        getLog().error(
+          {
+            chatId: params.chatId,
+            api: chat.api,
+            source: chat.source,
+            model: chat.model,
+            err: error instanceof Error ? error.message : String(error),
+          },
+          "chat: turn routing failed",
+        );
+        throw error;
+      }
+      const credential = await resolveCredential(ownerId, routing.source);
+      const openRouterApiKey =
+        credential.source === "openrouter" ? credential.openRouterKey : undefined;
 
       // The {{memory}} gate (shared by retrieval here + background digest generation later).
       const memCfg = promptConfig.params.memory;
@@ -120,26 +144,6 @@ export function createSend(ctx: ChatContext, ops: { runCompaction: RunCompaction
 
       const systemPrompt = assemblePrompt(promptConfig, assembleCtx, executeRegex);
 
-      // The single point where model + provider are chosen (no hardcoded model anywhere here).
-      // A throw here is a config invariant (incoherent/unimplemented combo) — log it with the
-      // chat context the pure resolver lacks, then let it propagate to the tRPC error sink.
-      let routing: ReturnType<typeof resolveTurnRouting>;
-      try {
-        routing = resolveTurnRouting(chat, promptConfig);
-      } catch (error) {
-        getLog().error(
-          {
-            chatId: params.chatId,
-            api: chat.api,
-            source: chat.source,
-            model: chat.model,
-            err: error instanceof Error ? error.message : String(error),
-          },
-          "chat: turn routing failed",
-        );
-        throw error;
-      }
-
       // Prompt assembly + routing are otherwise opaque — log what they produced so "why did/didn't
       // this world-info fire / which persona / which model+provider / how big is the cached prefix"
       // is curl-able via /api/_debug. METADATA ONLY (counts, section ids, trigger keys, ids) —
@@ -169,6 +173,7 @@ export function createSend(ctx: ChatContext, ops: { runCompaction: RunCompaction
             prompt: params.content,
             model: routing.model,
             source: routing.source,
+            openRouterApiKey,
             sessionStore: new DbSessionStore(db, params.chatId),
             systemPrompt,
             generation: promptConfig.params,
@@ -186,6 +191,9 @@ export function createSend(ctx: ChatContext, ops: { runCompaction: RunCompaction
               : undefined;
           turn = await openRouterRunner(routing.api)({
             model: routing.model,
+            // The openrouter runner always has an openrouter credential (its source is openrouter) —
+            // the ?? "" is an unreachable defensive floor (getOpenRouterClient would reject it).
+            openRouterApiKey: openRouterApiKey ?? "",
             chatId: params.chatId,
             systemPrompt,
             history: await loadCanonHistory(params.chatId, { afterSeq }),
@@ -271,6 +279,7 @@ export function createSend(ctx: ChatContext, ops: { runCompaction: RunCompaction
             sessionId,
             model: routing.model,
             source: routing.source,
+            openRouterApiKey,
             systemPrompt,
             generation: promptConfig.params,
             instructions: compaction.instructions ?? DEFAULT_COMPACT_INSTRUCTIONS,

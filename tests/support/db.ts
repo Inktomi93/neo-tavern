@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import { createDb, type Db, runMigrations } from "../../src/db/client";
 import { characters, characterVersions, chats, messages, users } from "../../src/db/schema";
+import { env } from "../../src/server/env";
 import type { ChatApi, ChatSource } from "../../src/shared/chat-routing";
 
 // Fresh in-memory libSQL with migrations applied. Per tests/AGENTS.md: call per test
@@ -30,9 +31,17 @@ export async function seedCharacter(
 ): Promise<{ characterId: string; ownerId: string; characterVersionId: string }> {
   const now = Date.now();
   const cvId = `${opts.id}-v1`;
+  // Mirror ensureUser's one access decision so the seeded owner is REALISTIC: the DEFAULT_USER_HANDLE
+  // owner is admin (everyone else a plain user). The turn-time credential resolver gates max-pro-sub
+  // on role, so a seeded owner that wasn't admin would be wrongly refused its own sub.
   await db
     .insert(users)
-    .values({ id: opts.ownerId, handle: opts.ownerId, createdAt: now })
+    .values({
+      id: opts.ownerId,
+      handle: opts.ownerId,
+      role: opts.ownerId === env.DEFAULT_USER_HANDLE ? "admin" : "user",
+      createdAt: now,
+    })
     .onConflictDoNothing();
   await db
     .insert(characters)

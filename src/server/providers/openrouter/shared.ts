@@ -8,6 +8,10 @@ import { listOpenRouterModels } from "./catalog";
 export interface RawTurnParams {
   /** OpenRouter "provider/model" id. */
   model: string;
+  /** The resolved OpenRouter API key for THIS turn (per-user BYO or the host fallback) — selects the
+   *  per-key client (§9). Supplied by the verbs after resolveCredential; a per-user key never leaks
+   *  into another user's client. */
+  openRouterApiKey: string;
   /** Chat id — carried through so the onDelta emitter can tag events with the originating chat. */
   chatId?: string | undefined;
   /** Assembled system prompt; static is the cache-stable prefix, dynamic the per-turn suffix. */

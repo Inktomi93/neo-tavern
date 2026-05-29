@@ -111,7 +111,7 @@ export async function runRawTurn(params: RawTurnParams): Promise<ChatTurnResult>
       //   "response.incomplete"                   → same shape, but truncated
       //   "response.failed"                       → server-side failure (event.response.error)
       //   "error"                                 → in-band stream error (event.code, event.message)
-      const stream = await getOpenRouterClient().beta.responses.send({
+      const stream = await getOpenRouterClient(params.openRouterApiKey).beta.responses.send({
         responsesRequest: { ...responsesRequest, stream: true },
       } as Parameters<OpenRouter["beta"]["responses"]["send"]>[0] & {
         responsesRequest: { stream: true };
@@ -192,7 +192,7 @@ export async function runRawTurn(params: RawTurnParams): Promise<ChatTurnResult>
           : {}),
       };
     } else {
-      const result = await getOpenRouterClient().beta.responses.send({
+      const result = await getOpenRouterClient(params.openRouterApiKey).beta.responses.send({
         responsesRequest,
       } as Parameters<OpenRouter["beta"]["responses"]["send"]>[0]);
       view = result as unknown as ResponsesView;

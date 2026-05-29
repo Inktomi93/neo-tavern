@@ -159,6 +159,9 @@ export function createSummarizer(): Summarizer {
       const start = performance.now();
       const turn = await runChatCompletionTurn({
         model: HOSTED_SUMMARIZER_MODEL,
+        // A system/background op (digest summarization), not per-user → the HOST OpenRouter key.
+        // (Throws if unset, same as before — the local GGUF summarizer is the no-key path.)
+        openRouterApiKey: env.OPENROUTER_API_KEY ?? "",
         systemPrompt: { static: systemPrompt, dynamic: "" },
         history: [{ role: "user", content: userPrompt }],
         generation: {

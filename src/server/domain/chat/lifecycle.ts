@@ -10,7 +10,6 @@ import {
   presets,
 } from "../../../db/schema";
 import { assemblePrompt } from "../../../shared/prompt-assemble";
-import { env } from "../../env";
 import { getLog } from "../../observability/logger";
 import { TurnError } from "../../providers/turn";
 import { DomainNotFoundError, DomainOperationError } from "../_shared/errors";
@@ -46,6 +45,7 @@ export function createLifecycle(
 ) {
   const { db, loadOwnedChat, loadOwnedMessage, listByChat, runTurn, recordTurnEvents } = ctx;
   const { buildAssembleContext, resolveConfig, reseedSdkSession, openRouterRunner } = ctx;
+  const { resolveCredential } = ctx;
   const { send } = ops;
 
   // Resolve an EXISTING, owned character version (chat-start references the library, never creates a
@@ -163,17 +163,11 @@ export function createLifecycle(
     const source = params.source ?? settings.defaultSource;
     const model = params.model ?? settings.defaultModel ?? null;
 
-    // MULTI-USER GUARD: `max-pro-sub` is the OWNER's single host credential (the `claude login` Max
-    // sub). A non-owner must not ride it — require an explicit paid source. The effective source is the
-    // resolved value, or the schema default (`max-pro-sub`) when none is set.
-    // TODO(multi-user): replace the owner-handle check with a per-user credential model.
-    const effectiveSource = source ?? "max-pro-sub";
-    if (params.username !== env.DEFAULT_USER_HANDLE && effectiveSource === "max-pro-sub") {
-      throw new DomainOperationError(
-        "source_not_permitted",
-        "max-pro-sub is the owner's credential; choose source 'openrouter'.",
-      );
-    }
+    // Turn-time credential gate (§8), run BEFORE the chat row is created so a denied credential
+    // (a non-owner defaulting into max-pro-sub; no OpenRouter key) leaves NO empty chat behind. This
+    // is the resolver — the single chokepoint — replacing the old owner-handle guard. The first turn
+    // (send / generateOpening) re-resolves to get the actual key (idempotent + cheap).
+    await resolveCredential(ownerId, source ?? "max-pro-sub");
 
     const presetVersionId = await resolveOwnedPresetVersion(
       ownerId,
@@ -241,6 +235,9 @@ export function createLifecycle(
       resolveConfig(chat),
     ]);
     const routing = resolveTurnRouting(chat, promptConfig);
+    const credential = await resolveCredential(ownerId, routing.source);
+    const openRouterApiKey =
+      credential.source === "openrouter" ? credential.openRouterKey : undefined;
     const systemPrompt = assemblePrompt(promptConfig, assembleCtx);
     try {
       const turn =
@@ -249,12 +246,14 @@ export function createLifecycle(
               prompt: OPEN_SCENE_PROMPT,
               model: routing.model,
               source: routing.source,
+              openRouterApiKey,
               sessionStore: new DbSessionStore(db, chatId),
               systemPrompt,
               generation: promptConfig.params,
             })
           : await openRouterRunner(routing.api)({
               model: routing.model,
+              openRouterApiKey: openRouterApiKey ?? "", // openrouter runner ⟹ openrouter credential
               chatId,
               systemPrompt,
               history: [{ role: "user", content: OPEN_SCENE_PROMPT }],

@@ -39,6 +39,9 @@ export interface ChatTurnParams {
   /** Which credential the runtime authenticates with (the only difference between the two
    *  Agent-SDK paths). Defaults to the free Max sub. */
   source?: ClaudeSource;
+  /** The resolved OpenRouter key for mode 2 (source="openrouter", the paid Anthropic skin). Supplied
+   *  by the verb after resolveCredential; ignored for max-pro-sub (which uses the host claude login). */
+  openRouterApiKey?: string | undefined;
   /** Resume an existing session; omit for the first turn of a new chat. */
   resume?: string;
   /** Our DB-backed SessionStore — the SDK loads from it to resume and mirrors new frames into it. */

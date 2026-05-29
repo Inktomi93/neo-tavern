@@ -2,10 +2,12 @@ import { serve } from "@hono/node-server";
 import { createDb, optimizeDb, runMigrations } from "../db/client";
 import { buildApp } from "./app";
 import { reloadAppConfig } from "./config/app-config";
+import { createSecretBox, credentialsKeyFromEnv } from "./crypto/secrets";
 import { createAdminService } from "./domain/admin";
 import { createCharacterService } from "./domain/character";
 import { createChatService } from "./domain/chat";
 import { createCorpusService } from "./domain/corpus";
+import { createCredentialsService } from "./domain/credentials";
 import { createModelsService } from "./domain/models";
 import { createPersonaService } from "./domain/persona";
 import { createPresetService } from "./domain/preset";
@@ -36,11 +38,15 @@ await runMigrations(db);
 await reloadAppConfig(db);
 const cas = createCas(env.ASSETS_DIR);
 const sessionsService = createSessionsService(db);
+// The credential encryption box, built once from env (CREDENTIALS_KEY). Shared by the credentials
+// service (writes) + the chat turn-time resolver (reads). Disabled when no key is configured.
+const secretBox = createSecretBox(credentialsKeyFromEnv());
 const services: Services = {
   admin: createAdminService(db, sessionsService),
   character: createCharacterService(db),
-  chat: createChatService(db),
+  chat: createChatService(db, { secretBox }),
   corpus: createCorpusService(db),
+  credentials: createCredentialsService(db, secretBox),
   models: createModelsService(),
   persona: createPersonaService(db),
   preset: createPresetService(db),

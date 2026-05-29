@@ -138,7 +138,7 @@ export async function runChatCompletionTurn(params: RawTurnParams): Promise<Chat
       //   chunk.error       → in-band provider error (code + message); treat as a thrown TurnError
       //   chunk.usage       → ONLY present on the final [DONE] sentinel chunk (after all deltas)
       //   choices[0].finishReason → also only set on the sentinel
-      const stream = await getOpenRouterClient().chat.send({
+      const stream = await getOpenRouterClient(params.openRouterApiKey).chat.send({
         chatRequest: { ...chatRequest, stream: true },
       } as Parameters<OpenRouter["chat"]["send"]>[0] & { chatRequest: { stream: true } });
       let replyText = "";
@@ -185,7 +185,7 @@ export async function runChatCompletionTurn(params: RawTurnParams): Promise<Chat
         ...(usage !== undefined ? { usage } : {}),
       };
     } else {
-      const result = await getOpenRouterClient().chat.send({
+      const result = await getOpenRouterClient(params.openRouterApiKey).chat.send({
         chatRequest,
       } as Parameters<OpenRouter["chat"]["send"]>[0]);
       view = result as unknown as ChatResultView;

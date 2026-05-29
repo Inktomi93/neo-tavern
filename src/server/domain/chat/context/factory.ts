@@ -1,11 +1,13 @@
 import type { Db } from "../../../../db/client";
 import type { chats } from "../../../../db/schema";
+import { createSecretBox, credentialsKeyFromEnv } from "../../../crypto/secrets";
 import { createEmbedder } from "../../../embeddings/embedder";
 import { createReranker } from "../../../embeddings/reranker";
 import { createSummarizer } from "../../../embeddings/summarizer";
 import { runChatTurn } from "../../../providers/claude-sdk";
 import { runChatCompletionTurn, runRawTurn } from "../../../providers/openrouter";
 import type { TurnEvent } from "../../../providers/turn";
+import { resolveCredential } from "../../_shared/credentials";
 import { retrieveMemory } from "../memory/retrieve";
 import type { MemoryConfig } from "../memory/types";
 import { buildAssembleContext, resolveConfig } from "./assemble";
@@ -28,6 +30,9 @@ export function createChatContext(db: Db, deps: ChatServiceDeps = {}) {
   const embedder = deps.embedder ?? createEmbedder();
   const reranker = deps.reranker ?? createReranker();
   const summarizer = deps.summarizer ?? createSummarizer();
+  // The credential encryption box (env-backed by default); the turn-time resolver decrypts BYO keys
+  // through it. Injected so tests can supply a known key.
+  const secretBox = deps.secretBox ?? createSecretBox(credentialsKeyFromEnv());
 
   function openRouterRunner(api: "chat-completions" | "responses"): typeof runRawTurn {
     return api === "chat-completions" ? runChatCompletion : runRaw;
@@ -39,6 +44,10 @@ export function createChatContext(db: Db, deps: ChatServiceDeps = {}) {
     summarizer,
     runTurn,
     openRouterRunner,
+    // The single turn-time credential chokepoint (§8): gates max-pro-sub to admins, resolves the
+    // per-user (or host-fallback) OpenRouter key. Verbs call this before running a turn.
+    resolveCredential: (ownerId: string, source: "max-pro-sub" | "openrouter") =>
+      resolveCredential(db, secretBox, ownerId, source),
     loadOwnedChat: (ownerId: string, chatId: string) => loadOwnedChat(db, ownerId, chatId),
     loadOwnedMessage: (chatId: string, messageId: string) =>
       loadOwnedMessage(db, chatId, messageId),

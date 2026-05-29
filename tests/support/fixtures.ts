@@ -1,9 +1,12 @@
+import { randomBytes } from "node:crypto";
 import { test as baseTest } from "vitest";
 import type { Db } from "../../src/db/client";
+import { createSecretBox } from "../../src/server/crypto/secrets";
 import { createAdminService } from "../../src/server/domain/admin";
 import { createCharacterService } from "../../src/server/domain/character";
 import { createChatService } from "../../src/server/domain/chat";
 import { createCorpusService } from "../../src/server/domain/corpus";
+import { createCredentialsService } from "../../src/server/domain/credentials";
 import { createModelsService } from "../../src/server/domain/models";
 import { createPersonaService } from "../../src/server/domain/persona";
 import { createPresetService } from "../../src/server/domain/preset";
@@ -21,6 +24,7 @@ export interface AppServices {
   character: ReturnType<typeof createCharacterService>;
   chat: ReturnType<typeof createChatService>;
   corpus: ReturnType<typeof createCorpusService>;
+  credentials: ReturnType<typeof createCredentialsService>;
   models: ReturnType<typeof createModelsService>;
   persona: ReturnType<typeof createPersonaService>;
   preset: ReturnType<typeof createPresetService>;
@@ -46,11 +50,15 @@ export const test = baseTest.extend<IntegrationFixtures>({
   },
   services: async ({ db }, use) => {
     const sessions = createSessionsService(db);
+    // One enabled secret box shared by credentials (writes) + chat's turn-time resolver (reads), so a
+    // stored BYO key decrypts — hermetic, never depends on a host OPENROUTER_API_KEY (which is going away).
+    const secretBox = createSecretBox(randomBytes(32));
     const services: AppServices = {
       admin: createAdminService(db, sessions),
       character: createCharacterService(db),
-      chat: createChatService(db),
+      chat: createChatService(db, { secretBox }),
       corpus: createCorpusService(db),
+      credentials: createCredentialsService(db, secretBox),
       models: createModelsService(),
       persona: createPersonaService(db),
       preset: createPresetService(db),

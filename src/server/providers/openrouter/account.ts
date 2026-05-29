@@ -1,6 +1,6 @@
 import { isoToMs } from "../../../shared/time";
 import { getLog } from "../../observability/logger";
-import { getOpenRouterClient } from "./client";
+import { getHostOpenRouterClient } from "./client";
 
 // ── Account info (the "fully featured" extras) ─────────────────────────────────
 // Thin reads over the rest of the @openrouter/sdk surface (credits / analytics / generations /
@@ -15,7 +15,7 @@ export interface OpenRouterCredits {
 /** Current credit balance: total purchased + total used (USD). */
 export async function getOpenRouterCredits(): Promise<OpenRouterCredits> {
   try {
-    const res = (await getOpenRouterClient().credits.getCredits()) as unknown as {
+    const res = (await getHostOpenRouterClient().credits.getCredits()) as unknown as {
       data?: { totalCredits?: number; totalUsage?: number };
       totalCredits?: number;
       totalUsage?: number;
@@ -38,7 +38,7 @@ export async function getOpenRouterGenerationCost(
   id: string,
 ): Promise<{ totalCost: number; tokensPrompt: number; tokensCompletion: number } | null> {
   try {
-    const res = (await getOpenRouterClient().generations.getGeneration({ id })) as unknown as {
+    const res = (await getHostOpenRouterClient().generations.getGeneration({ id })) as unknown as {
       data?: { totalCost?: number; tokensPrompt?: number; tokensCompletion?: number };
     };
     const d = res.data;
@@ -94,7 +94,7 @@ interface RawActivityRow {
  *  account-tier limitation, not a bug (logged at warn). credits/providers/catalog work on any key. */
 export async function getOpenRouterActivity(): Promise<OpenRouterActivityItem[]> {
   try {
-    const res = (await getOpenRouterClient().analytics.getUserActivity()) as unknown as {
+    const res = (await getHostOpenRouterClient().analytics.getUserActivity()) as unknown as {
       data?: RawActivityRow[];
     };
     const rows = (res.data ?? []).map((r) => ({
@@ -122,7 +122,9 @@ export async function getOpenRouterActivity(): Promise<OpenRouterActivityItem[]>
 /** The provider directory (names, policies). Returns the raw rows. */
 export async function listOpenRouterProviders(): Promise<unknown[]> {
   try {
-    const res = (await getOpenRouterClient().providers.list()) as unknown as { data?: unknown[] };
+    const res = (await getHostOpenRouterClient().providers.list()) as unknown as {
+      data?: unknown[];
+    };
     const rows = res.data ?? [];
     getLog().debug({ rows: rows.length }, "openrouter: providers");
     return rows;
@@ -145,7 +147,7 @@ export async function listOpenRouterEndpoints(model: string): Promise<unknown> {
   const author = model.slice(0, slash);
   const slug = model.slice(slash + 1);
   try {
-    const res = (await getOpenRouterClient().endpoints.list({ author, slug })) as unknown as {
+    const res = (await getHostOpenRouterClient().endpoints.list({ author, slug })) as unknown as {
       data?: unknown;
     };
     getLog().debug({ model }, "openrouter: endpoints");

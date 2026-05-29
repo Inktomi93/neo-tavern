@@ -1,8 +1,11 @@
+import { randomBytes } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { expect, test } from "vitest";
 import { chats, userSettings } from "../../src/db/schema";
+import { createSecretBox } from "../../src/server/crypto/secrets";
+import { storeUserKey } from "../../src/server/domain/_shared/credentials";
 import { ensureUser } from "../../src/server/domain/_shared/users";
-import { createChatService } from "../../src/server/domain/chat";
+import { type ChatServiceDeps, createChatService } from "../../src/server/domain/chat";
 import type { ChatTurnResult } from "../../src/server/providers/turn";
 import type { UserSettings } from "../../src/shared/user-settings";
 import { freshDb, seedCharacter } from "../support/db";
@@ -52,6 +55,19 @@ async function setUserSettings(
     .onConflictDoUpdate({ target: userSettings.userId, set: { config } });
 }
 
+// A chat service whose openrouter turns are HERMETIC: the owner gets a stored BYO key + a real
+// secret box, so the turn-time resolver never depends on a host OPENROUTER_API_KEY (which is going
+// away). The injected runner mocks still drive routing; the BYO key just satisfies the credential gate.
+async function byoChatService(
+  db: Awaited<ReturnType<typeof freshDb>>,
+  deps: ChatServiceDeps,
+): Promise<ReturnType<typeof createChatService>> {
+  const secretBox = createSecretBox(randomBytes(32));
+  const ownerId = await ensureUser(db, "owner");
+  await storeUserKey(db, secretBox, ownerId, "openrouter", "sk-or-owner-byok");
+  return createChatService(db, { ...deps, secretBox });
+}
+
 test("startChat seeds api/source/model from user settings when the caller omits them", async () => {
   const db = await freshDb();
   const { characterVersionId } = await seedCharacter(db, {
@@ -65,7 +81,7 @@ test("startChat seeds api/source/model from user settings when the caller omits 
     defaultModel: "x/y",
   });
   const calls: string[] = [];
-  const chat = createChatService(db, {
+  const chat = await byoChatService(db, {
     runRaw: async () => {
       calls.push("raw");
       return cannedTurn("opening");
@@ -157,7 +173,7 @@ test("generateOpening on an openrouter chat routes through the openrouter runner
     name: "Aria",
   });
   let rawCalls = 0;
-  const chat = createChatService(db, {
+  const chat = await byoChatService(db, {
     runRaw: async () => {
       rawCalls++;
       return cannedTurn("*the door opens*");

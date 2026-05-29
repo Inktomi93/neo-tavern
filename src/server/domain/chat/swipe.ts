@@ -31,7 +31,7 @@ import {
 export function createSwipe(ctx: ChatContext) {
   const { db, loadOwnedChat, loadOwnedMessage, maxSeq, listByChat, openRouterRunner } = ctx;
   const { loadCanonHistory, buildAssembleContext, resolveConfig, runTurn } = ctx;
-  const { recordTurnEvents, reseedSdkSession } = ctx;
+  const { recordTurnEvents, reseedSdkSession, resolveCredential } = ctx;
 
   // Swipe: regenerate the LAST assistant turn as a new variant (it does NOT advance seq — it mutates
   // the tip). First swipe migrates the existing single generation to variant 0 (its first-gen metadata
@@ -84,6 +84,11 @@ export function createSwipe(ctx: ChatContext) {
       ]);
       const systemPrompt = assemblePrompt(promptConfig, assembleCtx);
       const routing = resolveTurnRouting(chat, promptConfig);
+      // Turn-time credential gate (§8) — before the regen runs (a swipe mutates nothing until the
+      // turn succeeds, so resolving here just fails fast on a denied credential).
+      const credential = await resolveCredential(ownerId, routing.source);
+      const openRouterApiKey =
+        credential.source === "openrouter" ? credential.openRouterKey : undefined;
 
       const startedAt = Date.now();
       let turn: ChatTurnResult;
@@ -107,6 +112,7 @@ export function createSwipe(ctx: ChatContext) {
               prompt: regenPrompt,
               model: routing.model,
               source: routing.source,
+              openRouterApiKey,
               sessionStore: store,
               systemPrompt,
               generation: promptConfig.params,
@@ -119,6 +125,7 @@ export function createSwipe(ctx: ChatContext) {
               prompt: regenPrompt,
               model: routing.model,
               source: routing.source,
+              openRouterApiKey,
               sessionStore: store,
               systemPrompt,
               generation: promptConfig.params,
@@ -128,6 +135,7 @@ export function createSwipe(ctx: ChatContext) {
         } else {
           turn = await openRouterRunner(routing.api)({
             model: routing.model,
+            openRouterApiKey: openRouterApiKey ?? "", // openrouter runner ⟹ openrouter credential
             chatId: params.chatId,
             systemPrompt,
             history: [...history, { role: "user", content: regenPrompt }],

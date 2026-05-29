@@ -21,7 +21,7 @@ import type { CompactParams } from "./types";
  */
 export function createCompaction(ctx: ChatContext) {
   const { db, runTurn, recordTurnEvents, extractCompactSummary, maxSeq } = ctx;
-  const { loadOwnedChat, buildAssembleContext, resolveConfig } = ctx;
+  const { loadOwnedChat, buildAssembleContext, resolveConfig, resolveCredential } = ctx;
 
   // Lock-free compaction core: run a steered `/compact` turn (resume the session, compact, no reply,
   // no message row) → repoint the session + record the compaction event. Shared by the manual
@@ -32,6 +32,9 @@ export function createCompaction(ctx: ChatContext) {
     sessionId: string;
     model: ChatModelId;
     source: ClaudeSource;
+    /** The resolved OpenRouter key (mode 2 only); undefined for max-pro-sub. Passed by the caller,
+     *  which already resolved the credential for the turn this compaction follows. */
+    openRouterApiKey?: string | undefined;
     systemPrompt: { static: string; dynamic: string };
     generation: PromptConfig["params"];
     instructions: string;
@@ -42,6 +45,7 @@ export function createCompaction(ctx: ChatContext) {
         prompt: `/compact ${args.instructions}`,
         model: args.model,
         source: args.source,
+        openRouterApiKey: args.openRouterApiKey,
         sessionStore: new DbSessionStore(db, args.chatId),
         systemPrompt: args.systemPrompt,
         generation: args.generation,
@@ -102,11 +106,13 @@ export function createCompaction(ctx: ChatContext) {
       if (routing.runner !== "agent-sdk") {
         return { compacted: false };
       }
+      const credential = await resolveCredential(ownerId, routing.source);
       const compacted = await runCompaction({
         chatId: params.chatId,
         sessionId: chat.sessionId,
         model: routing.model,
         source: routing.source,
+        openRouterApiKey: credential.source === "openrouter" ? credential.openRouterKey : undefined,
         systemPrompt: assemblePrompt(promptConfig, assembleCtx),
         generation: promptConfig.params,
         instructions:

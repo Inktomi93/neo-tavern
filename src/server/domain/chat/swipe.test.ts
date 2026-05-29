@@ -59,7 +59,7 @@ function fakeTurn(): ChatTurnResult {
 
 async function seed(): Promise<void> {
   const now = Date.now();
-  await db.insert(users).values({ id: "u1", handle: "u1", createdAt: now });
+  await db.insert(users).values({ id: "u1", handle: "u1", role: "admin", createdAt: now });
   await db.insert(characters).values({ id: "c1", ownerId: "u1", handle: "probe", createdAt: now });
   await db.insert(characterVersions).values({
     id: "v1",
@@ -267,7 +267,7 @@ describe("manual compaction", () => {
 
   test("compact() is a no-op for a chat with no session yet", async () => {
     const svc = createChatService(db, { runTurn: async () => fakeTurn() });
-    await db.insert(users).values({ id: "u1", handle: "u1", createdAt: Date.now() });
+    await db.insert(users).values({ id: "u1", handle: "u1", role: "admin", createdAt: Date.now() });
     await db
       .insert(characters)
       .values({ id: "c1", ownerId: "u1", handle: "p", createdAt: Date.now() });
@@ -307,7 +307,7 @@ describe("cross-mode compaction pickup (openrouter)", () => {
       },
     });
 
-    await db.insert(users).values({ id: "u1", handle: "u1", createdAt: now });
+    await db.insert(users).values({ id: "u1", handle: "u1", role: "admin", createdAt: now });
     await db.insert(characters).values({ id: "c1", ownerId: "u1", handle: "p", createdAt: now });
     await db.insert(characterVersions).values({
       id: "v1",

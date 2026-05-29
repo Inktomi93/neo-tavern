@@ -3,6 +3,7 @@ import type { AdminService } from "../domain/admin";
 import type { CharacterService } from "../domain/character";
 import type { ChatService } from "../domain/chat";
 import type { CorpusService } from "../domain/corpus";
+import type { CredentialsService } from "../domain/credentials";
 import type { ModelsService } from "../domain/models";
 import type { PersonaService } from "../domain/persona";
 import type { PresetService } from "../domain/preset";
@@ -24,6 +25,7 @@ export interface Services {
   character: CharacterService;
   chat: ChatService;
   corpus: CorpusService;
+  credentials: CredentialsService;
   models: ModelsService;
   persona: PersonaService;
   preset: PresetService;

@@ -5,7 +5,7 @@
  *
  *     src/shared      types & zod schemas — the foundation; imports nothing internal
  *     src/db          Drizzle schema + libSQL — persistence; imports shared only
- *     src/server/{providers,embeddings,auth,env}   infrastructure (external systems, config)
+ *     src/server/{providers,embeddings,auth,crypto,env}   infrastructure (external systems, config)
  *     src/server/{domain,services}                 business logic (future)
  *     src/server/trpc                              transport edge — calls DOWN into the above
  *     src/server/index.ts                          composition root / entry
@@ -53,17 +53,17 @@ module.exports = {
     {
       name: "below-drivers-no-driver",
       comment:
-        "Drivers (trpc transport + jobs) sit ABOVE infra + domain and call DOWN into them — never the reverse. Providers, embeddings, auth, and domain must not import a driver layer.",
+        "Drivers (trpc transport + jobs) sit ABOVE infra + domain and call DOWN into them — never the reverse. Providers, embeddings, auth, crypto, and domain must not import a driver layer.",
       severity: "error",
-      from: { path: "^src/server/(providers|embeddings|auth|domain)/" },
+      from: { path: "^src/server/(providers|embeddings|auth|crypto|domain)/" },
       to: { path: "^src/server/(trpc|jobs)/" },
     },
     {
       name: "infra-below-domain",
       comment:
-        "Domain (business logic) orchestrates infrastructure, not the reverse. Providers, embeddings, and auth are adapters — they must not import the domain layer.",
+        "Domain (business logic) orchestrates infrastructure, not the reverse. Providers, embeddings, auth, and crypto are adapters — they must not import the domain layer.",
       severity: "error",
-      from: { path: "^src/server/(providers|embeddings|auth)/" },
+      from: { path: "^src/server/(providers|embeddings|auth|crypto)/" },
       to: { path: "^src/server/domain/" },
     },
     {
@@ -75,7 +75,7 @@ module.exports = {
       to: {
         path: [
           "^src/db/",
-          "^src/server/(domain|trpc|jobs|providers|embeddings|auth)/",
+          "^src/server/(domain|trpc|jobs|providers|embeddings|auth|crypto)/",
           "^src/client/",
         ],
       },
@@ -94,7 +94,7 @@ module.exports = {
         "Drivers stay THIN: tRPC routers AND background jobs reach the database and infrastructure adapters THROUGH the domain layer, never directly. Keeps query/search/embedding/conversion logic in domain (testable in isolation) instead of sprawled across routers or workers. Drivers may still import domain, shared, env, and version.",
       severity: "error",
       from: { path: "^src/server/(trpc|jobs)/" },
-      to: { path: ["^src/db/", "^src/server/(providers|embeddings|auth|storage)/"] },
+      to: { path: ["^src/db/", "^src/server/(providers|embeddings|auth|storage|crypto)/"] },
     },
     {
       name: "no-cross-driver",
