@@ -266,10 +266,13 @@
       // Keeping those names visible makes the port auditable against the ST spec +
       // card-curator, so useNamingConvention is off here; useLiteralKeys is off for the
       // bracket access tsc's noPropertyAccessFromIndexSignature requires on raw entries.
+      // export/** is the INVERSE — it constructs the same ST wire shape — so it shares the exemption.
       "includes": [
         "src/server/domain/import/**",
+        "src/server/domain/export/**",
         "tests/integration/*-parser.test.ts",
-        "tests/integration/import-service.test.ts"
+        "tests/integration/import-service.test.ts",
+        "tests/integration/export.test.ts"
       ],
       "linter": {
         "rules": {

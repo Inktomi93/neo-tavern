@@ -10,8 +10,10 @@ import { processMacros } from "../shared/macro";
 import type { RegexPlacement, RegexScript } from "../shared/regex";
 import { resolveUsername } from "./auth/trust-header";
 import { createRegexService } from "./domain/_shared/regex";
+import { ensureUser } from "./domain/_shared/users";
 import { createAssetsService } from "./domain/assets";
 import { createDebugService } from "./domain/debug";
+import { createExportService } from "./domain/export";
 import { env } from "./env";
 import { debugAuthMiddleware, registerDebugRoutes } from "./observability/debug";
 import { getLog } from "./observability/logger";
@@ -74,6 +76,7 @@ export function buildApp(db: Db, cas: Cas, services: Services, isProd: boolean) 
   });
 
   const assetsService = createAssetsService(db, cas);
+  const exportService = createExportService(db, cas);
   registerDebugRoutes(app, createDebugService(db), assetsService);
 
   const debugRouter = new Hono();
@@ -152,6 +155,38 @@ export function buildApp(db: Db, cas: Cas, services: Services, isProd: boolean) 
     const stored = await assetsService.store(bytes, kind, file.type || "application/octet-stream");
 
     return c.json(stored);
+  });
+
+  // Export downloads (transport, not canon → generated on demand, not stored in CAS). Owner-scoped
+  // via the same header-trust model as tRPC. PNG card / ST JSONL — the inverse of import.
+  app.get("/api/export/character/:characterId", async (c) => {
+    const username = resolveUsername(
+      c.req.raw.headers,
+      env.NEO_PROXY_SECRET,
+      env.DEFAULT_USER_HANDLE,
+    );
+    const ownerId = await ensureUser(db, username);
+    const result = await exportService.exportCharacter(ownerId, c.req.param("characterId"));
+    if (!result) return c.notFound();
+    return c.body(new Uint8Array(result.bytes), 200, {
+      "Content-Type": "image/png",
+      "Content-Disposition": `attachment; filename="${result.filename}"`,
+    });
+  });
+
+  app.get("/api/export/chat/:chatId", async (c) => {
+    const username = resolveUsername(
+      c.req.raw.headers,
+      env.NEO_PROXY_SECRET,
+      env.DEFAULT_USER_HANDLE,
+    );
+    const ownerId = await ensureUser(db, username);
+    const result = await exportService.exportChat(ownerId, c.req.param("chatId"));
+    if (!result) return c.notFound();
+    return c.body(result.text, 200, {
+      "Content-Type": "application/jsonl; charset=utf-8",
+      "Content-Disposition": `attachment; filename="${result.filename}"`,
+    });
   });
 
   app.all("/api/trpc/*", (c) =>
