@@ -192,6 +192,20 @@ cookie.* We choose **server-backed** (build it right the first time):
   the user. Carries the same bearer (or a short-lived query token where `EventSource` can't set
   headers). SSO + multi-device + live push + no-CSRF all coexist.
 
+### §5a. Home / LAN access reality (the access path determines the usable mode)
+SSO works from home — same as the owner's existing Open WebUI/Grafana OIDC — **but only via the
+DOMAIN** (`neo-tavern.inktomi.tech`), because:
+- **`oidc`** is a browser redirect with a fixed `OIDC_REDIRECT_URI` (the domain). Reaching the app by
+  **raw LAN IP** (`http://192.168.x.x:8788`, bypassing caddy) breaks the callback match (and is plain
+  HTTP — bad for bearer tokens). So raw-IP is NOT an OIDC path.
+- **`forward-header`** requires caddy+authentik in front → also domain-only.
+- **`single-user`** works on ANY path (raw IP or domain), zero infra — the always-works fallback.
+**Implication for the owner (who hits direct-LAN/IP often):** at home, reach neo-tavern by the
+**domain** (split-horizon DNS pointing `*.inktomi.tech` at the LAN caddy, or NAT-loopback) → full SSO
++ HTTPS + multi-account, identical to away. If hitting raw IP, run `single-user` (owner). authentik
+itself is reachable from the LAN regardless (the browser + the server both resolve it), so OIDC's
+*dependency* on authentik is fine at home — the only constraint is domain-based access to the app.
+
 ## §6. User layer (Part B)
 - **Admin/owner determination — two sources, group preferred (matches the Grafana pattern):**
   - `OWNER_GROUP` env (e.g. `Neo Owners`): identity's `groups` contains it → `role:'admin'`.
