@@ -1,20 +1,8 @@
-import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { promptConfigSchema } from "../../../shared/prompt-config";
-import { PresetNotFoundError, PresetOperationError } from "../../domain/preset";
 import { publicProcedure, t } from "../trpc";
 
 // Thin driver: validate input, call the domain service, translate domain errors. No db access.
-function domainErrorToTrpc(error: unknown): never {
-  if (error instanceof PresetNotFoundError) {
-    throw new TRPCError({ code: "NOT_FOUND", message: error.message });
-  }
-  if (error instanceof PresetOperationError) {
-    // preset_in_use (delete blocked by a chat/message pin) — a bad request for the state.
-    throw new TRPCError({ code: "BAD_REQUEST", message: error.message });
-  }
-  throw error;
-}
 
 export const presetRouter = t.router({
   // The caller's preset library, newest-updated first (owner-scoped).
@@ -23,9 +11,7 @@ export const presetRouter = t.router({
   // One owned preset + its current config. NOT_FOUND if unowned.
   get: publicProcedure
     .input(z.object({ presetId: z.string().min(1) }))
-    .query(({ ctx, input }) =>
-      ctx.services.preset.get({ username: ctx.username, ...input }).catch(domainErrorToTrpc),
-    ),
+    .query(({ ctx, input }) => ctx.services.preset.get({ username: ctx.username, ...input })),
 
   create: publicProcedure
     .input(
@@ -49,14 +35,10 @@ export const presetRouter = t.router({
         config: promptConfigSchema.optional(),
       }),
     )
-    .mutation(({ ctx, input }) =>
-      ctx.services.preset.update({ username: ctx.username, ...input }).catch(domainErrorToTrpc),
-    ),
+    .mutation(({ ctx, input }) => ctx.services.preset.update({ username: ctx.username, ...input })),
 
   // Hard delete. BAD_REQUEST (preset_in_use) if a version is pinned by a chat/message.
   remove: publicProcedure
     .input(z.object({ presetId: z.string().min(1) }))
-    .mutation(({ ctx, input }) =>
-      ctx.services.preset.remove({ username: ctx.username, ...input }).catch(domainErrorToTrpc),
-    ),
+    .mutation(({ ctx, input }) => ctx.services.preset.remove({ username: ctx.username, ...input })),
 });

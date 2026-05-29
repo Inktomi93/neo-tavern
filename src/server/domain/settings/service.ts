@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import type { Db } from "../../../db/client";
-import { auditLogs, settings, userSettings } from "../../../db/schema";
-import { newId } from "../_shared/ids";
+import { settings, userSettings } from "../../../db/schema";
+import { logAudit } from "../_shared/audit";
 import { ensureUser } from "../_shared/users";
 import type {
   GlobalSettingView,
@@ -50,14 +50,7 @@ export function createSettingsService(db: Db): SettingsService {
 
     await db.update(userSettings).set(updates).where(eq(userSettings.userId, ownerId));
 
-    await db.insert(auditLogs).values({
-      id: newId(),
-      timestamp: Date.now(),
-      action: "UPDATE_USER_SETTINGS",
-      domain: "settings",
-      entityId: ownerId,
-      details: { config: input.config },
-    });
+    await logAudit(db, "UPDATE_USER_SETTINGS", "settings", ownerId, { config: input.config });
 
     return getUserSettings(params);
   }
@@ -74,14 +67,7 @@ export function createSettingsService(db: Db): SettingsService {
       set: { value, updatedAt },
     });
 
-    await db.insert(auditLogs).values({
-      id: newId(),
-      timestamp: Date.now(),
-      action: "SET_GLOBAL_SETTING",
-      domain: "settings",
-      entityId: key,
-      details: { value },
-    });
+    await logAudit(db, "SET_GLOBAL_SETTING", "settings", key, { value });
 
     const rows = await db.select().from(settings).where(eq(settings.key, key));
     // biome-ignore lint/style/noNonNullAssertion: guaranteed to exist

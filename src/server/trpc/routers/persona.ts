@@ -1,18 +1,6 @@
-import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import {
-  type CreatePersonaInput,
-  PersonaNotFoundError,
-  type UpdatePersonaInput,
-} from "../../domain/persona";
+import type { CreatePersonaInput, UpdatePersonaInput } from "../../domain/persona";
 import { publicProcedure, t } from "../trpc";
-
-function domainErrorToTrpc(error: unknown): never {
-  if (error instanceof PersonaNotFoundError) {
-    throw new TRPCError({ code: "NOT_FOUND", message: error.message });
-  }
-  throw error;
-}
 
 export const personaRouter = t.router({
   list: publicProcedure.query(({ ctx }) => ctx.services.persona.list({ username: ctx.username })),
@@ -20,9 +8,7 @@ export const personaRouter = t.router({
   get: publicProcedure
     .input(z.object({ personaId: z.string().min(1) }))
     .query(({ ctx, input }) =>
-      ctx.services.persona
-        .get({ username: ctx.username }, input.personaId)
-        .catch(domainErrorToTrpc),
+      ctx.services.persona.get({ username: ctx.username }, input.personaId),
     ),
 
   create: publicProcedure
@@ -35,9 +21,7 @@ export const personaRouter = t.router({
       }),
     )
     .mutation(({ ctx, input }) =>
-      ctx.services.persona
-        .create({ username: ctx.username }, input as CreatePersonaInput)
-        .catch(domainErrorToTrpc),
+      ctx.services.persona.create({ username: ctx.username }, input as CreatePersonaInput),
     ),
 
   update: publicProcedure
@@ -52,16 +36,16 @@ export const personaRouter = t.router({
     )
     .mutation(({ ctx, input }) => {
       const { personaId, ...edits } = input;
-      return ctx.services.persona
-        .update({ username: ctx.username }, personaId, edits as UpdatePersonaInput)
-        .catch(domainErrorToTrpc);
+      return ctx.services.persona.update(
+        { username: ctx.username },
+        personaId,
+        edits as UpdatePersonaInput,
+      );
     }),
 
   remove: publicProcedure
     .input(z.object({ personaId: z.string().min(1) }))
     .mutation(({ ctx, input }) =>
-      ctx.services.persona
-        .remove({ username: ctx.username }, input.personaId)
-        .catch(domainErrorToTrpc),
+      ctx.services.persona.remove({ username: ctx.username }, input.personaId),
     ),
 });

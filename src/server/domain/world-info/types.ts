@@ -1,3 +1,5 @@
+import { DomainNotFoundError } from "../_shared/errors";
+
 export interface WorldBookView {
   id: string;
   name: string;
@@ -70,9 +72,9 @@ export interface WorldInfoService {
   removeEntry(params: { username: string }, entryId: string): Promise<{ deleted: boolean }>;
 }
 
-export class WorldInfoNotFoundError extends Error {
+export class WorldInfoNotFoundError extends DomainNotFoundError {
   constructor(message: string) {
-    super(message);
-    this.name = "WorldInfoNotFoundError";
+    // We pass message as ID and "WorldInfo" as entity to fit DomainNotFoundError
+    super("WorldInfo", message);
   }
 }

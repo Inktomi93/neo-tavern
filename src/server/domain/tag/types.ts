@@ -1,3 +1,5 @@
+import { DomainNotFoundError } from "../_shared/errors";
+
 export interface TagView {
   id: string;
   name: string;
@@ -38,9 +40,9 @@ export interface TagService {
   ): Promise<void>;
 }
 
-export class TagNotFoundError extends Error {
+export class TagNotFoundError extends DomainNotFoundError {
   constructor(message: string) {
-    super(message);
-    this.name = "TagNotFoundError";
+    // We pass message as ID and "Tag" as entity to fit DomainNotFoundError
+    super("Tag", message);
   }
 }

@@ -1,14 +1,5 @@
-import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import { WorldInfoNotFoundError } from "../../domain/world-info";
 import { publicProcedure, t } from "../trpc";
-
-function domainErrorToTrpc(error: unknown): never {
-  if (error instanceof WorldInfoNotFoundError) {
-    throw new TRPCError({ code: "NOT_FOUND", message: error.message });
-  }
-  throw error;
-}
 
 export const worldInfoRouter = t.router({
   listBooks: publicProcedure.query(({ ctx }) =>
@@ -18,9 +9,7 @@ export const worldInfoRouter = t.router({
   getBook: publicProcedure
     .input(z.object({ bookId: z.string().min(1) }))
     .query(({ ctx, input }) =>
-      ctx.services.worldInfo
-        .getBook({ username: ctx.username }, input.bookId)
-        .catch(domainErrorToTrpc),
+      ctx.services.worldInfo.getBook({ username: ctx.username }, input.bookId),
     ),
 
   createBook: publicProcedure
@@ -31,7 +20,7 @@ export const worldInfoRouter = t.router({
       }),
     )
     .mutation(({ ctx, input }) =>
-      ctx.services.worldInfo.createBook({ username: ctx.username }, input).catch(domainErrorToTrpc),
+      ctx.services.worldInfo.createBook({ username: ctx.username }, input),
     ),
 
   updateBook: publicProcedure
@@ -44,33 +33,25 @@ export const worldInfoRouter = t.router({
     )
     .mutation(({ ctx, input }) => {
       const { bookId, ...edits } = input;
-      return ctx.services.worldInfo
-        .updateBook({ username: ctx.username }, bookId, edits)
-        .catch(domainErrorToTrpc);
+      return ctx.services.worldInfo.updateBook({ username: ctx.username }, bookId, edits);
     }),
 
   removeBook: publicProcedure
     .input(z.object({ bookId: z.string().min(1) }))
     .mutation(({ ctx, input }) =>
-      ctx.services.worldInfo
-        .removeBook({ username: ctx.username }, input.bookId)
-        .catch(domainErrorToTrpc),
+      ctx.services.worldInfo.removeBook({ username: ctx.username }, input.bookId),
     ),
 
   listEntries: publicProcedure
     .input(z.object({ bookId: z.string().min(1) }))
     .query(({ ctx, input }) =>
-      ctx.services.worldInfo
-        .listEntries({ username: ctx.username }, input.bookId)
-        .catch(domainErrorToTrpc),
+      ctx.services.worldInfo.listEntries({ username: ctx.username }, input.bookId),
     ),
 
   getEntry: publicProcedure
     .input(z.object({ entryId: z.string().min(1) }))
     .query(({ ctx, input }) =>
-      ctx.services.worldInfo
-        .getEntry({ username: ctx.username }, input.entryId)
-        .catch(domainErrorToTrpc),
+      ctx.services.worldInfo.getEntry({ username: ctx.username }, input.entryId),
     ),
 
   createEntry: publicProcedure
@@ -87,9 +68,7 @@ export const worldInfoRouter = t.router({
     )
     .mutation(({ ctx, input }) => {
       const { bookId, ...entryInput } = input;
-      return ctx.services.worldInfo
-        .createEntry({ username: ctx.username }, bookId, entryInput)
-        .catch(domainErrorToTrpc);
+      return ctx.services.worldInfo.createEntry({ username: ctx.username }, bookId, entryInput);
     }),
 
   updateEntry: publicProcedure
@@ -106,16 +85,12 @@ export const worldInfoRouter = t.router({
     )
     .mutation(({ ctx, input }) => {
       const { entryId, ...edits } = input;
-      return ctx.services.worldInfo
-        .updateEntry({ username: ctx.username }, entryId, edits)
-        .catch(domainErrorToTrpc);
+      return ctx.services.worldInfo.updateEntry({ username: ctx.username }, entryId, edits);
     }),
 
   removeEntry: publicProcedure
     .input(z.object({ entryId: z.string().min(1) }))
     .mutation(({ ctx, input }) =>
-      ctx.services.worldInfo
-        .removeEntry({ username: ctx.username }, input.entryId)
-        .catch(domainErrorToTrpc),
+      ctx.services.worldInfo.removeEntry({ username: ctx.username }, input.entryId),
     ),
 });

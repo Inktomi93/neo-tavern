@@ -1,8 +1,9 @@
-export class PersonaNotFoundError extends Error {
-  personaId: string;
+import { DomainNotFoundError } from "../_shared/errors";
+
+export class PersonaNotFoundError extends DomainNotFoundError {
+  public personaId: string;
   constructor(personaId: string) {
-    super(`Persona not found: ${personaId}`);
-    this.name = "PersonaNotFoundError";
+    super("Persona", personaId);
     this.personaId = personaId;
   }
 }

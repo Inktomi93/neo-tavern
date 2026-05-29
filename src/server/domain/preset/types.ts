@@ -1,4 +1,5 @@
 import type { PromptConfig } from "../../../shared/prompt-config";
+import { DomainNotFoundError, DomainOperationError } from "../_shared/errors";
 
 // Preset domain types. A preset is the identity/content-version/pin triad (like characters):
 // the `presets` row is mutable identity (name/kind/currentVersionId); each `preset_versions` row
@@ -57,21 +58,19 @@ export interface PresetService {
 
 // Missing or not owned by the caller → the transport maps this to NOT_FOUND (domain can't import
 // @trpc/server — wrong direction). Mirrors ChatNotFoundError.
-export class PresetNotFoundError extends Error {
+export class PresetNotFoundError extends DomainNotFoundError {
   constructor(presetId: string) {
-    super(`preset not found: ${presetId}`);
-    this.name = "PresetNotFoundError";
+    super("Preset", presetId);
   }
 }
 
 // An operation invalid for the preset's current state. `reason` lets the transport pick the code
 // without importing @trpc/server. preset_in_use = a delete blocked by a chat/message pin.
 export type PresetOpReason = "preset_in_use";
-export class PresetOperationError extends Error {
+export class PresetOperationError extends DomainOperationError {
   readonly reason: PresetOpReason;
   constructor(reason: PresetOpReason, message: string) {
-    super(message);
-    this.name = "PresetOperationError";
+    super(reason, message);
     this.reason = reason;
   }
 }

@@ -2,8 +2,9 @@
 
 import { and, desc, eq } from "drizzle-orm";
 import type { Db } from "../../../db/client";
-import { auditLogs, personas } from "../../../db/schema";
+import { personas } from "../../../db/schema";
 import { getLog } from "../../observability/logger";
+import { logAudit } from "../_shared/audit";
 import { newId } from "../_shared/ids";
 import { ensureUser } from "../_shared/users";
 import { type PersonaDetail, PersonaNotFoundError, type PersonaService } from "./types";
@@ -50,14 +51,7 @@ export function createPersonaService(db: Db): PersonaService {
         createdAt: now,
       });
 
-      await db.insert(auditLogs).values({
-        id: newId(),
-        timestamp: now,
-        action: "CREATE_PERSONA",
-        domain: "persona",
-        entityId: personaId,
-        details: { name: input.name },
-      });
+      await logAudit(db, "CREATE_PERSONA", "persona", personaId, { name: input.name }, now);
 
       log.info({ personaId }, "persona: created");
 
@@ -96,14 +90,7 @@ export function createPersonaService(db: Db): PersonaService {
 
       if (Object.keys(edits).length > 0) {
         await db.update(personas).set(edits).where(eq(personas.id, personaId));
-        await db.insert(auditLogs).values({
-          id: newId(),
-          timestamp: Date.now(),
-          action: "UPDATE_PERSONA",
-          domain: "persona",
-          entityId: personaId,
-          details: edits,
-        });
+        await logAudit(db, "UPDATE_PERSONA", "persona", personaId, edits);
       }
 
       const updated = await ownedPersona(ownerId, personaId);
@@ -118,14 +105,7 @@ export function createPersonaService(db: Db): PersonaService {
 
       await db.delete(personas).where(eq(personas.id, personaId));
 
-      await db.insert(auditLogs).values({
-        id: newId(),
-        timestamp: Date.now(),
-        action: "DELETE_PERSONA",
-        domain: "persona",
-        entityId: personaId,
-        details: {},
-      });
+      await logAudit(db, "DELETE_PERSONA", "persona", personaId, {});
 
       log.info({ personaId }, "persona: deleted");
       return { deleted: true };

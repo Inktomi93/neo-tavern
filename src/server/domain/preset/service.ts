@@ -7,13 +7,14 @@
 
 import { and, desc, eq } from "drizzle-orm";
 import type { Db } from "../../../db/client";
-import { auditLogs, chats, messages, presets, presetVersions } from "../../../db/schema";
+import { chats, messages, presets, presetVersions } from "../../../db/schema";
 import {
   DEFAULT_PROMPT_CONFIG,
   type PromptConfig,
   parsePromptConfig,
 } from "../../../shared/prompt-config";
 import { getLog } from "../../observability/logger";
+import { logAudit } from "../_shared/audit";
 import { newId } from "../_shared/ids";
 import { ensureUser } from "../_shared/users";
 import {
@@ -106,14 +107,7 @@ export function createPresetService(db: Db): PresetService {
       });
       await db.update(presets).set({ currentVersionId: versionId }).where(eq(presets.id, presetId));
 
-      await db.insert(auditLogs).values({
-        id: newId(),
-        timestamp: now,
-        action: "CREATE_PRESET",
-        domain: "preset",
-        entityId: presetId,
-        details: { name, kind },
-      });
+      await logAudit(db, "CREATE_PRESET", "preset", presetId, { name, kind }, now);
 
       log.info({ presetId, kind }, "preset: created");
       const row = await ownedPreset(ownerId, presetId);
@@ -236,14 +230,14 @@ export function createPresetService(db: Db): PresetService {
           .where(eq(presets.id, presetId));
       }
 
-      await db.insert(auditLogs).values({
-        id: newId(),
-        timestamp: now,
-        action: "UPDATE_PRESET",
-        domain: "preset",
-        entityId: presetId,
-        details: { edits: idEdits, configUpdated: config !== undefined },
-      });
+      await logAudit(
+        db,
+        "UPDATE_PRESET",
+        "preset",
+        presetId,
+        { edits: idEdits, configUpdated: config !== undefined },
+        now,
+      );
 
       const updated = await ownedPreset(ownerId, presetId);
       if (updated === undefined) throw new PresetNotFoundError(presetId);
@@ -275,14 +269,7 @@ export function createPresetService(db: Db): PresetService {
       await db.update(presets).set({ currentVersionId: null }).where(eq(presets.id, presetId));
       await db.delete(presets).where(eq(presets.id, presetId));
 
-      await db.insert(auditLogs).values({
-        id: newId(),
-        timestamp: Date.now(),
-        action: "DELETE_PRESET",
-        domain: "preset",
-        entityId: presetId,
-        details: {},
-      });
+      await logAudit(db, "DELETE_PRESET", "preset", presetId, {});
 
       log.info({ presetId }, "preset: deleted");
       return { deleted: true };

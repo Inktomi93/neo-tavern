@@ -611,6 +611,6 @@ test("delete removes chat completely", async () => {
   const { chatId } = await chat.create({ username: "owner", title: "T", ...baseChar });
   await chat.delete({ username: "owner", chatId });
 
-  await expect(chat.getChat({ username: "owner", chatId })).rejects.toThrow("chat not found");
+  await expect(chat.getChat({ username: "owner", chatId })).rejects.toThrow(/not found/i);
   expect(await chat.listChats({ username: "owner" })).toHaveLength(0);
 });

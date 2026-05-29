@@ -1,28 +1,6 @@
-import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import {
-  CharacterNotFoundError,
-  CharacterOperationError,
-  type CreateCharacterInput,
-  type UpdateCharacterInput,
-} from "../../domain/character";
+import type { CreateCharacterInput, UpdateCharacterInput } from "../../domain/character";
 import { publicProcedure, t } from "../trpc";
-
-function domainErrorToTrpc(error: unknown): never {
-  if (error instanceof CharacterNotFoundError) {
-    throw new TRPCError({ code: "NOT_FOUND", message: error.message });
-  }
-  if (error instanceof CharacterOperationError) {
-    if (error.code === "handle_conflict") {
-      throw new TRPCError({ code: "CONFLICT", message: error.message });
-    }
-    if (error.code === "character_in_use") {
-      throw new TRPCError({ code: "BAD_REQUEST", message: error.message });
-    }
-    throw new TRPCError({ code: "BAD_REQUEST", message: error.message });
-  }
-  throw error;
-}
 
 export const characterRouter = t.router({
   list: publicProcedure.query(({ ctx }) => ctx.services.character.list({ username: ctx.username })),
@@ -30,9 +8,7 @@ export const characterRouter = t.router({
   get: publicProcedure
     .input(z.object({ characterId: z.string().min(1) }))
     .query(({ ctx, input }) =>
-      ctx.services.character
-        .get({ username: ctx.username }, input.characterId)
-        .catch(domainErrorToTrpc),
+      ctx.services.character.get({ username: ctx.username }, input.characterId),
     ),
 
   create: publicProcedure
@@ -53,9 +29,7 @@ export const characterRouter = t.router({
       }),
     )
     .mutation(({ ctx, input }) =>
-      ctx.services.character
-        .create({ username: ctx.username }, input as CreateCharacterInput)
-        .catch(domainErrorToTrpc),
+      ctx.services.character.create({ username: ctx.username }, input as CreateCharacterInput),
     ),
 
   update: publicProcedure
@@ -80,16 +54,16 @@ export const characterRouter = t.router({
     )
     .mutation(({ ctx, input }) => {
       const { characterId, ...edits } = input;
-      return ctx.services.character
-        .update({ username: ctx.username }, characterId, edits as UpdateCharacterInput)
-        .catch(domainErrorToTrpc);
+      return ctx.services.character.update(
+        { username: ctx.username },
+        characterId,
+        edits as UpdateCharacterInput,
+      );
     }),
 
   remove: publicProcedure
     .input(z.object({ characterId: z.string().min(1) }))
     .mutation(({ ctx, input }) =>
-      ctx.services.character
-        .remove({ username: ctx.username }, input.characterId)
-        .catch(domainErrorToTrpc),
+      ctx.services.character.remove({ username: ctx.username }, input.characterId),
     ),
 });

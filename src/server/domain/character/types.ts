@@ -1,18 +1,17 @@
-export class CharacterNotFoundError extends Error {
-  characterId: string;
+import { DomainNotFoundError, DomainOperationError } from "../_shared/errors";
+
+export class CharacterNotFoundError extends DomainNotFoundError {
+  public characterId: string;
   constructor(characterId: string) {
-    super(`Character not found: ${characterId}`);
-    this.name = "CharacterNotFoundError";
+    super("Character", characterId);
     this.characterId = characterId;
   }
 }
 
-export class CharacterOperationError extends Error {
-  code: "character_in_use" | "handle_conflict";
+export class CharacterOperationError extends DomainOperationError {
+  declare readonly code: "character_in_use" | "handle_conflict";
   constructor(code: "character_in_use" | "handle_conflict", message: string) {
-    super(message);
-    this.name = "CharacterOperationError";
-    this.code = code;
+    super(code, message);
   }
 }
 

@@ -1,21 +1,10 @@
 import { on } from "node:events";
-import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import { ChatNotFoundError, ChatOperationError, chatStreamEmitter } from "../../domain/chat";
+import { chatStreamEmitter } from "../../domain/chat";
 import { publicProcedure, t } from "../trpc";
 
 // Thin driver: validate input, call the domain service via ctx, translate domain errors to
 // transport errors. No db/provider access here.
-function domainErrorToTrpc(error: unknown): never {
-  if (error instanceof ChatNotFoundError) {
-    throw new TRPCError({ code: "NOT_FOUND", message: error.message });
-  }
-  if (error instanceof ChatOperationError) {
-    // All current reasons (invalid_provider, invalid_fork_point, …) are bad requests for the state.
-    throw new TRPCError({ code: "BAD_REQUEST", message: error.message });
-  }
-  throw error;
-}
 
 export const chatRouter = t.router({
   create: publicProcedure
@@ -38,17 +27,13 @@ export const chatRouter = t.router({
   get: publicProcedure
     .input(z.object({ chatId: z.string().min(1) }))
     .query(({ ctx, input }) =>
-      ctx.services.chat
-        .getChat({ username: ctx.username, chatId: input.chatId })
-        .catch(domainErrorToTrpc),
+      ctx.services.chat.getChat({ username: ctx.username, chatId: input.chatId }),
     ),
 
   messages: publicProcedure
     .input(z.object({ chatId: z.string().min(1) }))
     .query(({ ctx, input }) =>
-      ctx.services.chat
-        .listMessages({ username: ctx.username, chatId: input.chatId })
-        .catch(domainErrorToTrpc),
+      ctx.services.chat.listMessages({ username: ctx.username, chatId: input.chatId }),
     ),
 
   // Dry-run: the system prompt + routing the NEXT turn would use, WITHOUT generating. The
@@ -56,9 +41,7 @@ export const chatRouter = t.router({
   previewAssembly: publicProcedure
     .input(z.object({ chatId: z.string().min(1) }))
     .query(({ ctx, input }) =>
-      ctx.services.chat
-        .previewAssembly({ username: ctx.username, chatId: input.chatId })
-        .catch(domainErrorToTrpc),
+      ctx.services.chat.previewAssembly({ username: ctx.username, chatId: input.chatId }),
     ),
 
   send: publicProcedure
@@ -69,9 +52,7 @@ export const chatRouter = t.router({
         content: z.string().min(1),
       }),
     )
-    .mutation(({ ctx, input }) =>
-      ctx.services.chat.send({ username: ctx.username, ...input }).catch(domainErrorToTrpc),
-    ),
+    .mutation(({ ctx, input }) => ctx.services.chat.send({ username: ctx.username, ...input })),
 
   // Subscribe to real-time token deltas for a specific chat.
   streamMessages: publicProcedure
@@ -100,7 +81,7 @@ export const chatRouter = t.router({
       }),
     )
     .mutation(({ ctx, input }) =>
-      ctx.services.chat.setProvider({ username: ctx.username, ...input }).catch(domainErrorToTrpc),
+      ctx.services.chat.setProvider({ username: ctx.username, ...input }),
     ),
 
   // Branch a chat at a seq into a new chat (optionally switching api/source at the branch point).
@@ -113,16 +94,12 @@ export const chatRouter = t.router({
         targetSource: z.enum(["max-pro-sub", "openrouter"]),
       }),
     )
-    .mutation(({ ctx, input }) =>
-      ctx.services.chat.forkChat({ username: ctx.username, ...input }).catch(domainErrorToTrpc),
-    ),
+    .mutation(({ ctx, input }) => ctx.services.chat.forkChat({ username: ctx.username, ...input })),
 
   // Swipe: regenerate the last assistant turn as a new variant (same result shape as send).
   swipe: publicProcedure
     .input(z.object({ chatId: z.string().min(1), expectedSeq: z.number().int().nonnegative() }))
-    .mutation(({ ctx, input }) =>
-      ctx.services.chat.swipe({ username: ctx.username, ...input }).catch(domainErrorToTrpc),
-    ),
+    .mutation(({ ctx, input }) => ctx.services.chat.swipe({ username: ctx.username, ...input })),
 
   // Make an existing variant active (swipe ← →).
   selectVariant: publicProcedure
@@ -134,9 +111,7 @@ export const chatRouter = t.router({
       }),
     )
     .mutation(({ ctx, input }) =>
-      ctx.services.chat
-        .selectVariant({ username: ctx.username, ...input })
-        .catch(domainErrorToTrpc),
+      ctx.services.chat.selectVariant({ username: ctx.username, ...input }),
     ),
 
   // Edit a message in place.
@@ -149,38 +124,30 @@ export const chatRouter = t.router({
       }),
     )
     .mutation(({ ctx, input }) =>
-      ctx.services.chat.editMessage({ username: ctx.username, ...input }).catch(domainErrorToTrpc),
+      ctx.services.chat.editMessage({ username: ctx.username, ...input }),
     ),
 
   // Manually compact an agent-sdk chat's session (steered /compact). { compacted: false } if the
   // chat can't be compacted (openrouter, or no session yet).
   compact: publicProcedure
     .input(z.object({ chatId: z.string().min(1), instructions: z.string().min(1).optional() }))
-    .mutation(({ ctx, input }) =>
-      ctx.services.chat.compact({ username: ctx.username, ...input }).catch(domainErrorToTrpc),
-    ),
+    .mutation(({ ctx, input }) => ctx.services.chat.compact({ username: ctx.username, ...input })),
 
   delete: publicProcedure
     .input(z.object({ chatId: z.string().min(1) }))
-    .mutation(({ ctx, input }) =>
-      ctx.services.chat.delete({ username: ctx.username, ...input }).catch(domainErrorToTrpc),
-    ),
+    .mutation(({ ctx, input }) => ctx.services.chat.delete({ username: ctx.username, ...input })),
 
   updateTitle: publicProcedure
     .input(z.object({ chatId: z.string().min(1), title: z.string().min(1).max(200) }))
     .mutation(({ ctx, input }) =>
-      ctx.services.chat.updateTitle({ username: ctx.username, ...input }).catch(domainErrorToTrpc),
+      ctx.services.chat.updateTitle({ username: ctx.username, ...input }),
     ),
 
   star: publicProcedure
     .input(z.object({ chatId: z.string().min(1), starred: z.boolean() }))
-    .mutation(({ ctx, input }) =>
-      ctx.services.chat.star({ username: ctx.username, ...input }).catch(domainErrorToTrpc),
-    ),
+    .mutation(({ ctx, input }) => ctx.services.chat.star({ username: ctx.username, ...input })),
 
   archive: publicProcedure
     .input(z.object({ chatId: z.string().min(1), archived: z.boolean() }))
-    .mutation(({ ctx, input }) =>
-      ctx.services.chat.archive({ username: ctx.username, ...input }).catch(domainErrorToTrpc),
-    ),
+    .mutation(({ ctx, input }) => ctx.services.chat.archive({ username: ctx.username, ...input })),
 });

@@ -1,4 +1,5 @@
 import type { TurnErrorKind } from "../../providers/turn";
+import { DomainNotFoundError, DomainOperationError } from "../_shared/errors";
 
 // Shaped, client-safe view of a message row. Carries the per-turn provenance the chat UI needs
 // (the context-fill meter off contextWindow, a cost/latency readout, the edited marker) — the
@@ -212,10 +213,9 @@ export interface ChatService {
 
 // Thrown when a chat doesn't exist or isn't owned by the caller. The trpc layer maps
 // this to a NOT_FOUND error (domain can't import @trpc/server — wrong direction).
-export class ChatNotFoundError extends Error {
+export class ChatNotFoundError extends DomainNotFoundError {
   constructor(chatId: string) {
-    super(`chat not found: ${chatId}`);
-    this.name = "ChatNotFoundError";
+    super("Chat", chatId);
   }
 }
 
@@ -227,11 +227,10 @@ export type ChatOpReason =
   | "no_such_message"
   | "no_such_variant"
   | "not_swipeable";
-export class ChatOperationError extends Error {
+export class ChatOperationError extends DomainOperationError {
   readonly reason: ChatOpReason;
   constructor(reason: ChatOpReason, message: string) {
-    super(message);
-    this.name = "ChatOperationError";
+    super(reason, message);
     this.reason = reason;
   }
 }
