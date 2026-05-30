@@ -96,7 +96,10 @@ export const themeClusters = sqliteTable(
       .notNull()
       .references(() => users.id),
     model: text("model").notNull(), // embedder model that produced the clustered vectors
-    clusterIdx: integer("cluster_idx").notNull(), // 0..k-1 within (owner, model)
+    // Clustering ALTITUDE: 'scene' = tier-0 digests (recurring moments); 'arc' = tier-1+ consolidation
+    // digests (overarching narrative shapes). Two lenses over the same digest hierarchy.
+    level: text("level").notNull().default("scene"),
+    clusterIdx: integer("cluster_idx").notNull(), // 0..k-1 within (owner, model, level)
     themeName: text("theme_name").notNull(),
     subThemes: text("sub_themes", { mode: "json" }), // string[]
     description: text("description"),
@@ -104,7 +107,7 @@ export const themeClusters = sqliteTable(
     memberCount: integer("member_count").notNull(),
     computedAt: integer("computed_at").notNull(),
   },
-  (t) => [uniqueIndex("theme_clusters_unq").on(t.ownerId, t.model, t.clusterIdx)],
+  (t) => [uniqueIndex("theme_clusters_unq").on(t.ownerId, t.model, t.level, t.clusterIdx)],
 );
 
 // Which theme each tier-0 digest landed in (its nearest centroid). PK = digestId (one assignment per
@@ -118,9 +121,10 @@ export const digestThemeAssignments = sqliteTable(
     ownerId: text("owner_id")
       .notNull()
       .references(() => users.id),
+    level: text("level").notNull().default("scene"), // 'scene' (tier-0) | 'arc' (tier-1+)
     clusterIdx: integer("cluster_idx").notNull(),
     distance: real("distance").notNull(),
     computedAt: integer("computed_at").notNull(),
   },
-  (t) => [index("digest_theme_owner_cluster_idx").on(t.ownerId, t.clusterIdx)],
+  (t) => [index("digest_theme_owner_cluster_idx").on(t.ownerId, t.level, t.clusterIdx)],
 );

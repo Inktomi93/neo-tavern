@@ -1,4 +1,4 @@
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, gte, sql } from "drizzle-orm";
 import type { Db } from "../../../db/client";
 import { chatDigests, digestThemeAssignments, themeClusters } from "../../../db/schema";
 import { collapseByContentHash } from "../../../shared/content-hash";
@@ -48,13 +48,14 @@ interface ComputeThemesDeps {
 }
 
 /**
- * Backfill `chat_digests.msg_mid_at` (story-time axis, B.4) for tier-0 rows that lack it: the midpoint
- * message createdAt of the digest's seqStart..seqEnd span. Idempotent (only null rows). Returns count.
+ * Backfill `chat_digests.msg_mid_at` (story-time axis, B.4) for ALL tiers that lack it: the midpoint
+ * message createdAt of the digest's seqStart..seqEnd span. tier 1+ (arcs) need it too, for arc
+ * timelines. Idempotent (only null rows). Returns count.
  */
 export async function backfillMsgMidAt(db: Db): Promise<number> {
   const rows = await db.all<{ id: string; chatId: string; seqStart: number; seqEnd: number }>(sql`
     SELECT id, chat_id AS chatId, seq_start AS seqStart, seq_end AS seqEnd
-    FROM chat_digests WHERE tier = 0 AND msg_mid_at IS NULL
+    FROM chat_digests WHERE msg_mid_at IS NULL
   `);
   let written = 0;
   for (const r of rows) {
@@ -72,13 +73,19 @@ export async function backfillMsgMidAt(db: Db): Promise<number> {
   return written;
 }
 
-/** Recompute themes for every owner with tier-0 digests. Idempotent (replaces the owner's rows). */
+/**
+ * Recompute themes for every owner, at BOTH altitudes: 'scene' (tier-0 — recurring moments) and 'arc'
+ * (tier-1+ consolidation digests — overarching narrative shapes). The same digest hierarchy, two lenses.
+ * Idempotent (replaces the owner's rows per level).
+ */
 export async function computeThemes(
   db: Db,
   deps: ComputeThemesDeps,
-  opts: { k?: number; seed?: number } = {},
+  opts: { k?: number; arcK?: number; seed?: number } = {},
 ): Promise<ThemeComputeStats> {
   const k = opts.k ?? 30;
+  const arcK = opts.arcK ?? 10;
+  const seed = opts.seed ?? 1;
   const now = Date.now();
   const msgMidAtBackfilled = await backfillMsgMidAt(db);
 
@@ -89,92 +96,12 @@ export async function computeThemes(
   let totalClusters = 0;
   let totalDigests = 0;
   let totalInertia = 0;
-
   for (const ownerId of owners) {
-    const rows = await db
-      .select({
-        id: chatDigests.id,
-        model: chatDigests.model,
-        topicAnchor: chatDigests.topicAnchor,
-        contentHash: chatDigests.contentHash,
-        embedding: chatDigests.embedding,
-      })
-      .from(chatDigests)
-      .where(and(eq(chatDigests.ownerId, ownerId), eq(chatDigests.tier, 0)));
-
-    const withVec = rows.filter(
-      (r): r is typeof r & { embedding: Float32Array } => r.embedding !== null,
-    );
-    if (withVec.length < k + 1) continue; // too few to cluster meaningfully
-    const model = withVec[0]?.model ?? "unknown";
-
-    // Cluster on the CONTENT-COLLAPSED set so a forked scene doesn't bias a centroid (B.5.1).
-    const reps = collapseByContentHash(withVec).representatives;
-    const km = kmeans(
-      reps.map((r) => r.embedding),
-      k,
-      { seed: opts.seed ?? 1 },
-    );
-    totalInertia += km.inertia;
-
-    // Name each cluster from its centroid-nearest representative anchors (grammar-constrained).
-    const named: { themeName: string; subThemes: string[]; description: string }[] = [];
-    for (let c = 0; c < km.centroids.length; c += 1) {
-      const centroid = km.centroids[c] as Float32Array;
-      const anchors = reps
-        .map((r) => ({ anchor: r.topicAnchor ?? "", dist: cosineDistance(r.embedding, centroid) }))
-        .filter((a) => a.anchor.length > 0)
-        .sort((a, b) => a.dist - b.dist)
-        .slice(0, NAMING_SAMPLE)
-        .map((a) => a.anchor);
-      named.push(await nameCluster(deps.summarizer, anchors, c));
-    }
-
-    // Assign EVERY tier-0 digest (incl. content dups) to its nearest centroid — full timeline coverage.
-    const assignments = withVec.map((r) => {
-      let best = 0;
-      let bestD = Number.POSITIVE_INFINITY;
-      for (let c = 0; c < km.centroids.length; c += 1) {
-        const dd = cosineDistance(r.embedding, km.centroids[c] as Float32Array);
-        if (dd < bestD) {
-          bestD = dd;
-          best = c;
-        }
-      }
-      return { digestId: r.id, clusterIdx: best, distance: bestD };
-    });
-    const memberCounts = new Array<number>(km.centroids.length).fill(0);
-    for (const a of assignments) memberCounts[a.clusterIdx] = (memberCounts[a.clusterIdx] ?? 0) + 1;
-
-    // Replace this owner's rows.
-    await db.delete(themeClusters).where(eq(themeClusters.ownerId, ownerId));
-    await db.delete(digestThemeAssignments).where(eq(digestThemeAssignments.ownerId, ownerId));
-    for (let c = 0; c < km.centroids.length; c += 1) {
-      const nm = named[c] ?? { themeName: `Theme ${c}`, subThemes: [], description: "" };
-      await db.insert(themeClusters).values({
-        id: newId(),
-        ownerId,
-        model,
-        clusterIdx: c,
-        themeName: nm.themeName,
-        subThemes: nm.subThemes,
-        description: nm.description,
-        centroid: km.centroids[c] as Float32Array,
-        memberCount: memberCounts[c] ?? 0,
-        computedAt: now,
-      });
-    }
-    for (const a of assignments) {
-      await db.insert(digestThemeAssignments).values({
-        digestId: a.digestId,
-        ownerId,
-        clusterIdx: a.clusterIdx,
-        distance: a.distance,
-        computedAt: now,
-      });
-    }
-    totalClusters += km.centroids.length;
-    totalDigests += assignments.length;
+    const scene = await clusterLevel(db, deps, ownerId, "scene", k, seed, now);
+    const arc = await clusterLevel(db, deps, ownerId, "arc", arcK, seed, now);
+    totalClusters += scene.clusters + arc.clusters;
+    totalDigests += scene.assigned + arc.assigned;
+    totalInertia += scene.inertia + arc.inertia;
   }
 
   const stats: ThemeComputeStats = {
@@ -187,13 +114,120 @@ export async function computeThemes(
   return stats;
 }
 
+/** Cluster + name one altitude (scene = tier-0, arc = tier-1+) for one owner. Replaces that level's rows. */
+async function clusterLevel(
+  db: Db,
+  deps: ComputeThemesDeps,
+  ownerId: string,
+  level: "scene" | "arc",
+  k: number,
+  seed: number,
+  now: number,
+): Promise<{ clusters: number; assigned: number; inertia: number }> {
+  const tierCond = level === "scene" ? eq(chatDigests.tier, 0) : gte(chatDigests.tier, 1);
+  const rows = await db
+    .select({
+      id: chatDigests.id,
+      model: chatDigests.model,
+      topicAnchor: chatDigests.topicAnchor,
+      contentHash: chatDigests.contentHash,
+      embedding: chatDigests.embedding,
+    })
+    .from(chatDigests)
+    .where(and(eq(chatDigests.ownerId, ownerId), tierCond));
+
+  // Clear this owner+level first (idempotent even when there's now too little to cluster).
+  await db
+    .delete(themeClusters)
+    .where(and(eq(themeClusters.ownerId, ownerId), eq(themeClusters.level, level)));
+  await db
+    .delete(digestThemeAssignments)
+    .where(
+      and(eq(digestThemeAssignments.ownerId, ownerId), eq(digestThemeAssignments.level, level)),
+    );
+
+  const withVec = rows.filter(
+    (r): r is typeof r & { embedding: Float32Array } => r.embedding !== null,
+  );
+  if (withVec.length < k + 1) return { clusters: 0, assigned: 0, inertia: 0 };
+  const model = withVec[0]?.model ?? "unknown";
+
+  // Cluster on the CONTENT-COLLAPSED set so a forked scene doesn't bias a centroid (B.5.1). Arc digests
+  // have a null contentHash → all kept (consolidations are already unique).
+  const reps = collapseByContentHash(withVec).representatives;
+  const km = kmeans(
+    reps.map((r) => r.embedding),
+    k,
+    { seed },
+  );
+
+  const named: { themeName: string; subThemes: string[]; description: string }[] = [];
+  for (let c = 0; c < km.centroids.length; c += 1) {
+    const centroid = km.centroids[c] as Float32Array;
+    const anchors = reps
+      .map((r) => ({ anchor: r.topicAnchor ?? "", dist: cosineDistance(r.embedding, centroid) }))
+      .filter((a) => a.anchor.length > 0)
+      .sort((a, b) => a.dist - b.dist)
+      .slice(0, NAMING_SAMPLE)
+      .map((a) => a.anchor);
+    named.push(await nameCluster(deps.summarizer, anchors, c, level));
+  }
+
+  // Assign EVERY digest at this level (incl. content dups) to its nearest centroid — full coverage.
+  const assignments = withVec.map((r) => {
+    let best = 0;
+    let bestD = Number.POSITIVE_INFINITY;
+    for (let c = 0; c < km.centroids.length; c += 1) {
+      const dd = cosineDistance(r.embedding, km.centroids[c] as Float32Array);
+      if (dd < bestD) {
+        bestD = dd;
+        best = c;
+      }
+    }
+    return { digestId: r.id, clusterIdx: best, distance: bestD };
+  });
+  const memberCounts = new Array<number>(km.centroids.length).fill(0);
+  for (const a of assignments) memberCounts[a.clusterIdx] = (memberCounts[a.clusterIdx] ?? 0) + 1;
+
+  for (let c = 0; c < km.centroids.length; c += 1) {
+    const nm = named[c] ?? { themeName: `Theme ${c}`, subThemes: [], description: "" };
+    await db.insert(themeClusters).values({
+      id: newId(),
+      ownerId,
+      model,
+      level,
+      clusterIdx: c,
+      themeName: nm.themeName,
+      subThemes: nm.subThemes,
+      description: nm.description,
+      centroid: km.centroids[c] as Float32Array,
+      memberCount: memberCounts[c] ?? 0,
+      computedAt: now,
+    });
+  }
+  for (const a of assignments) {
+    await db.insert(digestThemeAssignments).values({
+      digestId: a.digestId,
+      ownerId,
+      level,
+      clusterIdx: a.clusterIdx,
+      distance: a.distance,
+      computedAt: now,
+    });
+  }
+  return { clusters: km.centroids.length, assigned: assignments.length, inertia: km.inertia };
+}
+
 async function nameCluster(
   summarizer: Summarizer,
   anchors: string[],
   idx: number,
+  level: "scene" | "arc",
 ): Promise<{ themeName: string; subThemes: string[]; description: string }> {
   if (anchors.length === 0) return { themeName: `Theme ${idx}`, subThemes: [], description: "" };
-  const userPrompt = `These scene labels were clustered together:\n${anchors.map((a) => `- ${a}`).join("\n")}\n\nName their shared theme:`;
+  const noun = level === "arc" ? "arc summaries" : "scene labels";
+  const ask = level === "arc" ? "Name the shared NARRATIVE ARC" : "Name their shared theme";
+  const userPrompt = `These ${noun} were clustered together:\n${anchors.map((a) => `- ${a}`).join("\n")}\n\n${ask}:`;
   const res = await summarizer.summarize(THEME_NAMING_SYSTEM, userPrompt, {
     jsonSchema: THEME_NAMING_SCHEMA, // grammar-constrain the local path; hosted is prompted for it
     maxTokens: 256,
@@ -238,7 +272,11 @@ export interface ThemeRow {
   memberCount: number;
 }
 
-export async function themes(db: Db, ownerId: string): Promise<ThemeRow[]> {
+export async function themes(
+  db: Db,
+  ownerId: string,
+  level: "scene" | "arc" = "scene",
+): Promise<ThemeRow[]> {
   const rows = await db.all<{
     clusterIdx: number;
     themeName: string;
@@ -248,7 +286,8 @@ export async function themes(db: Db, ownerId: string): Promise<ThemeRow[]> {
   }>(sql`
     SELECT cluster_idx AS clusterIdx, theme_name AS themeName, sub_themes AS subThemes,
            description, member_count AS memberCount
-    FROM theme_clusters WHERE owner_id = ${ownerId} ORDER BY member_count DESC
+    FROM theme_clusters WHERE owner_id = ${ownerId} AND level = ${level}
+    ORDER BY member_count DESC
   `);
   return rows.map((r) => ({
     clusterIdx: r.clusterIdx,
@@ -265,6 +304,7 @@ export async function themeTimeline(
   ownerId: string,
   clusterIdx: number,
   bucketDays = 7,
+  level: "scene" | "arc" = "scene",
 ): Promise<{ bucket: string; count: number }[]> {
   const bucketMs = bucketDays * 86_400_000;
   return db.all<{ bucket: string; count: number }>(sql`
@@ -272,7 +312,8 @@ export async function themeTimeline(
            COUNT(*) AS count
     FROM digest_theme_assignments dta
     JOIN chat_digests cd ON cd.id = dta.digest_id
-    WHERE dta.owner_id = ${ownerId} AND dta.cluster_idx = ${clusterIdx} AND cd.msg_mid_at IS NOT NULL
+    WHERE dta.owner_id = ${ownerId} AND dta.level = ${level} AND dta.cluster_idx = ${clusterIdx}
+      AND cd.msg_mid_at IS NOT NULL
     GROUP BY bucket ORDER BY bucket
   `);
 }
@@ -282,6 +323,7 @@ export async function characterThemeProfile(
   db: Db,
   ownerId: string,
   characterId: string,
+  level: "scene" | "arc" = "scene",
 ): Promise<{ clusterIdx: number; themeName: string; count: number }[]> {
   return db.all<{ clusterIdx: number; themeName: string; count: number }>(sql`
     SELECT tc.cluster_idx AS clusterIdx, tc.theme_name AS themeName, COUNT(*) AS count
@@ -289,8 +331,9 @@ export async function characterThemeProfile(
     JOIN chat_digests cd ON cd.id = dta.digest_id
     JOIN chats ch ON ch.id = cd.chat_id
     JOIN character_versions cv ON cv.id = ch.character_version_id
-    JOIN theme_clusters tc ON tc.owner_id = dta.owner_id AND tc.cluster_idx = dta.cluster_idx
-    WHERE dta.owner_id = ${ownerId} AND cv.character_id = ${characterId}
+    JOIN theme_clusters tc ON tc.owner_id = dta.owner_id AND tc.level = dta.level
+      AND tc.cluster_idx = dta.cluster_idx
+    WHERE dta.owner_id = ${ownerId} AND dta.level = ${level} AND cv.character_id = ${characterId}
     GROUP BY tc.cluster_idx ORDER BY count DESC
   `);
 }
@@ -301,6 +344,7 @@ export async function themeCharacters(
   ownerId: string,
   clusterIdx: number,
   limit = 15,
+  level: "scene" | "arc" = "scene",
 ): Promise<{ characterId: string; name: string; count: number }[]> {
   return db.all<{ characterId: string; name: string; count: number }>(sql`
     SELECT cv.character_id AS characterId, MIN(cv.name) AS name, COUNT(*) AS count
@@ -308,7 +352,7 @@ export async function themeCharacters(
     JOIN chat_digests cd ON cd.id = dta.digest_id
     JOIN chats ch ON ch.id = cd.chat_id
     JOIN character_versions cv ON cv.id = ch.character_version_id
-    WHERE dta.owner_id = ${ownerId} AND dta.cluster_idx = ${clusterIdx}
+    WHERE dta.owner_id = ${ownerId} AND dta.level = ${level} AND dta.cluster_idx = ${clusterIdx}
     GROUP BY cv.character_id ORDER BY count DESC LIMIT ${limit}
   `);
 }
