@@ -1,5 +1,6 @@
 import type { ChatDeltaEvent } from "../../../shared/chat-types";
 import { type GenerationParams, isThinkingOn } from "../../../shared/generation";
+import type { OpenRouterProviderRouting } from "../../../shared/provider-routing";
 import { TurnError, type TurnErrorKind } from "../turn";
 import { listOpenRouterModels } from "./catalog";
 
@@ -24,7 +25,7 @@ export interface RawTurnParams {
   generation?: GenerationParams | undefined;
   /** OpenRouter provider-routing preferences (order/allowFallbacks/sort/only/ignore/…). Lenient
    *  pass-through (OpenRouter owns the schema); undefined = default routing. From chats.metadata. */
-  providerRouting?: Record<string, unknown> | undefined;
+  providerRouting?: OpenRouterProviderRouting | undefined;
   /** Streaming delta callback — fires once per token chunk, discriminated by kind (text|reasoning).
    *  Text chunks are the reply content; reasoning chunks are CoT thinking from extended-thinking
    *  models (e.g. claude-3-7-sonnet with thinking on, or o3-mini). Each should render separately. */

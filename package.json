@@ -14,7 +14,7 @@
     "dev:client": "vite",
     "build": "vite build",
     "start": "NODE_ENV=production tsx src/server/index.ts",
-    "check": "biome check . && tsc --noEmit && pnpm arch && vitest run",
+    "check": "biome check . && tsc --noEmit && pnpm arch && vitest run --silent",
     "cpd": "jscpd",
     "cpd:report": "jscpd --reporters html --output reports/cpd",
     "db:generate:force": "yes | drizzle-kit generate",

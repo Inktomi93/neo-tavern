@@ -5,6 +5,10 @@ import {
   DEFAULT_RAW_MODEL_ID,
 } from "../../../shared/models";
 import type { PromptConfig } from "../../../shared/prompt-config";
+import {
+  type OpenRouterProviderRouting,
+  parseProviderRouting,
+} from "../../../shared/provider-routing";
 
 // The SINGLE place api + source + model selection happens, for every chat. send()/swipe() never
 // name a model or hardcode a runner — they call this once and act on the result. Adding a new
@@ -47,7 +51,7 @@ export type TurnRouting =
       params: PromptConfig["params"];
       /** OpenRouter provider-routing prefs (order/fallbacks/sort/…) → the request's `provider`
        *  field. Sourced from chats.metadata; undefined = default routing. */
-      providerRouting: Record<string, unknown> | undefined;
+      providerRouting: OpenRouterProviderRouting | undefined;
     };
 
 function isChatModelId(id: string): id is ChatModelId {
@@ -55,14 +59,11 @@ function isChatModelId(id: string): id is ChatModelId {
 }
 
 // Pull OpenRouter provider-routing prefs out of the chat's metadata blob, leniently — nothing
-// writes this yet (no picker), so it's the seam, not a hot field. A plain guard satisfies both
-// noPropertyAccessFromIndexSignature and useLiteralKeys.
-function extractProviderRouting(metadata: unknown): Record<string, unknown> | undefined {
+// writes this yet (no picker), so it's the seam, not a hot field. parseProviderRouting validates the
+// shape (so the field is typed, not a blind cast) while staying permissive about unknown OR keys.
+function extractProviderRouting(metadata: unknown): OpenRouterProviderRouting | undefined {
   if (metadata !== null && typeof metadata === "object" && "providerRouting" in metadata) {
-    const pr = (metadata as { providerRouting: unknown }).providerRouting;
-    if (pr !== null && typeof pr === "object") {
-      return pr as Record<string, unknown>;
-    }
+    return parseProviderRouting((metadata as { providerRouting: unknown }).providerRouting);
   }
   return undefined;
 }
