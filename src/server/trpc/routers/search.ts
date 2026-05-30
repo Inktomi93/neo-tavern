@@ -51,6 +51,51 @@ export const searchRouter = t.router({
     };
   }),
 
+  // Field-scoped FUZZY full-text search over card sections (MiniSearch) — the lexical complement to the
+  // semantic search. Pick which fields/sections, typo tolerance, prefix (as-you-type), AND/OR. (Mirrors
+  // CARD_FIELDS in domain/corpus/field-search.ts.)
+  fields: authedProcedure
+    .input(
+      z.object({
+        q: z.string().min(1),
+        fields: z
+          .array(
+            z.enum([
+              "name",
+              "description",
+              "personality",
+              "scenario",
+              "greetings",
+              "exampleMessages",
+              "systemPrompt",
+              "postHistoryInstructions",
+              "creatorNotes",
+              "tags",
+              "overview",
+              "elevatorPitch",
+              "setting",
+              "genre",
+              "tone",
+            ]),
+          )
+          .optional(),
+        fuzzy: z.number().min(0).max(1).optional(),
+        prefix: z.boolean().optional(),
+        matchMode: z.enum(["AND", "OR"]).optional(),
+        limit: z.number().int().positive().max(100).optional(),
+      }),
+    )
+    .query(({ ctx, input }) => ctx.services.corpus.fieldSearch(ctx.username, input)),
+
+  // As-you-type suggestions for the field search (MiniSearch.autoSuggest).
+  suggest: authedProcedure
+    .input(
+      z.object({ q: z.string().min(1), limit: z.number().int().positive().max(20).optional() }),
+    )
+    .query(({ ctx, input }) =>
+      ctx.services.corpus.fieldSuggest(ctx.username, input.q, input.limit),
+    ),
+
   // Cross-modal image search (SigLIP) — a different model/space, kept separate from the text search.
   images: authedProcedure
     .input(

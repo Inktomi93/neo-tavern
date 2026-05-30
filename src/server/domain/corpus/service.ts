@@ -39,6 +39,12 @@ import {
 } from "./duplicates";
 import type { EmbedItem } from "./embed-text";
 import {
+  type FieldSearchHit,
+  type FieldSearchParams,
+  fieldSearch,
+  fieldSuggest,
+} from "./field-search";
+import {
   type ForgottenGem,
   forgottenGems,
   type ModelRouting,
@@ -185,6 +191,10 @@ export interface CorpusService {
   ): Promise<CharacterComparison | null>;
   /** Character archetypes — cluster card embeddings, labeled by dominant distilled facets. */
   archetypes(username: string, k?: number): Promise<Archetype[]>;
+  /** Field-scoped fuzzy full-text search over card sections (MiniSearch) — the lexical complement. */
+  fieldSearch(username: string, params: FieldSearchParams): Promise<FieldSearchHit[]>;
+  /** As-you-type suggestions for the field search. */
+  fieldSuggest(username: string, q: string, limit?: number): Promise<string[]>;
   /** Forgotten gems — characters you invested in but haven't touched recently (revisit candidates). */
   forgottenGems(username: string, limit?: number): Promise<ForgottenGem[]>;
   /** Which model you reach for per genre. */
@@ -366,6 +376,16 @@ export function createCorpusService(db: Db, deps: CorpusServiceDeps = {}): Corpu
     async archetypes(username, k) {
       const ownerId = await ensureUser(db, username);
       return characterArchetypes(db, ownerId, k);
+    },
+
+    async fieldSearch(username, params) {
+      const ownerId = await ensureUser(db, username);
+      return fieldSearch(db, ownerId, params);
+    },
+
+    async fieldSuggest(username, q, limit) {
+      const ownerId = await ensureUser(db, username);
+      return fieldSuggest(db, ownerId, q, limit);
     },
 
     async forgottenGems(username, limit) {
