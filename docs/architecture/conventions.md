@@ -97,7 +97,7 @@ transformers.js `session_options`, OS env vars) trip `useNamingConvention`. Two 
   back. To rank/visit "most of the corpus" (e.g. an exact re-rank), `SELECT … FROM embeddings` and
   compute, don't crank N. (It already bit CSLS hub-scoring: per-row `vector_top_k` gave the most
   POPULAR cards hub 0 — their ~200 nearest were their own chat segments, never 10 other cards — so
-  `computeHubScores` does an exact in-process same-type top-K instead. Same trap awaits the
+  `computeGroupHubs` does an exact in-process same-type top-K instead. Same trap awaits the
   reranker/discover over-fetch: cap the pool at a few hundred, or compute exactly.)
 - **`db.transaction()` breaks on `:memory:`** (the test DB): drizzle's libSQL `transaction()`
   acquires a *fresh connection*, which for `:memory:` is a brand-new EMPTY database — so the

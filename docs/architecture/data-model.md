@@ -1,7 +1,9 @@
 # Data model — design notes (the *why*)
 
-**The schema itself lives in `src/db/schema.ts`** (heavily commented — that's the source of
-truth) and evolves via additive migrations in `src/db/migrations/`. This doc is NOT a parallel
+**The schema itself lives in `src/db/schema/`** (a dir of per-domain files, aggregated by
+`src/db/schema.ts` — heavily commented, that's the source of truth) and evolves via migrations in
+`src/db/migrations/` (squashed to a single `0000_baseline.sql`; see `docs/architecture/conventions.md`).
+This doc is NOT a parallel
 schema listing (that just drifts); it's the **design rationale** behind the tables — the "why"
 that the code can't fully carry. Conventions: `id` = text (nanoid); timestamps = integer (unix
 epoch ms — always a **UTC** instant, parsed/normalized via `src/shared/time.ts` at every

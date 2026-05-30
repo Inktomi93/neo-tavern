@@ -57,11 +57,12 @@ card into rows on import (`raw` json preserved), the PNG is transport.
 
 Algorithms are model-agnostic and port unchanged; only the embedding model differs.
 
-- **CSLS hubness correction — ✅ IMPLEMENTED (Phase 4.6.3a).** `embeddings.hub_score`
-  (migration 0005) + `src/server/domain/corpus/hubness.ts` (`computeHubScores`, run via
-  `pnpm csls`) + the query-time re-rank in `src/server/domain/search/service.ts`. Computed
-  **per (entity_type, model)** — char hubs (avg 0.72) and segment hubs (avg 0.86) have
-  different distributions, so a mixed score skews both. Ported from `index.py:62-89` +
+- **CSLS hubness correction — ✅ IMPLEMENTED (Phase 4.6.3a).** A `hub_score` column on each vector
+  table (`character_embeddings` / `chat_digests` / `chat_segments`) + `src/server/domain/corpus/hubness.ts`
+  (`computeCharacterHubScores` / `computeDigestHubScores` / `computeSegmentHubScores` over the shared
+  `computeGroupHubs`, run via `pnpm csls`) + the query-time re-rank in
+  `src/server/domain/search/service.ts`. Computed **per (type, model)** — char hubs (avg 0.72) and
+  segment hubs (avg 0.86) have different distributions, so a mixed score skews both. Ported from `index.py:62-89` +
   `server.py:157-175`. `hub_score` = mean cosine-sim of a vector to its K=10 nearest
   **same-type** neighbours, precomputed at index time, stored per row; at query time
   `adjusted_dist = max(0, dist − 1 + hub_score)`. **The highest-value lift — BGE-M3 has
@@ -70,7 +71,7 @@ Algorithms are model-agnostic and port unchanged; only the embedding model diffe
   **Second reference:** `st-bridge/src/st_bridge/embeddings.py:149-177`
   (`_compute_hub_scores` K=10 · `_csls_correct` penalizing above-mean hubness) — the same
   math in plain numpy, in-process.
-  **The precompute is EXACT same-type top-K, NOT the ANN index** (`computeHubScores` loads
+  **The precompute is EXACT same-type top-K, NOT the ANN index** (`computeGroupHubs` loads
   each type's vectors and computes cosine in-process, bounded top-K — card-curator's
   `embs @ embs.T` without materializing the full n² matrix). We first tried per-row
   `vector_top_k` and it was *wrong for minority types*: a popular character is surrounded by
@@ -99,7 +100,7 @@ Algorithms are model-agnostic and port unchanged; only the embedding model diffe
 - **find-duplicates / similar** — `server.py:663, 926-987`: self vector-top-K at cosine
   ≥ 0.92 → a libSQL `vector_top_k` self-join. **Deferred** (optional standalone feature).
 - **`discover` — ✅ IMPLEMENTED (Phase 4.6.3c). The killer feature.** `server.py:229+`:
-  `search.discover()` searches the chat_segment pool (CSLS + optional two-stage rerank, owner-
+  `search.discover()` searches the `chat_segments` pool (CSLS + optional two-stage rerank, owner-
   scoped), resolves each segment → chat → pinned version → characterId, GROUPS by character
   (best segment first), and returns characters ranked by their single best matching
   conversation, each with up to 3 snippet evidences + the card's name/tags/description =
