@@ -125,6 +125,16 @@ export const analyticsRouter = t.router({
       ctx.services.corpus.compareCharacters(ctx.username, input.a, input.b),
     ),
 
+  // Character archetypes — cluster card embeddings, labeled by dominant distilled facets.
+  archetypes: authedProcedure
+    .input(
+      z
+        .object({ k: z.number().int().positive().max(40).optional() })
+        .optional()
+        .transform((v) => v ?? {}),
+    )
+    .query(({ ctx, input }) => ctx.services.corpus.archetypes(ctx.username, input.k)),
+
   // "More like this chat" — nearest chats by segment-centroid cosine.
   similarChats: authedProcedure
     .input(

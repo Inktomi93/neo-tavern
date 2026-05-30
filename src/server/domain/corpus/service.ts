@@ -6,6 +6,7 @@ import { createSummarizer } from "../../embeddings/summarizer";
 import { getLog } from "../../observability/logger";
 import { newId } from "../_shared/ids";
 import { ensureUser } from "../_shared/users";
+import { type Archetype, characterArchetypes } from "./archetypes";
 import {
   type CatalogStats,
   type CharacterComparison,
@@ -164,6 +165,8 @@ export interface CorpusService {
     characterIdA: string,
     characterIdB: string,
   ): Promise<CharacterComparison | null>;
+  /** Character archetypes — cluster card embeddings, labeled by dominant distilled facets. */
+  archetypes(username: string, k?: number): Promise<Archetype[]>;
 }
 
 export interface CorpusServiceDeps {
@@ -312,6 +315,11 @@ export function createCorpusService(db: Db, deps: CorpusServiceDeps = {}): Corpu
     async compareCharacters(username, characterIdA, characterIdB) {
       const ownerId = await ensureUser(db, username);
       return compareCharacters(db, ownerId, characterIdA, characterIdB);
+    },
+
+    async archetypes(username, k) {
+      const ownerId = await ensureUser(db, username);
+      return characterArchetypes(db, ownerId, k);
     },
   };
 }
