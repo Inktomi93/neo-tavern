@@ -3,6 +3,7 @@
 // `server`/`client`. Column names are explicit snake_case (no `casing` inference —
 // drizzle's casing has live bugs; explicit is deterministic).
 
+export * from "./schema/analytics";
 export * from "./schema/assets";
 export * from "./schema/audit";
 export * from "./schema/auth";

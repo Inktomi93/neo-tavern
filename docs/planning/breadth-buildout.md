@@ -236,7 +236,18 @@ Unit: cluster the ~2,500 tier-0 digest embeddings into themes. **k-means** in **
 
 ## B.5 Pillar C — Duplicate / near-duplicate detection — **effort S (80% built)**
 - **Characters:** new `src/server/domain/corpus/duplicates.ts` `findDuplicateCharacters({threshold=0.92})` — port `server.py:926-987` + `st-bridge embeddings.py:179-220`. Reuse `computeGroupHubs`'s load+normalize+matmul; emit pairs with **CSLS-adjusted** cosine ≥ threshold, deduped (a,b)/(b,a), sorted desc. 310² trivial.
-- **Chats:** load `chat_segments` grouped by chatId → per-chat centroid (mean of segment vectors) → pairwise cosine ≥ threshold. **Filter to chats with messageCount>20** (short-chat centroids = false positives).
+- **Chats:** ~~per-chat centroid (mean of segment vectors) → pairwise cosine~~ **SUPERSEDED — centroid
+  cosine was empirically wrong for chats.** A per-chat segment centroid is dominated by the *character's*
+  persistent voice, so DIFFERENT chats of the SAME character score ≥0.92. MEASURED on the live corpus:
+  at cosine ≥0.92, 1,881 chat pairs, of which **1,609/1,634 "independent dups" were merely same-character**
+  (51 distinct Hikari chats, 42 Selene, 33 Azarael … paired combinatorially). **Replaced with CONTENT
+  OVERLAP: Jaccard of each chat's segment `contentHash` set** (B.5.1) via an inverted index (hash→chats,
+  so only chats sharing a block are compared — far below O(chats²)). Forks/re-imports share identical
+  blocks → high Jaccard; same-character chats share at most a greeting → ~0. Eligible chats `messageCount
+  > 20`; labeled `forked`/`duplicate` by fork lineage. **Result: 1,881 → 20 pairs, all genuine forks
+  (ST "Branch #N" checkpoints), 0 false positives, 0.1s.** Bonus: it's embedder-swap-proof (hashes are
+  source-based, not vectors). The `chatThreshold` (Jaccard, default 0.3) is a separate knob from the
+  character cosine threshold.
 - **Import-time (live):** on new card import, embed → `vector_top_k('character_embeddings_ann', vec, 5)` + CSLS → if top ≥0.92, surface "similar to X (0.94)" warning before write. Sub-second, uses existing ANN index. (corpus-import.md deferred `#47`.)
 **New table:** `duplicate_pairs(id, owner_id, entity_type 'character'|'chat', entity_id_a, entity_id_b, similarity, model, computed_at, UNIQUE(owner,type,a,b))` + indexes.
 **Precompute** `scripts/find-duplicates.ts` (like `csls`). **tRPC:** `duplicateCharacters(threshold?)`, `duplicateChats(threshold?)`, `similarCards(characterId,limit?)` (port `server.py:663`).

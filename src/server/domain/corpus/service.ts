@@ -4,6 +4,16 @@ import { characterEmbeddings } from "../../../db/schema";
 import { createEmbedder, type Embedder } from "../../embeddings/embedder";
 import { getLog } from "../../observability/logger";
 import { newId } from "../_shared/ids";
+import { ensureUser } from "../_shared/users";
+import {
+  computeDuplicatePairs,
+  type DuplicateCharacterPair,
+  type DuplicateChatPair,
+  type DuplicateComputeStats,
+  readDuplicateCharacters,
+  readDuplicateChats,
+  similarCharacters,
+} from "./duplicates";
 
 // Embeds a character card and stores the vector in the owner-keyed `character_embeddings` table
 // (relational: characterId / ownerId / characterVersionId FKs). The embed pass (scripts/embed-corpus)
@@ -32,6 +42,31 @@ export interface CorpusService {
   embedAndStoreMany(items: EmbedItem[]): Promise<number>;
   /** characterIds already embedded for `model` — for resumable passes. */
   existingKeys(model?: string): Promise<Set<string>>;
+
+  // ── analytics: near-duplicate detection (B.5) ──────────────────────────────
+  /** Recompute the `duplicate_pairs` rollup (both entity types). The heavy all-pairs pass — run by
+   *  scripts/find-duplicates.ts, not on a request. */
+  computeDuplicatePairs(opts?: {
+    threshold?: number | undefined;
+    chatThreshold?: number | undefined;
+    minChatMessages?: number | undefined;
+  }): Promise<DuplicateComputeStats>;
+  /** Owner-scoped character near-dups from the rollup (ranked by CSLS). */
+  duplicateCharacters(
+    username: string,
+    opts?: { threshold?: number | undefined },
+  ): Promise<DuplicateCharacterPair[]>;
+  /** Owner-scoped chat near-dups from the rollup; `forked` pairs are a known lineage (B.5.1). */
+  duplicateChats(
+    username: string,
+    opts?: { threshold?: number | undefined; includeForked?: boolean | undefined },
+  ): Promise<DuplicateChatPair[]>;
+  /** "More like this" for one character — live ANN kNN. */
+  similarCharacters(
+    username: string,
+    characterId: string,
+    limit?: number,
+  ): Promise<{ characterId: string; name: string; similarity: number }[]>;
 }
 
 export interface CorpusServiceDeps {
@@ -88,6 +123,25 @@ export function createCorpusService(db: Db, deps: CorpusServiceDeps = {}): Corpu
         .from(characterEmbeddings)
         .where(eq(characterEmbeddings.model, model));
       return new Set(rows.map((r) => r.characterId));
+    },
+
+    computeDuplicatePairs(opts = {}) {
+      return computeDuplicatePairs(db, opts);
+    },
+
+    async duplicateCharacters(username, opts = {}) {
+      const ownerId = await ensureUser(db, username);
+      return readDuplicateCharacters(db, ownerId, opts);
+    },
+
+    async duplicateChats(username, opts = {}) {
+      const ownerId = await ensureUser(db, username);
+      return readDuplicateChats(db, ownerId, opts);
+    },
+
+    async similarCharacters(username, characterId, limit) {
+      const ownerId = await ensureUser(db, username);
+      return similarCharacters(db, characterId, ownerId, limit);
     },
   };
 }

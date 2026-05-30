@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { CHAT_MODELS, DEFAULT_CHAT_MODEL_ID } from "../../shared/models";
+import { analyticsRouter } from "./routers/analytics";
 import { characterRouter } from "./routers/character";
 import { chatRouter } from "./routers/chat";
 import { credentialsRouter } from "./routers/credentials";
@@ -13,6 +14,7 @@ import { worldInfoRouter } from "./routers/world-info";
 import { authedProcedure, publicProcedure, t } from "./trpc";
 
 export const appRouter = t.router({
+  analytics: analyticsRouter,
   character: characterRouter,
   persona: personaRouter,
   health: publicProcedure.query(({ ctx }) => ({ ok: true, version: ctx.version })),

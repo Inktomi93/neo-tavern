@@ -2,6 +2,14 @@
 // ST→schema ingestion lives in its peer feature `domain/import/`, not here.
 
 export {
+  computeDuplicatePairs,
+  DEFAULT_DUP_THRESHOLD,
+  type DuplicateCharacterPair,
+  type DuplicateChatPair,
+  type DuplicateComputeStats,
+  type DuplicatePair,
+} from "./duplicates";
+export {
   approxTokens,
   buildCardEmbedText,
   type CardEmbedFields,
