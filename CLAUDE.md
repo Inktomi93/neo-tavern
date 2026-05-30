@@ -16,19 +16,29 @@ RAG / analytics superpower** over my entire RP corpus — 300+ characters, hundr
 semantic search, theme analysis, co-occurrence. The corpus layer is the **killer
 differentiator** no other ST client has; the chat is the daily driver. Both matter.
 
-**Auth & tenancy.** The app only ever *consumes* identity — **never an IdP** (no passwords, no local
-login form). The browser session is an **HttpOnly, Secure, `SameSite=Lax` cookie** holding an opaque,
+**Auth & tenancy.** The app primarily *consumes* identity (SSO via `forward-header`/`oidc`). **AMENDED
+(2026-05-30): the "never an IdP / no passwords" rule is relaxed by ONE opt-in mode — `local` —** because
+not every deployer runs authentik. `local` (AUTH_MODE) stores username+password accounts itself (scrypt
++ per-user salt + `SESSION_SECRET` pepper) and is the minimal-password-IdP path for no-SSO users; it
+REUSES the exact same session/cookie/CSRF/role stack (only how the session is minted differs). The other
+modes still never store a password. The browser session is an **HttpOnly, Secure, `SameSite=Lax` cookie**
+holding an opaque,
 revocable session id — the **BFF pattern** (we're a confidential OIDC client), which is what OWASP +
 the IETF *OAuth 2.0 for Browser-Based Apps* BCP recommend. **Not** a JS-readable/localStorage token
 (any XSS would steal it). CSRF is mitigated *cheaply*: `SameSite=Lax` + a required custom request
 header on mutations + server-side PKCE state — no heavy CSRF framework. **Auth model = a pluggable
 `AUTH_MODE`:** `single-user` (DEFAULT, zero-infra → identity = `DEFAULT_USER_HANDLE`, the owner; the
-home-via-raw-`http://LAN-IP` path — no session/cookie, so plaintext-http is fine) · `forward-header`
-(caddy+authentik forward-auth; trust `X-Authentik-*` by **verifying `X-Authentik-Jwt` against the
-JWKS**) · `oidc` (the app is an authentik OIDC client over HTTPS; works on a LAN HTTPS host too).
+home-via-raw-`http://LAN-IP` path — no session/cookie, so plaintext-http is fine) · `local`
+(username+password accounts the app stores — `auth-local.ts` + `auth/password.ts`; owner seeded from
+`LOCAL_INITIAL_PASSWORD`; same cookie/BFF session) · `forward-header` (caddy+**authentik OR authelia**
+forward-auth; authentik `X-Authentik-*` trusted by **verifying `X-Authentik-Jwt` against the JWKS**,
+authelia `Remote-*`/custom headers by network-trust + an OPT-IN `FORWARD_AUTH_TRUSTED_PROXIES` source-IP
+gate) · `oidc` (the app is an authentik OIDC client over HTTPS; works on a LAN HTTPS host too). An
+optional `IP_ALLOWLIST` edge belt (loopback always allowed; Tailscale CGNAT `100.64/10` + Docker RFC1918
+trusted by default) can front any mode.
 Identity keys on the **stable `sub` / `X-Authentik-Uid`** (`users.externalId`); handle =
-`preferred_username`. **Built (migrations 0025–0026 + the auth commits):** the three pluggable
-`AUTH_MODE`s (`single-user`/`forward-header`/`oidc`) + `AUTH_FALLBACK` via `auth/trust-header.ts`
+`preferred_username`. **Built (migrations 0025–0026 + the auth commits):** the four pluggable
+`AUTH_MODE`s (`single-user`/`local`/`forward-header`/`oidc`) + `AUTH_FALLBACK` via `auth/trust-header.ts`
 `resolveIdentity` (layered cookie→forward-header→fallback; `forward-header` verifies `X-Authentik-Jwt`
 against the JWKS; the `owner` fallback is **origin-gated** in SSO modes — granted only on a local origin
 [private/loopback `Host` or `TRUSTED_LOCAL_HOSTS`], so an un-cookied PUBLIC request resolves to null→401,

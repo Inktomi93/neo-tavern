@@ -66,6 +66,14 @@ migrations, the vector-index lesson, Serena editing).
 
 # Track A — Security: SSRF + hardening
 
+> **✅ A.2.0 (added 2026-05-30) — auth-flexibility foundation SHIPPED.** Before the hardening items
+> below, a separate slice closed the no-SSO/non-authentik gap: `AUTH_MODE=local` (username+password
+> accounts, env-seeded owner), `forward-header` now also accepts Authelia `Remote-*` + custom-named
+> proxy headers with an opt-in `FORWARD_AUTH_TRUSTED_PROXIES` source-IP gate, an optional `IP_ALLOWLIST`
+> edge belt, and Tailscale CGNAT `100.64/10` added to the trusted ranges (shared `auth/ip-ranges.ts`).
+> See `docs/auth/auth-deploy.md` + the amendment in `auth-and-credentials-plan.md`. The items below
+> (SSRF firewall, rate-limit, headers, body limits, audit, JWKS iss/aud) remain open.
+
 ## A.1 Current state (verified `file:line`)
 
 **Egress — zero SSRF protection.** All outbound is `fetch`/undici. Call sites:

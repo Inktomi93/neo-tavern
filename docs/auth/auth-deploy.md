@@ -22,7 +22,12 @@ own (encrypted) OpenRouter key. See the plan for all of it.
 ## Env vars (set on the neo-tavern container)
 | Var | Mode | Value |
 | --- | --- | --- |
-| `AUTH_MODE` | all | active SSO mechanism: `single-user` (default) · `forward-header` · `oidc` |
+| `AUTH_MODE` | all | active mechanism: `single-user` (default) · `local` (username+password) · `forward-header` · `oidc` |
+| `LOCAL_INITIAL_PASSWORD` | local | seeds the owner's password on first boot (idempotent); min 8 chars. **Required** in `local` mode |
+| `FORWARD_AUTH_TRUSTED_PROXIES` | forward-header | opt-in: comma CIDR of proxy source IPs allowed to supply UNSIGNED headers (Authelia `Remote-*` / authentik with verify off). Unset ⇒ network-isolation trust only |
+| `FORWARD_AUTH_USER_HEADER` / `_GROUPS_HEADER` / `_UID_HEADER` | forward-header | optional custom trusted-header names (unset ⇒ auto-accept authentik `X-Authentik-*` + Authelia `Remote-*`) |
+| `IP_ALLOWLIST` | optional | comma CIDR edge belt; 403 for client IPs outside it (loopback always allowed). Fronts any mode |
+| `TRUSTED_PRIVATE_RANGES` | optional | extra CIDRs added to the built-in private set (Tailscale `100.64/10` + Docker RFC1918 already covered) for the local-origin + trusted-proxy gates |
 | `AUTH_FALLBACK` | all | un-credentialed request → `owner` (default) or `deny`. **`oidc`+`owner` = SSO on the domain AND owner on the raw LAN IP, at once** — safe because in SSO modes the `owner` fallback is **origin-gated**: granted ONLY on a local origin; on the public FQDN an un-cookied request gets `null` → 401 → SSO. `deny` = SSO mandatory everywhere. In `single-user` mode the fallback is unconditional (the only way in). |
 | `TRUSTED_LOCAL_HOSTS` | sso | optional comma-list of extra hostnames counted as a LOCAL origin for the `owner` fallback (a raw-LAN path reached by name, e.g. `neo.lan`). Private/loopback IPs + `localhost` are local already. **Never list the public FQDN here** (that re-opens the bypass). |
 | `DEFAULT_USER_HANDLE` | all | the owner handle (single-user / fallback identity + admin) |
@@ -32,7 +37,7 @@ own (encrypted) OpenRouter key. See the plan for all of it.
 | `OIDC_ISSUER` | oidc | `https://authentik.inktomi.tech/application/o/neo-tavern/` |
 | `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET` | oidc | from the authentik provider (secret stays secret) |
 | `OIDC_REDIRECT_URIS` | oidc | allowlist, e.g. `https://neo-tavern.inktomi.tech/api/auth/callback` (+ any LAN HTTPS origin) |
-| `SESSION_SECRET` | oidc | 32+ random bytes (HMAC-peppers the session token hash) |
+| `SESSION_SECRET` | oidc, local | 32+ random bytes (HMAC-peppers the session token hash — AND, in `local` mode, the password hash). **Required** in both |
 | `CREDENTIALS_KEY` | optional | base64 32-byte AES key for per-user OpenRouter keys (unset ⇒ feature off) |
 | `OPENROUTER_API_KEY` | optional | the **host** OpenRouter key (shared fallback) |
 
@@ -177,6 +182,42 @@ static-asset race; we avoid it with a tiny, stable 2-path carve-out, not ST's JS
 ### For `single-user` mode
 Nothing in authentik. Set `AUTH_MODE=single-user` (default) + `DEFAULT_USER_HANDLE`. The raw
 `http://<lan-ip>:8788` path is single-user too (no session, so plaintext-http is fine).
+
+### For `local` mode (no SSO — the app stores username+password accounts)
+No IdP at all. The app is a minimal password IdP for deployers without authentik/authelia.
+```
+AUTH_MODE=local
+SESSION_SECRET=<32+ random bytes>        # peppers session tokens AND password hashes
+LOCAL_INITIAL_PASSWORD=<owner's first password>   # seeds the owner (DEFAULT_USER_HANDLE) on boot, idempotent
+DEFAULT_USER_HANDLE=owner                 # the owner's login handle (admin)
+```
+On first boot the owner row is created with this password (hashed). Log in via `POST /api/auth/login`
+`{handle, password}` → sets the `__Host-neo_session` cookie. Change the seeded password with the admin
+`resetPassword` verb on your own user id; add more accounts with admin `createUser`. **Serve over HTTPS**
+(the `__Host-` cookie requires `Secure`) — i.e. front it with Caddy/TLS just like `oidc`; the cookie
+won't set over plain http except on a local origin where the owner fallback already applies.
+
+### For `forward-header` mode with **Authelia** (instead of authentik)
+Authelia trusted-header SSO has no JWT to verify, so trust is network-isolation + the opt-in IP gate.
+Set `AUTH_MODE=forward-header`, `FORWARD_AUTH_VERIFY_JWT=false`, and
+`FORWARD_AUTH_TRUSTED_PROXIES=<authelia/proxy CIDR>` (recommended). Caddy forwards Authelia's response
+headers to the app:
+```
+forward_auth authelia:9091 {
+    uri /api/verify?rd=https://auth.example.com
+    copy_headers Remote-User Remote-Groups Remote-Email Remote-Name
+}
+```
+The app reads `Remote-User` (handle) + `Remote-Groups`. For an arbitrary proxy, override the header
+names with `FORWARD_AUTH_USER_HEADER` / `_GROUPS_HEADER` / `_UID_HEADER`.
+
+> **authentik `oidc` hardening:** in the authentik provider, enable **"PKCE required"** (we always send
+> a code_verifier; this rejects a downgrade — see GHSA-fm34-v8xq-f2c3) and keep authentik patched.
+
+### Optional: lock any mode to your network (`IP_ALLOWLIST`)
+`IP_ALLOWLIST=192.168.0.0/16,100.64.0.0/10` → a 403 for any client IP outside the list. Loopback is
+always allowed (no self-lockout). Tailscale CGNAT `100.64.0.0/10` + Docker RFC1918 are trusted by the
+*origin gate* by default; `TRUSTED_PRIVATE_RANGES` adds custom CIDRs (subnet-router / non-default Docker).
 
 ---
 

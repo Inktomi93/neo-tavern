@@ -557,3 +557,40 @@ null, enabled true, role already admin from migration 0025; no sessions until fi
   (no open redirect); `X-Forwarded-Proto: https` yields an `https` redirect_uri behind the proxy.
 - `pnpm check` green per commit. Manual: flip `AUTH_MODE`, set a key via tRPC, generate on the per-user
   key; confirm the owner path unchanged.
+
+---
+
+## Amendment (2026-05-30) — `local` password mode + Authelia/custom forward-header + edge belts
+
+The plan above assumed the app **only ever consumes** identity. That is relaxed by **one opt-in mode**
+for deployers without authentik/authelia. Everything below rides the *existing* machinery (sessions,
+`__Host-` cookie, CSRF, role ladder, `userAdmin`); only how a session is minted is new.
+
+### `AUTH_MODE=local` — username+password accounts (the app as a minimal IdP)
+- **Schema:** `users.passwordHash` (nullable; NULL = SSO/owner-fallback account, no local login). One
+  additive migration. Format `scrypt$<salt>$<hash>` — `auth/password.ts`, Node `node:crypto` scrypt,
+  **per-user salt + a `SESSION_SECRET` pepper** (a DB leak alone can't crack — same posture as the
+  session tokenHash and `CREDENTIALS_KEY`). `timingSafeEqual` compare.
+- **Routes** (`auth-local.ts`, no-op unless `AUTH_MODE=local`): `POST /api/auth/login` (verify →
+  `sessions.create` → `__Host-neo_session` cookie), `POST /api/auth/logout`, `GET /api/auth/me`. Same
+  cookie helpers as OIDC (`auth/cookie.ts`). Generic "Invalid credentials" (no user enumeration).
+- **Resolver:** the `trust-header.ts` cookie layer now runs for `oidc` **OR** `local`. The `local`
+  owner-fallback is **origin-gated** like the SSO modes (LAN convenience; the public host must log in).
+- **First owner:** seeded on boot from `LOCAL_INITIAL_PASSWORD` (idempotent — never clobbers a changed
+  password). Env refinement requires `SESSION_SECRET` + `LOCAL_INITIAL_PASSWORD` in `local` mode.
+- **Management:** admin `createUser` + `resetPassword` on the existing `userAdmin` router (the owner
+  changes the seeded password by resetting their own row; reset kicks the user's sessions). Non-admin
+  self-service password change is deferred until the frontend lands (needs an authed, not admin, route).
+
+### `forward-header` now also speaks **Authelia** + custom proxies
+- Unsigned path reads authentik `X-Authentik-*`, **Authelia `Remote-User`/`Remote-Groups`** (no uid →
+  `externalId` null, keyed on handle), or **custom header names** (`FORWARD_AUTH_USER/GROUPS/UID_HEADER`).
+- **Opt-in source-IP gate** `FORWARD_AUTH_TRUSTED_PROXIES` (CIDR; client IP from `X-Forwarded-For` /
+  `X-Real-IP`): when set, an unsigned identity from outside the ranges is rejected (no `Remote-User`
+  spoofing). Unset ⇒ today's network-isolation trust. The **signed authentik-JWT path always skips it.**
+
+### Edge belts (orthogonal, off by default)
+- **`IP_ALLOWLIST`** — a Hono middleware in front of everything; 403 outside the CIDRs (loopback always
+  allowed). `auth/ip-ranges.ts` is the shared IPv4/IPv6 CIDR matcher.
+- **Trusted ranges** now include **Tailscale CGNAT `100.64.0.0/10`** (Docker = RFC1918, already covered);
+  `TRUSTED_PRIVATE_RANGES` extends the built-in set for both the origin gate and the proxy gate.
