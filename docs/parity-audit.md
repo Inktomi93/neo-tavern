@@ -400,8 +400,8 @@ covered inside a domain section; the rest get audited here.
 | presets | 6/1 | ✅ | presets domain |
 | tokenizers | 44/0 | ✅ | tokenizers (generic counter) |
 | **macro** | **30/4** | ✅ done | **below** |
-| **regex** | **25/4** | 🔲 pending | `pnpm api:q hooks regex` |
-| **reasoning** | **12/0** | 🔲 pending | thinking/effort — likely in the agent-sdk runner, not a module |
+| **regex** | **25/4** | ✅ done | near-exact port (below) |
+| **reasoning** | **12/0** | ✅ done | covered in runner (below) |
 | **slash-commands** | **10/0** | 🚫 OUT | owner hard-no 2026-05-29 (like instruct/extensions) |
 | instruct | 19/0 | 🚫 SKIP | owner does not want instruct mode |
 | themes / backgrounds | 82/3 | 🚫 deferred | ui-cosmetic |
@@ -431,15 +431,41 @@ class as ST's new engine, NOT the old regex-replace). The gap is **vocabulary + 
 (2) register the granular `char.*` macros (the data is already in `AssembleContext`); (3) add
 `else` + the time/env/utility stragglers. All are registry additions — no engine rework.
 
-### regex — 🔲 pending
-`pnpm api:q hooks regex` (st 25 / neo 4). ST regex scripts (`regex/*`) vs our `shared/regex.ts` +
-`domain/_shared/regex.ts` (`RegexPlacement`, executed in prompt-assembly). Audit the placement
-vocabulary + script shape vs ST's.
+### regex — ✅ done (2026-05-29) — near-exact port
+**ST surface**: the `regex` extension — scripts with fields `findRegex, replaceString, placement,
+trimStrings, disabled, markdownOnly, promptOnly, runOnEdit, substituteRegex, minDepth, maxDepth,
+scriptName`; placement enum MD_DISPLAY/USER_INPUT/AI_OUTPUT/SLASH_COMMAND/WORLD_INFO/REASONING; a
+3-way script *scope* (GLOBAL / SCOPED-to-character / PRESET).
+**Our surface**: `shared/regex.ts` `regexScriptSchema` + `_shared/regex.ts` (executed via
+`executeRegex(text, placement)` in prompt-assembly).
+**Mapping — full field + placement parity:**
+- Fields: ALL present — `findRegex, replaceString, placement[], enabled(=!disabled), markdownOnly,
+  promptOnly, runOnEdit, trimStrings[], substituteRegex (none/raw/escaped), minDepth, maxDepth,
+  name(=scriptName)`. ✅
+- Placement: `USER_INPUT, AI_OUTPUT, SLASH_COMMAND, WORLD_INFO, REASONING, DISPLAY(=MD_DISPLAY)`. ✅
+- ⚠️ scope: we store scripts on the **preset** (`PromptConfig.regexScripts`) and import
+  card-embedded ones (`extensions.regex_scripts`); ST's explicit GLOBAL/SCOPED/PRESET tiering isn't
+  separately modeled. Minor — preset-centric by design.
+**Verdict:** `✅` — owner-ported, essentially complete (field + placement parity). The only nuance is
+script-scope tiering. Subsystem: `regex`.
 
-### reasoning — 🔲 pending
-`pnpm api:q hooks reasoning` (st 12 / neo 0). ST `reasoning.js` (thinking-block parse/display) vs our
-typed `effort`/`thinking` agent-sdk Options + `reasoning` on openrouter. neo=0 hooks because it's in
-the runner, not a module — verify it's actually covered, not missing.
+### reasoning — ✅ done (2026-05-29) — covered in the runner (not missing)
+**ST surface**: `reasoning.js` — mostly **client/UI**: parse `<think>` blocks from output
+(prefix/suffix), auto-parse + auto-expand display toggles, hidden-reasoning-model detection.
+**Our surface** (neo=0 *subsystem hooks* because it lives in the runner + generation params, NOT a
+module — verified present, not absent):
+- **Request side**: `generation.ts` `thinking` (off/adaptive) + `thinkingBudgetTokens` + `effort`
+  (low/medium/high/xhigh/max, mirrors SDK `EffortLevel`). agent-sdk → typed Options; openrouter →
+  `reasoning:{effort}`. ✅
+- **Capture side**: openrouter runner separates `delta.reasoning` from `delta.content`
+  (`_reasoningText`) and tracks `reasoningTokens`; agent-sdk surfaces thinking via its event stream.
+  A `REASONING` regex placement can post-process it. ✅
+**Mapping:** request depth ✅ · separated reasoning capture ✅ · token accounting ✅.
+**Gaps:** ⚠️ the prefix/suffix `<think>`-tag *text* parsing (for models that emit reasoning inline
+in content rather than a structured field) is ST client logic — a frontend-era concern; our
+structured paths (Claude thinking, OR `delta.reasoning`) don't need it. The auto-expand/UI bits are
+frontend.
+**Verdict:** `✅` — backend reasoning (request + capture) is covered; ST's extras are UI display.
 
 ### slash-commands — 🚫 OUT (owner hard-no 2026-05-29)
 ST's ~7k-LOC STscript command language. **Not in scope** — same bucket as instruct/extensions. No
