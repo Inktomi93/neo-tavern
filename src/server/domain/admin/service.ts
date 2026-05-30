@@ -3,9 +3,11 @@ import type { Db } from "../../../db/client";
 import { users } from "../../../db/schema";
 import { castId, type SessionId, type UserId } from "../../../shared/ids";
 import type { SessionView } from "../../../shared/session";
+import { hashPassword } from "../../auth/password";
 import { getLog } from "../../observability/logger";
 import { requireAdmin } from "../_shared/admin";
 import { DomainNotFoundError, DomainOperationError } from "../_shared/errors";
+import { newId } from "../_shared/ids";
 
 // The slice of the sessions service admin depends on, declared as a PORT (dependency inversion) so
 // admin doesn't import a sibling feature (domain-no-cross-feature). The composition root injects the
@@ -45,6 +47,16 @@ export interface AdminService {
   listSessions(params: { username: string; userId: UserId }): Promise<SessionView[]>;
   revokeSession(params: { username: string; sessionId: SessionId }): Promise<void>;
   revokeUserSessions(params: { username: string; userId: UserId }): Promise<{ revoked: number }>;
+  // Local-password (AUTH_MODE=local) user management. Admin-gated; the owner uses resetPassword on
+  // their own row to change the env-seeded password. (Non-admin self-service password change is a
+  // later authed-router addition, once the frontend exists.)
+  createUser(params: {
+    username: string;
+    handle: string;
+    password: string;
+    role: "admin" | "user";
+  }): Promise<AdminUserView>;
+  resetPassword(params: { username: string; userId: UserId; newPassword: string }): Promise<void>;
 }
 
 const userCols = {
@@ -123,6 +135,61 @@ export function createAdminService(db: Db, sessionsService: SessionAdminPort): A
     return { revoked: await sessionsService.revokeAllForUser(params.userId) };
   }
 
+  async function createUser(params: {
+    username: string;
+    handle: string;
+    password: string;
+    role: "admin" | "user";
+  }): Promise<AdminUserView> {
+    await requireAdmin(db, params.username);
+    const handle = params.handle.trim();
+    if (!handle) {
+      throw new DomainOperationError("invalid_handle", "handle must not be empty");
+    }
+    const existing = await db
+      .select({ id: users.id })
+      .from(users)
+      .where(eq(users.handle, handle))
+      .limit(1);
+    if (existing[0]) {
+      throw new DomainOperationError(
+        "user_exists",
+        `a user with handle "${handle}" already exists`,
+      );
+    }
+    // hashPassword enforces MIN_PASSWORD_LENGTH (throws) → surface as a domain operation error.
+    let passwordHash: string;
+    try {
+      passwordHash = await hashPassword(params.password);
+    } catch (err) {
+      throw new DomainOperationError("weak_password", err instanceof Error ? err.message : "weak");
+    }
+    const id = newId<UserId>();
+    await db
+      .insert(users)
+      .values({ id, handle, role: params.role, passwordHash, createdAt: Date.now() });
+    getLog().info({ userId: id, handle, role: params.role }, "admin: created local user");
+    return loadUser(id);
+  }
+
+  async function resetPassword(params: {
+    username: string;
+    userId: UserId;
+    newPassword: string;
+  }): Promise<void> {
+    await requireAdmin(db, params.username);
+    let passwordHash: string;
+    try {
+      passwordHash = await hashPassword(params.newPassword);
+    } catch (err) {
+      throw new DomainOperationError("weak_password", err instanceof Error ? err.message : "weak");
+    }
+    await db.update(users).set({ passwordHash }).where(eq(users.id, params.userId));
+    // A password reset kicks the user's live sessions → they must log in again with the new password.
+    await sessionsService.revokeAllForUser(params.userId);
+    getLog().info({ userId: params.userId }, "admin: reset local user password");
+  }
+
   return {
     listUsers,
     setRole,
@@ -130,5 +197,7 @@ export function createAdminService(db: Db, sessionsService: SessionAdminPort): A
     listSessions,
     revokeSession,
     revokeUserSessions,
+    createUser,
+    resetPassword,
   };
 }

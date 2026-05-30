@@ -37,4 +37,25 @@ export const userAdminRouter = t.router({
     .mutation(({ ctx, input }) =>
       ctx.services.admin.revokeUserSessions({ username: ctx.username, ...input }),
     ),
+
+  // Local-password (AUTH_MODE=local) management. createUser mints a password account; resetPassword
+  // sets a new password and kicks the user's sessions. The owner resets their own (seeded) password
+  // via resetPassword on their own userId.
+  createUser: adminProcedure
+    .input(
+      z.object({
+        handle: z.string().min(1),
+        password: z.string().min(8),
+        role: z.enum(["admin", "user"]).default("user"),
+      }),
+    )
+    .mutation(({ ctx, input }) =>
+      ctx.services.admin.createUser({ username: ctx.username, ...input }),
+    ),
+
+  resetPassword: adminProcedure
+    .input(z.object({ userId: brandedId<UserId>(), newPassword: z.string().min(8) }))
+    .mutation(({ ctx, input }) =>
+      ctx.services.admin.resetPassword({ username: ctx.username, ...input }),
+    ),
 });
