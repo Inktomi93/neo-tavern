@@ -14,12 +14,18 @@ export function createSearchMemory(db: Db, embedder: Embedder, reranker: Reranke
     username: string;
     k?: number | undefined;
     rerank?: boolean | undefined;
+    /** Restrict to a digest altitude: 'scene' (tier 0), 'arc' (tier 1+), or 'any' (default). */
+    tier?: "scene" | "arc" | "any" | undefined;
   }): Promise<DigestSearchHit[]> {
-    const { queryText, k = 10, rerank = false } = params;
+    const { queryText, k = 10, rerank = false, tier = "any" } = params;
     const ownerId = await ensureUser(db, params.username);
     const embedding = await embedder.embed(queryText);
     const query = JSON.stringify(Array.from(embedding));
     const poolK = Math.max(k * CSLS_POOL_FACTOR, k * OWNER_OVERFETCH);
+    // Tier filter (applied in the WHERE alongside owner — like all our digest-search scoping).
+    let tierCond = sql``;
+    if (tier === "scene") tierCond = sql` AND cd.tier = 0`;
+    else if (tier === "arc") tierCond = sql` AND cd.tier >= 1`;
     const rows = await db.all<{
       chatId: string;
       characterVersionId: string;
@@ -40,7 +46,7 @@ export function createSearchMemory(db: Db, embedder: Embedder, reranker: Reranke
              cd.hub_score AS hubScore
       FROM vector_top_k('chat_digests_ann', vector32(${query}), ${poolK}) AS v
       JOIN chat_digests cd ON cd.rowid = v.id
-      WHERE cd.owner_id = ${ownerId}
+      WHERE cd.owner_id = ${ownerId}${tierCond}
       ORDER BY dist ASC
     `);
     // CSLS hubness correction (same formula as knn; null hub_score → raw distance).

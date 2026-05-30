@@ -146,6 +146,8 @@ export interface SearchService {
     username: string;
     k?: number | undefined;
     rerank?: boolean | undefined;
+    /** Restrict to a digest altitude: 'scene' (tier 0), 'arc' (tier 1+), or 'any' (default). */
+    tier?: "scene" | "arc" | "any" | undefined;
   }): Promise<DigestSearchHit[]>;
 
   /** Cross-chat corpus search over the raw SEGMENT substrate (verbatim half of the hybrid). Same
