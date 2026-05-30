@@ -120,6 +120,34 @@ only ✅-tracking in the repo; keep it one line.
     question + options, user picks per chat, injected via the macro engine. This unifies POV +
     the macro `variables` gap in one feature on our `PromptConfig`. See `docs/marinara-reference.md`
     (her engine = her ST preset productized) for the full pattern + `file:line` refs.
+- **#51 — config/settings standardization (typed · migrateable · cleanable):** unify the typed-blob
+  config tiers so the migration pattern is one thing you can't half-implement or forget. Today the
+  "versioned blob + lift loop" is **copy-pasted** in `shared/user-settings.ts` + `shared/prompt-config.ts`
+  ("Mirrors prompt-config"), and `shared/app-settings.ts` has the version constant but no lift loop.
+  Build, in priority order:
+  1. **`shared/versioned-config.ts` primitive** (high value, low risk): a `defineVersionedConfig({
+     schema, version, lifts })` → `{ parse, serialize, default, version }` owning the lift-walk loop
+     ONCE. AppSettings / UserSettings / PromptConfig all adopt it. Kills the copy-paste; one identical
+     migration mechanism everywhere.
+  2. **The "can't-forget" guardrail** (THE point — owner forgets to bump+lift): **fixture migration
+     tests** — keep real blobs at each historical version under `__fixtures__/`; a test asserts each
+     still parses to the current shape with no data loss. Break a schema without a lift → red →
+     `pnpm check` blocks the commit. Plus a registry + meta-test (every versioned config must have a
+     current-version fixture) and a `default.schemaVersion === currentVersion` dev-assert. Converts
+     "remember to migrate" from willpower into an enforced gate (same posture as the dep-cruiser layer
+     check). The test remembers so you don't.
+  3. **Cleanable** (small): the primitive's `default` gives uniform reset — `AppSettings.clearOverride()`
+     (drop the KV row → env floor), `UserSettings.reset(userId)` (write default). Orphan pruning is
+     mostly FK-cascade already; a settings-prune slots into the `jobs`/maintenance seam if needed.
+  4. **Env hot-reload (DEFERRED — lower value than it feels):** borrow Marinara's `reloadRuntimeEnv`
+     (re-read `.env`, override changed keys, delete removed — no restart; `marinara-engine/.../config/
+     runtime-config.ts`). BUT AppSettings already gives runtime hot-override for the toggles that
+     matter; the only real marginal win is **live secret rotation** (e.g. `OPENROUTER_API_KEY`). Cost
+     is real: `env` is a captured const (`env.ts:185`) at ~24 call-sites → needs a `getEnv()` getter
+     (or live proxy), boot-only fields (`PORT`/DB path/`AUTH_MODE`) marked reload-refusing, and a
+     trigger (admin route or chokidar `.env` watch). Do ONLY if live secret rotation becomes a real
+     need; scope to the rotating secrets, not all of env.
+  Recommended: ship 1+2+3 together (the standardize/typed/cleanable/can't-forget core); park 4.
 
 **Pluggable auth + user/credential foundation — BUILT (migrations 0025–0026 + the `feat(auth)`
 commits) and verified live through the real caddy+authentik stack.** Pluggable `AUTH_MODE`
