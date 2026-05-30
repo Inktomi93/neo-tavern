@@ -1,5 +1,6 @@
 import type { Db } from "../../../../db/client";
 import { chatSegments } from "../../../../db/schema";
+import { contentHash } from "../../../../shared/content-hash";
 import type { Embedder } from "../../../embeddings/embedder";
 import { getLog } from "../../../observability/logger";
 import { newId } from "../../_shared/ids";
@@ -88,11 +89,22 @@ async function generateDigestsInner(
       prev.seqEnd !== seqEnd ||
       block.some((m) => m.editedAt !== null && m.editedAt > prev.createdAt);
     if (!stale) continue;
-    const userPrompt = `Conversation block (messages ${seqStart}-${seqEnd}):\n\n${renderTranscript(block, charName, userName)}\n\nWrite the digest:`;
+    // Render once: feeds the summarizer prompt AND the source-content hash (hash the SOURCE block, not
+    // the non-deterministic digest output — B.5.1).
+    const rendered = renderTranscript(block, charName, userName);
+    const userPrompt = `Conversation block (messages ${seqStart}-${seqEnd}):\n\n${rendered}\n\nWrite the digest:`;
     const res = await deps.summarizer.summarize(TIER0_SYSTEM, userPrompt, summarizeOpts);
     const parsed = parseDigest(res.text);
     if (parsed.text.length === 0) continue;
-    pending.push({ tier: 0, blockIdx: i, seqStart, seqEnd, summarizerModel: res.model, ...parsed });
+    pending.push({
+      tier: 0,
+      blockIdx: i,
+      seqStart,
+      seqEnd,
+      summarizerModel: res.model,
+      contentHash: contentHash(rendered),
+      ...parsed,
+    });
   }
   if (pending.length > 0) {
     totalWritten += await embedAndUpsert(
@@ -151,6 +163,8 @@ async function generateDigestsInner(
         seqStart,
         seqEnd,
         summarizerModel: res.model,
+        // tier 1+ is a digest-of-digests — no single raw source span to hash (B.5.1).
+        contentHash: null,
         ...parsed,
       });
     }
@@ -255,6 +269,8 @@ async function generateSegmentsInner(
       embedding: vec,
       // Rough token estimate (cost visibility); the embedder enforces the real BGE-M3 8192 cap.
       tokens: Math.round(p.text.length / 4),
+      // The segment's text IS the rendered raw block → hashing it is the source identity (B.5.1).
+      contentHash: contentHash(p.text),
       createdAt,
     };
     await db

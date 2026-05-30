@@ -42,6 +42,9 @@ export interface PendingDigest {
   topicAnchor: string | null;
   keywords: string[];
   summarizerModel: string;
+  // sha256 of the SOURCE block (rendered raw transcript) for tier 0; null for tier 1+ consolidations
+  // (no single raw source). The fork/import dedup key — docs B.5.1.
+  contentHash: string | null;
 }
 export interface ChatMeta {
   ownerId: string;

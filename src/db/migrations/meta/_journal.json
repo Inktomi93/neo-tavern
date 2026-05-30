@@ -15,6 +15,13 @@
       "when": 1780160251078,
       "tag": "0001_local_password",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1780167741953,
+      "tag": "0002_add_content_hash",
+      "breakpoints": true
     }
   ]
 }

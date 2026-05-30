@@ -241,6 +241,169 @@ Unit: cluster the ~2,500 tier-0 digest embeddings into themes. **k-means** in **
 **New table:** `duplicate_pairs(id, owner_id, entity_type 'character'|'chat', entity_id_a, entity_id_b, similarity, model, computed_at, UNIQUE(owner,type,a,b))` + indexes.
 **Precompute** `scripts/find-duplicates.ts` (like `csls`). **tRPC:** `duplicateCharacters(threshold?)`, `duplicateChats(threshold?)`, `similarCards(characterId,limit?)` (port `server.py:663`).
 
+> **⚠️ READ B.5.1 BEFORE WRITING `find-duplicates.ts` OR ANY ALL-PAIRS ANALYTICS.** The
+> fork/import-duplication invariant below changes this design: the chat-dedup pass MUST run a
+> lineage + content-hash exact-collapse FIRST, and the `contentHash` column it needs must exist
+> before step B.8.1. Building B.5 as written above (naive all-pairs cosine) ships a tool whose
+> top results are dominated by trivial fork pairs.
+
+## B.5.1 Fork & import duplication — the corpus-hygiene invariant (🔒 LOCKED, owner-decided 2026-05-30)
+
+**This section is load-bearing for the WHOLE track and is not optional.** It was reached by an
+explicit three-independent-reviewer convergence pass (3/3 agreed on every point below, each from
+the code, without seeing the others' conclusions). The reasoning, the evidence, and the *rejected*
+alternatives are recorded here so the design is not re-litigated. If you think it's wrong, raise it
+as a question — do not quietly build around it.
+
+### The problem (what actually happens — verified `file:line`)
+`forkChat` (`src/server/domain/chat/branch.ts:26-146`) copies canon messages `seq ≤ atSeq` into a
+**new `chatId`** and records lineage `parentChatId` + `forkedAt` (`branch.ts:74-75`;
+`src/db/schema/chats.ts:70-75`). It does **NOT** copy `chat_digests`/`chat_segments` rows — the
+schema makes this explicit: *"A fork gets a new chatId → its digests rebuild lazily under the new
+key (we never copy digest rows across a fork)"* (`src/db/schema/search.ts:75-76`). So when the fork
+is later embedded, `generateDigests`/`generateSegments` (`chat/memory/generate.ts`) **re-derive the
+shared prefix independently under the new chatId**, producing near-identical vectors keyed
+`(chatId,tier,blockIdx)` / `(chatId,blockIdx)`. **ST-imported branches are first-class forks** — the
+importer resolves `chat_metadata.main_chat` into a real `parentChatId` edge
+(`chat/import/chat.ts:309-311`, `corpus/.../service.ts:311,347`); re-import is `importHash`-idempotent
+so it does not create dup chat rows, but a separately-exported branch file is a separate chat with the
+same shared-prefix vectors. **Net: the shared prefix of every fork/branch lives as a second
+near-identical copy in the global vector tables.**
+
+### Measured on the live corpus (`neo-tavern.db`, 2026-05-30 — via the libSQL client)
+> **⚠️ Tooling gotcha that cost a wrong call:** the vanilla `sqlite3` CLI reads the libSQL native-vector
+> base tables (`chat_segments`/`chat_digests`/`character_embeddings`) as **0 rows** — their rows are
+> managed by the `libsql_vector_idx` extension and are invisible to non-libSQL SQLite. Use the
+> `@libsql/client` (or the `_ann_shadow` row counts) for truth. An early read of "empty substrate" off
+> the vanilla CLI was WRONG; the substrate is fully populated.
+
+**Framing:** this corpus is a **pure SillyTavern import** — verified: all 182 "forks" have `forkedAt`
+set *by the importer* and 693/694 chats carry an `importHash`; **zero** are organic neo `forkChat`
+usage. So these are a *one-import snapshot* (ST's branch/checkpoint model reconstructed as lineage),
+**not a steady-state rate**. The substrate is **already embedded**, so the pollution is **materialized,
+not latent** — `contentHash` is a BACKFILL of existing rows, not a write-time-only populate (my earlier
+"cheapest moment / no data to migrate" note was based on the bad CLI read — struck):
+- **Substrate is fully populated:** **chat_segments = 2880**, **chat_digests = 2485**,
+  **character_embeddings = 296** (the last matches B.7's "296 char vectors").
+- **160 segments (~5.6% of 2880) are byte-identical-text duplicates living in another chat** (127
+  distinct bodies × redundant copies). Identical rendered text → **identical embeddings** → true
+  vector duplicates, already polluting cross-chat search + every all-pairs analytic. This is the
+  directly-measured, reliable figure (group by segment `text`).
+- **Boundary-shifted fork dups are MORE than 160 but not text-identical:** a fork at a non-multiple-of-8
+  seq shifts block boundaries, so the shared content re-chunks differently → near-dup (high cosine) not
+  byte-identical. The 160 is the *exact-collapse* floor; the ≥0.92 cosine pass (B.5) catches the rest.
+  (NB: grouping digests by seq-span overcounts wildly — 1489 "dups" — because same-character chats share
+  blockIdx boundaries with *different* content; only content-identity grouping is meaningful.)
+- **✅ VERIFIED (Step 0 shipped, backfill run):** `content_hash` populated on all 2880 segments + 2118
+  tier-0 digests. SOURCE-hash collapse removes **160 redundant segments** (127 groups, worst block = 5
+  copies) and **136 redundant tier-0 digests** (108 groups) — vs the **1489** the seq-span proxy
+  falsely claimed, the decisive vindication of "hash the SOURCE, not the digest text." 179 of the
+  duplicate segments sit in fork chats (predominantly fork-driven, as predicted).
+- **Forks are 26% of the corpus** (182/694, 167 parents, largest family 6) and **112 openings are
+  shared across >1 chat with NO lineage edge** (greeting/first-mes dups) — **lineage cannot see these;
+  only the content hash catches them.** Empirical proof the hash layer is not redundant with lineage.
+- *(Lineage-loss note: 0/182 forks are currently orphaned; the `onDelete:SET NULL` risk is latent. The
+  112 no-edge openings are the already-realized case mandating the hash today.)*
+
+### Why this is NOT a storage bug — and why you must NEVER "just dedup the embeddings"
+In-chat `{{memory}}` retrieval is **strictly single-chat**: `retrieveMemory` →
+`loadDigests(db, opts.chatId)` (`chat/memory/retrieve.ts:31`), exact in-process cosine over *only
+that chat's* rows (*"per-chat exact in-process cosine — never the global ANN"*, `search.ts:67`). A
+fork is a divergent continuation whose memory MUST reflect its own history; its per-chat digests
+support its own tiering/consolidation/edits. **Collapsing the prefix to one shared row would break
+the daily-driver feature**, violate the `onDelete:cascade` "nuke the chat cleans up its digests"
+contract (`search.ts:75`), and break the `(chatId,…)` uniqueness/staleness checks that make
+regeneration idempotent (`generate.ts:231-236`). The very per-chat scoping that *protects* in-chat
+memory from this duplication is what *requires* the duplication to exist. **Therefore the canonical
+substrate is correct and untouched; the fix lives at query/aggregation time only.**
+
+### The risk — blast radius per consumer (the cost of doing nothing)
+| Consumer | Hit? | Mechanism |
+|---|---|---|
+| In-chat `{{memory}}` | **No — immune & REQUIRES the dup** | per-chat scoped (`retrieve.ts:31`) |
+| `search.discover` (the killer feature) | **Mostly self-heals** | groups segments by `characterId` (`search/core.ts:209-235`); forks share `characterVersionId` → one card. But `matchCount` is inflated. |
+| `corpus()` / `digests()` / `segments()` / `find()` | **Leak** | `corpus()` dedup key is `chatId:tier:blockIdx` (`search/memory.ts:285`) — different chatId → fork copies never collapse; the rest have no cross-chat dedup |
+| B.3 co-occurrence | **Double-counts** | shared-prefix keyword pairs counted once per fork → weights skew toward whatever got forked |
+| B.4 themes (k-means) | **Centroid bias** | identical vectors form artificial tight clusters; a "theme" can be one heavily-forked scene |
+| B.5 dedup (segment/chat) | **Floods with trivial pairs** | fork prefixes ARE the ≥0.92 pairs; they drown genuine near-dups (character-level dedup is safe — forks share `characterVersionId`, same card) |
+| CSLS hubness | **Distorts every CSLS-ranked search** | dup vectors inflate each other's neighbor density → wrong hub scores fed back into ranking |
+
+**The sharpest harm is the ANN ~200-cap interaction (B.7).** `vector_top_k` returns ≤~200 rows and
+WHERE is applied *after* the k nearest are chosen. Fork-dups are *maximally* similar to a matching
+query, so they cluster at the very top of the capped pool and **evict genuinely distinct chats
+before any filtering** — the same "minority-type starves the budget" failure `hubness.ts` documents,
+now self-inflicted. Query-time dedup-after-fetch cannot fully repair this (the distinct rows were
+already displaced), which is the independent reason to keep the canonical population lean via exact
+collapse, not just to filter on the way out.
+
+### Precedent (this is not a new philosophy — the codebase already does it for cost)
+`forkChat` **deliberately nulls per-turn token/cost metadata on the copied rows** *"to avoid
+double-counting them in cross-chat analytics"* (`branch.ts:81-96`). The author already solved this
+exact double-count class for cost provenance — and simply hadn't extended it to the embedding
+substrate. We are completing an established pattern, not inventing one.
+
+### The decision (🔒 LOCKED)
+A **two-layer, query/aggregation-time** collapse — canonical rows stay per-chat:
+1. **Lineage fast-path (free, exact).** `parentChatId` + `forkedAt` already identify a fork family
+   and its shared seq-prefix. Collapse/skip a fork's pre-fork-point blocks against its parent. No
+   new column, no threshold, zero false positives.
+2. **Source-content hash backstop (durable).** Add a nullable **`contentHash text`** to
+   `chat_segments` (and `chat_digests`) = `sha256` of the covered `(role,content)` message span,
+   populated at generation, backfillable from `seqStart..seqEnd`. Used to collapse duplicates that
+   lineage CANNOT see.
+3. **Apply the collapse** in: the widened query-time dedup (extend `corpus()`'s key, add the same to
+   `digests`/`segments`/`find`, surfacing siblings as "also in N chats" not separate hits) **and** as
+   a dedup-on-load pre-pass in every all-pairs analytic (co-occurrence, themes, hubness, the B.5 dedup
+   itself — which loads vectors in-process anyway per B.7, so the pre-pass is free).
+4. **Ordering is mandatory:** exact (lineage/hash) collapse runs **before** the ≥0.92 cosine near-dup
+   pass — otherwise trivial fork pairs drown the genuine near-dup signal.
+
+### Why BOTH layers — and why the obvious cheaper single-layer options were rejected
+- **Rejected: storage-level collapse / "don't embed the fork prefix."** Breaks in-chat memory
+  (per-chat scope, above), the cascade contract, and idempotent regen. Non-starter. (3/3 reviewers.)
+- **Rejected: hash the DIGEST text instead of source messages.** Digests are LLM output —
+  `generateDigests` calls the summarizer with `temperature: cfg.summarizerTemperature`
+  (`generate.ts:64-68`) and records `summarizerModel` because it *varies*; consolidation even injects
+  *"do NOT repeat"* (`generate.ts:138-141`). Two forks summarizing byte-identical messages yield
+  *different* digest strings → a digest-text hash produces **false negatives**. The source message
+  span is byte-identical across a fork (canon copied verbatim) → hashing it is exact. (3/3.)
+- **Rejected: lineage ONLY (no hash).** `parentChatId` is `onDelete:SET NULL` (`chats.ts:70-72`) — delete
+  the parent and the fork's lineage **evaporates while its duplicate vectors remain**. Lineage is also
+  blind to no-edge duplicates: independently-started chats sharing the same character opening
+  (greetings/first-mes are identical across fresh chats) and separately-exported branch files. The
+  hash is the durable, edge-independent identity. (3/3.)
+- **Rejected: hash ONLY (no lineage).** Works but wastes the exact, already-stored signal; lineage is
+  the cheap fast-path that also lets the UI *show* the relationship ("3 forks of this chat") instead
+  of silently hiding siblings.
+
+### Versioning interaction — VERIFIED against the as-built schema (versioning is fully LANDED, just unexercised by this import)
+Character + preset versioning is **fully built** (copy-on-write): `characters.currentVersionId` → the
+active version; `characterVersions` is immutable, `version` int, unique `(characterId, version)`,
+"freezes once a chat pins it". The ST import simply created everything at v1 (307/307), so versioning is
+**dormant in the data, not absent from the code.** Two would-be hazards were checked against the real
+schema and are **neutralized by construction** — recorded so no one re-raises them:
+- **Character-version near-dups — NOT possible.** `character_embeddings` is `uniqueIndex(characterId,
+  model)` (`search.ts:31`): **one embedding row per character, not per version** — a re-embed after a
+  version bump UPDATES in place (the `characterVersionId` column is provenance only). So multiple
+  versions can never produce duplicate character embeddings; B.5 character dedup operates on
+  characterId-unique rows and inherently can't surface sibling versions as a near-dup. No special-casing
+  needed. (Provenance nuance only: the embedding reflects whichever version was last embedded — a
+  freshness question, not a dup one.)
+- **Chat substrate keying — NO collision.** Chats branch via **new-`chatId` forks** (`parentChatId`),
+  NOT shared-`chatId` versioning. So `chat_segments`/`chat_digests` `(chatId, blockIdx)` keys never
+  collide across "versions of a chat" — there is no such thing; a branch is always a distinct chatId.
+- **The content-hash layer is the DURABLE, mechanism-agnostic core anyway.** `parentChatId`/`forkedAt`
+  are tied to the fork model and were populated by the ST importer, not organic use. The source-content
+  hash identifies duplication by content regardless of HOW it arose (fork, re-import, future snapshot) —
+  build it as canonical; lineage stays an optimization + the UX signal ("3 forks of this chat").
+
+### What this costs vs. what it saves
+One nullable column + one backfill + widening an already-present query-time dedup (`memory.ts:285`)
++ a dedup-on-load line in the all-pairs passes. In exchange it removes a systematic bias from
+**four** analytics pillars, de-pollutes four search endpoints, fixes the inflated `discover`
+`matchCount`, and reclaims ANN-pool budget that fork-dups currently waste. The column wants to exist
+**before** `find-duplicates.ts` is written (B.8.1).
+
 ## B.6 Cool-shit breadth
 - **Character similarity graph** (CORE): a low-threshold (~0.65) `duplicate_pairs` sweep → nodes+edges → force-directed client view; edge click → LLM "compare these two" (`analyze.py:compare_cards`). `analytics.similarityGraph(minSimilarity,maxNodes?)`.
 - **"More like this"** (CORE): `analytics.similarChats(chatId,limit?)` via chat-centroid kNN / existing `corpus()` with a digest-text query.
@@ -272,9 +435,17 @@ the wrong tool — for three reasons, the first two **measured on the live DB (2
   (`csls.ts`) bites (~minutes) at ~10k+ segments → THERE flip to ANN-approx top-K (accepting the ~200
   cap + approximation). Character/chat dedup + graph passes stay bounded well below that.
 - **Model-tag every rollup** (`theme_clusters.model`, `duplicate_pairs.model`) and stale-check at run vs `character_embeddings.model`/`chat_digests.model` — an embedder swap invalidates them.
+- **Fork/import duplicates AGGRAVATE the cap (see B.5.1).** Near-identical fork-prefix vectors cluster
+  at the top of the capped ~200 pool and evict distinct results *before* WHERE/dedup — the same
+  budget-starvation failure as the minority-type bug, self-inflicted. Exact-collapse (lineage +
+  content-hash) keeps the population lean; this is a second reason the B.5.1 fix is not optional.
 
 ## B.8 Sequencing (B)
-1. **Dedup characters+chats** (`duplicates.ts` + `duplicate_pairs` + `scripts/find-duplicates.ts`) — S, biggest payoff, mostly built.
+0. **Fork/import corpus-hygiene FIRST (B.5.1, 🔒 LOCKED)** — the additive `contentHash` column on
+   `chat_segments`/`chat_digests` + populate-in-`generateDigests`/`generateSegments` + backfill, and
+   the lineage+hash collapse helper. This is a prerequisite of step 1 (and a quality floor for steps 3,
+   4, 6) — building dedup/co-occurrence/themes on un-collapsed forks ships biased tools. ~S.
+1. **Dedup characters+chats** (`duplicates.ts` + `duplicate_pairs` + `scripts/find-duplicates.ts`) — S, biggest payoff, mostly built. **Runs lineage+hash exact-collapse before the cosine pass; chat-dedup labels fork-pairs as `forked` not `duplicate`.**
 2. **Semantic dedup on import** — S.
 3. **Co-occurrence** (tables + `scripts/compute-cooccurrence.ts` + endpoints) — S.
 4. **Corpus stats + character profile** — S (pure SQL).
@@ -284,7 +455,7 @@ the wrong tool — for three reasons, the first two **measured on the live DB (2
 Each step = precompute script → rollup table → tRPC → (later) UI; independently shippable. Endpoints are ready before the UI (`docs/planning/ui-direction.md` Corpus/Analytics panel). Total: pillars+core breadth ~3–4 wk; stretch +1–2 wk.
 
 ## B.9 Risks / open questions
-Keyword normalization depth (cheap regex vs embed-merge). Chat-centroid validity for short chats (filter >20 msgs). Keyword data quality (filter hub tokens). Choosing k (elbow/silhouette, expose `--k`). Theme-naming quality depends on `topicAnchor` distinctiveness (it's well-prompted in `memory/constants.ts TIER0_SYSTEM`). The `msgMidAt` gap (B.4) is the one real schema add.
+Keyword normalization depth (cheap regex vs embed-merge). Chat-centroid validity for short chats (filter >20 msgs). Keyword data quality (filter hub tokens). Choosing k (elbow/silhouette, expose `--k`). Theme-naming quality depends on `topicAnchor` distinctiveness (it's well-prompted in `memory/constants.ts TIER0_SYSTEM`). The `msgMidAt` gap (B.4) is the one real schema add. **Fork/import duplication (B.5.1) is RESOLVED, not open — 🔒 LOCKED via lineage + source-content-hash, query/aggregation-time only; `contentHash` is the second real schema add (alongside `msgMidAt`) and must land in B.8 step 0 before any dedup/analytics.**
 
 ---
 
@@ -481,6 +652,27 @@ clean commits. (4) Track B **themes + breadth** — the bigger build (needs `msg
 **Decided (owner sign-off):**
 - **`msgMidAt` digest column** (Track B.4) — **LOCKED IN to the RAG track.** Add the column + populate
   in `generateDigests` + backfill, as part of the themes schema step (B.8 step 6). Not optional.
+- **Fork/import corpus-hygiene + `contentHash` column** (Track B.5.1) — **LOCKED IN (2026-05-30),
+  reached by a 3/3 independent-reviewer convergence pass on the code.** Canonical per-chat substrate is
+  CORRECT and untouched (in-chat memory requires the duplication); the collapse is query/aggregation-time
+  only, via `parentChatId` lineage (exact, free) + a source-message `contentHash` (durable backstop).
+  The column + backfill land in **B.8 step 0**, BEFORE `find-duplicates.ts` and before any all-pairs
+  analytic. Rejected alternatives (storage collapse / digest-text hash / lineage-only / hash-only) and
+  their disqualifying evidence are recorded in B.5.1 — not to be re-litigated. Not optional.
+
+**Open (deferred — decide WHEN the relevant surface is built, recorded so it isn't forgotten):**
+- **Do sibling character-versions count as "duplicates"? (B.5.1 forward-compat #1)** — DEFERRED to when
+  character dedup is written. Today characters are 1:1 with their version (307/307), so it's moot. The
+  moment a character has >1 version, a lightly-edited v2 is ~0.98 cosine to v1 and B.5's
+  `findDuplicateCharacters` would surface it as a near-dup FALSE POSITIVE. **Provisional call (confirm at
+  build time):** exclude/label sibling versions of the *same* character as `versioned`, not a near-dup
+  find — the character-side analog of labeling fork-pairs `forked`. Not yet locked because the
+  versioning UX isn't designed.
+- **Chat versioning substrate keying (B.5.1 forward-compat #2)** — OPEN, owned by whoever designs chat
+  versioning. If chat versions ever share a `chatId` (vs today's new-chatId+`parentChatId` fork), the
+  `(chatId, blockIdx)` keying on `chat_segments`/`chat_digests` COLLIDES and the `contentHash` collapse
+  needs a version dimension. Flagged now so the versioning design accounts for it rather than
+  rediscovering it as a corruption bug.
 - **Branded IDs** (Track C.3) — ✅ **DONE (2026-05-30).** Shipped as its own 10-commit series on a quiet
   tree (the standalone-pass discipline held — no feature work tangled in). Full write-up incl. the two
   false starts, the contravariance lever, and the test-source fix is in C.3. Corpus/internal ids

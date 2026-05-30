@@ -181,6 +181,7 @@ export async function embedAndUpsert(
       embedding: vec,
       // Rough token estimate (cost visibility); the embedder enforces the real BGE-M3 8192 cap.
       tokens: Math.round(r.text.length / 4),
+      contentHash: r.contentHash,
       createdAt,
     };
     await db
