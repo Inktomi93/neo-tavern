@@ -42,4 +42,14 @@ export const analyticsRouter = t.router({
     .query(({ ctx, input }) =>
       ctx.services.corpus.similarCharacters(ctx.username, input.characterId, input.limit),
     ),
+
+  // Corpus dashboard — totals, per-model usage, most-RP'd characters, activity timeline.
+  corpusStats: authedProcedure.query(({ ctx }) => ctx.services.corpus.corpusStats(ctx.username)),
+
+  // One character's full aggregate profile + top keywords.
+  characterProfile: authedProcedure
+    .input(z.object({ characterId: z.string().min(1) }))
+    .query(({ ctx, input }) =>
+      ctx.services.corpus.characterProfile(ctx.username, input.characterId),
+    ),
 });

@@ -14,6 +14,7 @@ import {
   readDuplicateChats,
   similarCharacters,
 } from "./duplicates";
+import { type CharacterProfile, type CorpusStats, characterProfile, corpusStats } from "./stats";
 
 // Embeds a character card and stores the vector in the owner-keyed `character_embeddings` table
 // (relational: characterId / ownerId / characterVersionId FKs). The embed pass (scripts/embed-corpus)
@@ -67,6 +68,10 @@ export interface CorpusService {
     characterId: string,
     limit?: number,
   ): Promise<{ characterId: string; name: string; similarity: number }[]>;
+  /** Corpus dashboard — totals, per-model usage, most-RP'd characters, activity timeline (pure SQL). */
+  corpusStats(username: string): Promise<CorpusStats>;
+  /** One character's full aggregate profile + top keywords (tier-0, content-collapsed). */
+  characterProfile(username: string, characterId: string): Promise<CharacterProfile | null>;
 }
 
 export interface CorpusServiceDeps {
@@ -142,6 +147,16 @@ export function createCorpusService(db: Db, deps: CorpusServiceDeps = {}): Corpu
     async similarCharacters(username, characterId, limit) {
       const ownerId = await ensureUser(db, username);
       return similarCharacters(db, characterId, ownerId, limit);
+    },
+
+    async corpusStats(username) {
+      const ownerId = await ensureUser(db, username);
+      return corpusStats(db, ownerId);
+    },
+
+    async characterProfile(username, characterId) {
+      const ownerId = await ensureUser(db, username);
+      return characterProfile(db, ownerId, characterId);
     },
   };
 }
