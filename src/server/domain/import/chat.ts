@@ -15,6 +15,7 @@
 // Resilient: a corrupt message line is skipped, not fatal (real corpus had 0, but
 // docker cp / partial writes happen).
 
+import { z } from "zod";
 import { epochToMs, isoToMs } from "../../../shared/time";
 import { nullIfEmpty, str } from "./_utils";
 
@@ -58,35 +59,53 @@ export interface ParsedChat {
   rawHeader: unknown; // header line — archival (carries chat_metadata)
 }
 
-// Permissive typed views over ST's external JSON (snake_case by spec; the biome override
-// for import/** allows dot access + these names).
-interface RawHeader {
-  user_name?: unknown;
-  character_name?: unknown;
-  create_date?: unknown;
-  chat_metadata?: unknown;
-}
-interface RawExtra {
-  model?: unknown;
-  api?: unknown;
-  token_count?: unknown;
-}
-interface RawSwipeInfo {
-  extra?: unknown;
-  gen_started?: unknown;
-  gen_finished?: unknown;
-}
-interface RawMessage {
-  is_user?: unknown;
-  is_system?: unknown;
-  mes?: unknown;
-  send_date?: unknown;
-  extra?: unknown;
-  swipes?: unknown;
-  swipe_id?: unknown;
-  swipe_info?: unknown;
-  gen_started?: unknown;
-  gen_finished?: unknown;
+// Permissive typed views over ST's external JSON (snake_case by spec; the biome override for
+// import/** allows dot access + these names). Each field is `unknown` and every consuming helper
+// already coerces (str/parseStDate/Number) + guards, so the schemas exist to VALIDATE the object
+// SHAPE (is this a record at all?) — replacing the blind `asObj(x) as RawFoo` casts — not to reject
+// fields. `.passthrough()` keeps unmodelled keys; a non-object fails `safeParse` → null (skip/abort).
+const rawHeaderSchema = z
+  .object({
+    user_name: z.unknown(),
+    character_name: z.unknown(),
+    create_date: z.unknown(),
+    chat_metadata: z.unknown(),
+  })
+  .partial()
+  .passthrough();
+
+const rawExtraSchema = z
+  .object({ model: z.unknown(), api: z.unknown(), token_count: z.unknown() })
+  .partial()
+  .passthrough();
+
+const rawSwipeInfoSchema = z
+  .object({ extra: z.unknown(), gen_started: z.unknown(), gen_finished: z.unknown() })
+  .partial()
+  .passthrough();
+
+const rawMessageSchema = z
+  .object({
+    is_user: z.unknown(),
+    is_system: z.unknown(),
+    mes: z.unknown(),
+    send_date: z.unknown(),
+    extra: z.unknown(),
+    swipes: z.unknown(),
+    swipe_id: z.unknown(),
+    swipe_info: z.unknown(),
+    gen_started: z.unknown(),
+    gen_finished: z.unknown(),
+  })
+  .partial()
+  .passthrough();
+type RawMessage = z.infer<typeof rawMessageSchema>;
+
+/** Validate a value's object shape against a lenient schema; null on a non-object. Replaces the
+ *  blind `asObj(x) as RawFoo` cast — the parse actually checks it's a record. */
+function asTyped<T>(v: unknown, schema: z.ZodType<T>): T | null {
+  const result = schema.safeParse(v);
+  return result.success ? result.data : null;
 }
 
 const MONTHS: Record<string, number> = {
@@ -189,7 +208,7 @@ function extractExtra(extra: unknown): {
   provider: string | null;
   tokensOut: number | null;
 } {
-  const e = asObj(extra) as RawExtra | null;
+  const e = asTyped(extra, rawExtraSchema);
   const tc = e ? Number(e.token_count) : Number.NaN;
   return {
     model: nullIfEmpty(str(e?.model)),
@@ -206,7 +225,7 @@ function roleOf(m: RawMessage): MessageRole {
 function buildVariants(swipes: unknown[], swipeInfo: unknown): ParsedVariant[] {
   const info = Array.isArray(swipeInfo) ? swipeInfo : [];
   return swipes.map((content, idx) => {
-    const si = asObj(info[idx]) as RawSwipeInfo | null; // swipe_info can be shorter than swipes
+    const si = asTyped(info[idx], rawSwipeInfoSchema); // swipe_info can be shorter than swipes
     const ex = extractExtra(si?.extra);
     return {
       idx,
@@ -241,7 +260,7 @@ export function parseChatJsonl(
   const lines = text.replace(/^﻿/, "").trim().split("\n");
   if (lines.length === 0 || !lines[0]) return null;
 
-  const header = asObj(parseJson(lines[0])) as RawHeader | null;
+  const header = asTyped(parseJson(lines[0]), rawHeaderSchema);
   if (!header) return null;
 
   const meta = asObj(header.chat_metadata);
@@ -252,7 +271,7 @@ export function parseChatJsonl(
   for (const line of lines.slice(1)) {
     const t = line.trim();
     if (!t) continue;
-    const parsed = asObj(parseJson(t)) as RawMessage | null;
+    const parsed = asTyped(parseJson(t), rawMessageSchema);
     if (!parsed) continue; // skip a corrupt line, keep going
 
     const ex = extractExtra(parsed.extra);
