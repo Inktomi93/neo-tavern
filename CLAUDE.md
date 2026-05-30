@@ -179,6 +179,10 @@ these → stop and ask.
 - **`docs/auth-verify.md`** — the verification runbook: `pnpm verify:auth` (local HTTP probe per mode) +
   the live Caddy+authentik walkthrough + a debug checklist. The *how to confirm it works*.
 - **`docs/dependencies.md`** — deps (installed + deferred parking lot).
+- **`docs/parity-audit.md`** — the live, hand-verified SillyTavern-vs-neo backend+subsystem audit
+  (inventory from `pnpm api:q`, verdicts manual). Outstanding gaps + close-the-gap plans.
+- **`docs/maintenance-and-scheduling.md`** — the decided-not-built seam for scheduled/maintenance
+  work: one `maintenance` registry + `scheduled_runs` table + croner, executor-swappable. The *why*.
 - **`references/README.md`** — reference repos (read, don't copy).
 - **`README.md` / `ONBOARDING.md`** — how to run / onboarding.
 
