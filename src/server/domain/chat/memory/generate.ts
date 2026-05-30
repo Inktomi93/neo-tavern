@@ -103,6 +103,8 @@ async function generateDigestsInner(
       seqEnd,
       summarizerModel: res.model,
       contentHash: contentHash(rendered),
+      // Story-time midpoint of the block = the middle message's createdAt (B.4 theme-timeline axis).
+      msgMidAt: block[Math.floor(block.length / 2)]?.createdAt ?? first.createdAt,
       ...parsed,
     });
   }
@@ -163,8 +165,9 @@ async function generateDigestsInner(
         seqStart,
         seqEnd,
         summarizerModel: res.model,
-        // tier 1+ is a digest-of-digests — no single raw source span to hash (B.5.1).
+        // tier 1+ is a digest-of-digests — no single raw source span to hash (B.5.1) or time (B.4).
         contentHash: null,
+        msgMidAt: null,
         ...parsed,
       });
     }

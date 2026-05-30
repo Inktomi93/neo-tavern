@@ -46,6 +46,7 @@ export async function loadHistory(db: Db, chatId: string): Promise<MsgRow[]> {
       role: messages.role,
       content: messages.content,
       editedAt: messages.editedAt,
+      createdAt: messages.createdAt,
     })
     .from(messages)
     .where(eq(messages.chatId, chatId))
@@ -182,6 +183,7 @@ export async function embedAndUpsert(
       // Rough token estimate (cost visibility); the embedder enforces the real BGE-M3 8192 cap.
       tokens: Math.round(r.text.length / 4),
       contentHash: r.contentHash,
+      msgMidAt: r.msgMidAt,
       createdAt,
     };
     await db

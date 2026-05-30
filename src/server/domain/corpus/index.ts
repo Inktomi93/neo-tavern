@@ -32,6 +32,13 @@ export {
   type HubStats,
   type HubTypeStat,
 } from "./hubness";
+export { type KMeansResult, kmeans } from "./kmeans";
 export { type Segment, type SegmentMessage, segmentChat } from "./segment";
 export { type CorpusService, createCorpusService, type EmbedItem } from "./service";
 export { collectEmbedTargets } from "./targets";
+export {
+  backfillMsgMidAt,
+  computeThemes,
+  type ThemeComputeStats,
+  type ThemeRow,
+} from "./themes";

@@ -21,6 +21,7 @@ export interface MsgRow {
   role: string;
   content: string;
   editedAt: number | null;
+  createdAt: number;
 }
 export interface DigestRow {
   tier: number;
@@ -45,6 +46,9 @@ export interface PendingDigest {
   // sha256 of the SOURCE block (rendered raw transcript) for tier 0; null for tier 1+ consolidations
   // (no single raw source). The fork/import dedup key — docs B.5.1.
   contentHash: string | null;
+  // Story-time midpoint of the block's messages (epoch-ms UTC) for tier 0; null for tier 1+. The theme
+  // timeline axis — docs B.4.
+  msgMidAt: number | null;
 }
 export interface ChatMeta {
   ownerId: string;

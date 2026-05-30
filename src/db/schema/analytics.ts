@@ -1,5 +1,7 @@
 import { index, integer, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 import { characters } from "./characters";
+import { vector32 } from "./custom-types";
+import { chatDigests } from "./search";
 import { users } from "./tenancy";
 
 // Corpus-analytics ROLLUPS — precomputed by scripts (the all-pairs matmul is too heavy for a live
@@ -81,4 +83,44 @@ export const characterKeywordProfiles = sqliteTable(
     index("char_kw_char_idx").on(t.ownerId, t.characterId, t.count),
     index("char_kw_kw_idx").on(t.ownerId, t.keyword, t.count),
   ],
+);
+
+// Emergent THEMES (Pillar B — docs/planning/breadth-buildout.md B.4). k-means clusters over the tier-0
+// digest embeddings surface themes nobody labeled; an LLM names each. Centroids are few (~30) and
+// queried by loading directly — NO ANN index. Model-tagged (an embedder swap invalidates the clustering).
+export const themeClusters = sqliteTable(
+  "theme_clusters",
+  {
+    id: text("id").primaryKey(),
+    ownerId: text("owner_id")
+      .notNull()
+      .references(() => users.id),
+    model: text("model").notNull(), // embedder model that produced the clustered vectors
+    clusterIdx: integer("cluster_idx").notNull(), // 0..k-1 within (owner, model)
+    themeName: text("theme_name").notNull(),
+    subThemes: text("sub_themes", { mode: "json" }), // string[]
+    description: text("description"),
+    centroid: vector32("centroid", { dim: 1024 }), // the cluster mean (loaded directly, no ANN)
+    memberCount: integer("member_count").notNull(),
+    computedAt: integer("computed_at").notNull(),
+  },
+  (t) => [uniqueIndex("theme_clusters_unq").on(t.ownerId, t.model, t.clusterIdx)],
+);
+
+// Which theme each tier-0 digest landed in (its nearest centroid). PK = digestId (one assignment per
+// digest); cascades when the digest is deleted. `distance` = cosine distance to the assigned centroid.
+export const digestThemeAssignments = sqliteTable(
+  "digest_theme_assignments",
+  {
+    digestId: text("digest_id")
+      .primaryKey()
+      .references(() => chatDigests.id, { onDelete: "cascade" }),
+    ownerId: text("owner_id")
+      .notNull()
+      .references(() => users.id),
+    clusterIdx: integer("cluster_idx").notNull(),
+    distance: real("distance").notNull(),
+    computedAt: integer("computed_at").notNull(),
+  },
+  (t) => [index("digest_theme_owner_cluster_idx").on(t.ownerId, t.clusterIdx)],
 );

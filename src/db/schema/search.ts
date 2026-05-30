@@ -109,6 +109,10 @@ export const chatDigests = sqliteTable(
     // analytics (docs/planning/breadth-buildout.md B.5.1). Null for tier 1+ consolidations (no single
     // raw source) and for any pre-backfill row.
     contentHash: text("content_hash"),
+    // STORY-time axis (epoch-ms UTC) = the midpoint message time of the block's seqStart..seqEnd span.
+    // `createdAt` is COMPUTE time (a backfill burst) and is WRONG for the theme timeline (B.4) — this is
+    // the column the theme timeline buckets on. Null for pre-backfill rows.
+    msgMidAt: integer("msg_mid_at"),
     createdAt: integer("created_at").notNull(),
   },
   // One digest per (chat, tier, block) — idempotent upsert + targeted regeneration.

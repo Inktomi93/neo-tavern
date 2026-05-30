@@ -89,4 +89,38 @@ export const analyticsRouter = t.router({
     .query(({ ctx, input }) =>
       ctx.services.corpus.characterKeywords(ctx.username, input.characterId, input.limit),
     ),
+
+  // Pillar B — emergent themes (k-means clusters, LLM-named).
+  themes: authedProcedure.query(({ ctx }) => ctx.services.corpus.themes(ctx.username)),
+
+  // A theme's activity over STORY time (msgMidAt-bucketed).
+  themeTimeline: authedProcedure
+    .input(
+      z.object({
+        clusterIdx: z.number().int().nonnegative(),
+        bucketDays: z.number().int().positive().max(365).optional(),
+      }),
+    )
+    .query(({ ctx, input }) =>
+      ctx.services.corpus.themeTimeline(ctx.username, input.clusterIdx, input.bucketDays),
+    ),
+
+  // Which themes a character's chats touch.
+  characterThemeProfile: authedProcedure
+    .input(z.object({ characterId: z.string().min(1) }))
+    .query(({ ctx, input }) =>
+      ctx.services.corpus.characterThemeProfile(ctx.username, input.characterId),
+    ),
+
+  // The characters most present in a theme.
+  themeCharacters: authedProcedure
+    .input(
+      z.object({
+        clusterIdx: z.number().int().nonnegative(),
+        limit: z.number().int().positive().max(100).optional(),
+      }),
+    )
+    .query(({ ctx, input }) =>
+      ctx.services.corpus.themeCharacters(ctx.username, input.clusterIdx, input.limit),
+    ),
 });

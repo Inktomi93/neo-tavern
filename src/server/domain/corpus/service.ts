@@ -22,6 +22,13 @@ import {
   similarCharacters,
 } from "./duplicates";
 import { type CharacterProfile, type CorpusStats, characterProfile, corpusStats } from "./stats";
+import {
+  characterThemeProfile,
+  type ThemeRow,
+  themeCharacters,
+  themes,
+  themeTimeline,
+} from "./themes";
 
 // Embeds a character card and stores the vector in the owner-keyed `character_embeddings` table
 // (relational: characterId / ownerId / characterVersionId FKs). The embed pass (scripts/embed-corpus)
@@ -103,6 +110,27 @@ export interface CorpusService {
     characterId: string,
     limit?: number,
   ): Promise<{ keyword: string; count: number }[]>;
+
+  // ── analytics: emergent themes (Pillar B, B.4) ─────────────────────────────
+  /** All themes (k-means clusters), largest first. */
+  themes(username: string): Promise<ThemeRow[]>;
+  /** A theme's activity over STORY time (msgMidAt-bucketed). */
+  themeTimeline(
+    username: string,
+    clusterIdx: number,
+    bucketDays?: number,
+  ): Promise<{ bucket: string; count: number }[]>;
+  /** Which themes a character's chats touch. */
+  characterThemeProfile(
+    username: string,
+    characterId: string,
+  ): Promise<{ clusterIdx: number; themeName: string; count: number }[]>;
+  /** The characters most present in a theme. */
+  themeCharacters(
+    username: string,
+    clusterIdx: number,
+    limit?: number,
+  ): Promise<{ characterId: string; name: string; count: number }[]>;
 }
 
 export interface CorpusServiceDeps {
@@ -207,6 +235,26 @@ export function createCorpusService(db: Db, deps: CorpusServiceDeps = {}): Corpu
     async characterKeywords(username, characterId, limit) {
       const ownerId = await ensureUser(db, username);
       return characterKeywords(db, ownerId, characterId, limit);
+    },
+
+    async themes(username) {
+      const ownerId = await ensureUser(db, username);
+      return themes(db, ownerId);
+    },
+
+    async themeTimeline(username, clusterIdx, bucketDays) {
+      const ownerId = await ensureUser(db, username);
+      return themeTimeline(db, ownerId, clusterIdx, bucketDays);
+    },
+
+    async characterThemeProfile(username, characterId) {
+      const ownerId = await ensureUser(db, username);
+      return characterThemeProfile(db, ownerId, characterId);
+    },
+
+    async themeCharacters(username, clusterIdx, limit) {
+      const ownerId = await ensureUser(db, username);
+      return themeCharacters(db, ownerId, clusterIdx, limit);
     },
   };
 }
