@@ -39,10 +39,10 @@ TS = Language(tsts.language_typescript())
 KIND_METHODS = {"query", "mutation", "subscription"}
 HTTP_METHODS = {"get", "post", "put", "delete", "patch"}
 
-# Providers in scope: openai + openrouter + custom (custom is hosted by backends/chat-completions.js).
-# Everything else (anthropic/google/novelai/horde/kobold/azure/volcengine/minimax/nanogpt/text-completions)
-# is dropped into providers-other and ignored.
-PROVIDER_KEEP_FILES = {"openai", "openrouter", "backends/chat-completions"}
+# Providers in scope: openai + openrouter + custom (backends/chat-completions.js hosts 'custom') + anthropic
+# (neo's core is Claude, so ST's anthropic endpoint is worth comparing). Everything else (google/novelai/
+# horde/kobold/azure/volcengine/minimax/nanogpt/text-completions) → providers-other and ignored.
+PROVIDER_KEEP_FILES = {"openai", "openrouter", "backends/chat-completions", "anthropic"}
 
 HAVE, WANT, OUT, NEO_ONLY = "✅ HAVE", "🎯 WANT", "🚫 OUT", "🟣 NEO-ONLY"
 SCOPE: dict[str, tuple[str, str]] = {
@@ -58,8 +58,8 @@ SCOPE: dict[str, tuple[str, str]] = {
     "settings": (HAVE, "typed AppSettings/UserSettings."),
     "tags": (HAVE, "first-class tag router + typed junctions."),
     "import-export": (HAVE, "PNG card + JSONL chat import/export."),
-    "providers": (HAVE, "openai + openrouter + custom only (others skipped). neo: Claude (Max-sub + OR skin) + OR catalog."),
-    "providers-other": (OUT, "ST's ~22 other providers — skipped per scope."),
+    "providers": (HAVE, "openai + openrouter + custom + anthropic only (others skipped). neo: Claude (Max-sub + OR skin) + OR catalog."),
+    "providers-other": (OUT, "ST's other ~21 providers — skipped per scope."),
     "stats-analytics": (NEO_ONLY, "ST chat-stats → neo corpus analytics (planned) + /_debug."),
     "meta": (HAVE, "health/echo utility."),
     "tokenizers": (OUT, "neo tokenizes internally; not an endpoint."),
@@ -111,12 +111,35 @@ SUBSYSTEMS = {
     "regex": {"st": ["public/scripts/extensions/regex/engine.js"],
               "neo": ["src/shared/regex.ts", "src/server/domain/_shared/regex.ts"]},
     "prompt-assembly": {"st": ["src/prompt-converters.js"], "neo": ["src/shared/prompt-assemble.ts"]},
+    "instruct": {"st": ["public/scripts/instruct-mode.js"], "neo": []},
+    "reasoning": {"st": ["public/scripts/reasoning.js"], "neo": []},
+    "slash-commands": {"st": ["public/scripts/slash-commands.js"], "neo": []},
+    "tokenizers": {"st": ["public/scripts/tokenizers.js"], "neo": ["src/server/embeddings/tokenizer.ts"]},
+    "extensions": {"st": ["public/scripts/extensions.js"], "neo": []},
+    "presets": {"st": ["public/scripts/preset-manager.js"], "neo": ["src/server/domain/preset/service.ts"]},
+    "groups": {"st": ["public/scripts/group-chats.js"], "neo": []},
+    "vectors": {"st": ["public/scripts/extensions/vectors/index.js"],
+                "neo": ["src/server/domain/corpus/service.ts", "src/server/domain/search/core.ts"]},
+    "prompt-manager": {"st": ["public/scripts/PromptManager.js"], "neo": ["src/shared/prompt-config.ts"]},
+    # Kitchen-sink home (script.js) → trace explicit symbols, not all-exports.
+    "chat-generate": {"st": [], "neo": ["src/server/domain/chat/send.ts", "src/server/domain/chat/swipe.ts"],
+                      "st_symbols": ["Generate", "sendGenerationRequest", "getGenerateUrl"]},
 }
 
-# Per-subsystem accuracy caveats (where the home file isn't cohesive, the hook count is a superset).
+# Per-subsystem accuracy caveats (where the home file isn't cohesive, the hook count is a SUPERSET).
 SUBSYSTEM_CAVEATS = {
-    "themes": "Home power-user.js is a kitchen-sink module — hook count is a SUPERSET (all power-user "
-              "refs, not theme-specific). Treat as the 'power-user surface'; narrow to theme symbols if needed.",
+    "themes": "Home power-user.js is a kitchen-sink module — superset (all power-user refs, not theme-specific).",
+    "slash-commands": "Home slash-commands.js (~7k LOC) — superset of the whole slash-command system.",
+    "extensions": "extensions.js is the extension LOADER — exports cover the whole extension API surface.",
+    "groups": "group-chats.js (~2.5k LOC) — superset of the group-chat system.",
+    "prompt-manager": "PromptManager.js is ST's chat-completion prompt-ordering UI — broad surface.",
+    "chat-generate": "ST side traces explicit symbols (Generate / sendGenerationRequest / getGenerateUrl), "
+                     "not a home file. neo side traces the chat service factory (createChatService).",
+}
+
+# Subsystems the owner explicitly does NOT want — mapped anyway so the exclusive surface is VISIBLE (to AVOID porting).
+SUBSYSTEM_SKIP = {
+    "instruct": "Owner explicitly does NOT want instruct mode. These hooks = the exclusive instruct surface to NOT port.",
 }
 
 SHARED_MAP = [
@@ -256,19 +279,28 @@ def route_body_params(call) -> list[str]:
 
 # ── exports + reference index (the hook map) ──
 def exports_of(root) -> set[str]:
+    """DIRECT exported names only. (Must NOT recurse into function bodies — that wrongly captured
+    local consts / inner functions, e.g. world-info.js showing 294 'exports' incl. log/match.)"""
     names: set[str] = set()
+    decl_types = ("function_declaration", "generator_function_declaration", "class_declaration",
+                  "lexical_declaration", "variable_declaration")
     for n in walk(root):
         if n.type != "export_statement":
             continue
-        for c in walk(n):
-            if c.type in ("function_declaration", "generator_function_declaration", "class_declaration"):
-                names.add(txt(field(c, "name")))
-            elif c.type == "variable_declarator":
-                nm = field(c, "name")
-                if nm and nm.type == "identifier":
-                    names.add(txt(nm))
-            elif c.type == "export_specifier":
-                names.add(txt(field(c, "name")))
+        decl = field(n, "declaration") or next((c for c in n.children if c.type in decl_types), None)
+        if decl is not None:
+            if decl.type in ("function_declaration", "generator_function_declaration", "class_declaration"):
+                names.add(txt(field(decl, "name")))
+            else:  # export const/let/var A = …, B = … → top-level declarators only (not nested)
+                for vd in decl.children:
+                    if vd.type == "variable_declarator":
+                        nm = field(vd, "name")
+                        if nm and nm.type == "identifier":
+                            names.add(txt(nm))
+        else:  # export { a, b as c } [from '…'] — shallow clause, safe to walk
+            for c in walk(n):
+                if c.type == "export_specifier":
+                    names.add(txt(field(c, "alias") or field(c, "name")))
     names.discard("")
     return names
 
@@ -276,6 +308,9 @@ _CALL_Q = {JS: Query(JS, "(call_expression function: (identifier) @fn)"),
            TS: Query(TS, "(call_expression function: (identifier) @fn)")}
 _IMPORT_Q = {JS: Query(JS, "(import_specifier name: (identifier) @n)"),
              TS: Query(TS, "(import_specifier name: (identifier) @n)")}
+# `new ClassName(...)` instantiations (e.g. `new MacrosParser()`) — a hook kind the call/import queries miss.
+_NEW_Q = {JS: Query(JS, "(new_expression constructor: (identifier) @c)"),
+          TS: Query(TS, "(new_expression constructor: (identifier) @c)")}
 
 def build_ref_index(files: list[Path], lang, base: Path) -> dict[str, list[tuple[str, int, str]]]:
     """symbol → [(relpath, line, 'call'|'import')] across `files`, via the tree-sitter QUERY API (fast)."""
@@ -286,14 +321,16 @@ def build_ref_index(files: list[Path], lang, base: Path) -> dict[str, list[tuple
         except OSError:
             continue
         rel = str(fp.relative_to(base))
-        for q, kind in ((_CALL_Q[lang], "call"), (_IMPORT_Q[lang], "import")):
+        for q, kind in ((_CALL_Q[lang], "call"), (_IMPORT_Q[lang], "import"), (_NEW_Q[lang], "new")):
             for nodes in QueryCursor(q).captures(tree.root_node).values():
                 for node in nodes:
                     idx[txt(node)].append((rel, line_of(node), kind))
     return idx
 
 def build_subsystems() -> dict:
-    st_files = list((ST / "public/scripts").rglob("*.js")) + list((ST / "src").rglob("*.js"))
+    # Exclude vendored/minified bundles — they explode the ref index with garbage matches.
+    st_files = [p for p in list((ST / "public/scripts").rglob("*.js")) + list((ST / "src").rglob("*.js"))
+                if not p.name.endswith((".min.js", ".bundle.js"))]
     neo_files = [p for ext in ("*.ts", "*.tsx") for p in (ROOT / "src").rglob(ext) if ".test." not in p.name]
     st_idx = build_ref_index(st_files, JS, ST)
     neo_idx = build_ref_index(neo_files, TS, ROOT)
@@ -301,20 +338,40 @@ def build_subsystems() -> dict:
     for name, homes in SUBSYSTEMS.items():
         entry = {}
         for side, lang, idx, base in (("st", JS, st_idx, ST), ("neo", TS, neo_idx, ROOT)):
-            exports, home_rel = set(), []
-            for h in homes[side]:
-                hp = base / h
-                if not hp.exists():
-                    continue
-                home_rel.append(h)
-                exports |= exports_of(Parser(lang).parse(hp.read_bytes()).root_node)
-            hooks = [{"symbol": sym, "file": rel, "line": ln, "kind": kind}
-                     for sym in sorted(exports)
-                     for rel, ln, kind in idx.get(sym, []) if rel not in home_rel]
-            entry[side] = {"home": home_rel, "exports": sorted(exports), "hook_count": len(hooks),
+            explicit = homes.get(f"{side}_symbols")
+            if explicit:  # trace an explicit symbol set (for subsystems hosted in a kitchen-sink file)
+                exports, home_rel = set(explicit), []
+            else:
+                exports, home_rel = set(), []
+                for h in homes.get(side, []):
+                    hp = base / h
+                    if not hp.exists():
+                        continue
+                    home_rel.append(h)
+                    exports |= exports_of(Parser(lang).parse(hp.read_bytes()).root_node)
+                # Drop ultra-short export names (1–2 chars, e.g. minified `i`) — pure noise as hook keys.
+                exports = {s for s in exports if len(s) >= 3}
+            # Dedupe per (symbol, file): collapse repeat sites into one entry with line list + occurrence count.
+            agg: dict[tuple[str, str], dict] = {}
+            for sym in exports:
+                for rel, ln, kind in idx.get(sym, []):
+                    if rel in home_rel:
+                        continue
+                    e = agg.setdefault((sym, rel),
+                                       {"symbol": sym, "file": rel, "kinds": set(), "lines": set(), "sites": 0})
+                    e["kinds"].add(kind)
+                    e["lines"].add(ln)
+                    e["sites"] += 1
+            hooks = sorted(({"symbol": e["symbol"], "file": e["file"], "kinds": sorted(e["kinds"]),
+                             "lines": sorted(e["lines"]), "sites": e["sites"]} for e in agg.values()),
+                           key=lambda h: (h["file"], h["symbol"]))
+            entry[side] = {"home": home_rel, "exports": sorted(exports),
+                           "hook_count": len(hooks), "site_count": sum(h["sites"] for h in hooks),
                            "hook_files": sorted({h["file"] for h in hooks}), "hooks": hooks}
         if name in SUBSYSTEM_CAVEATS:
             entry["caveat"] = SUBSYSTEM_CAVEATS[name]
+        if name in SUBSYSTEM_SKIP:
+            entry["skip"] = SUBSYSTEM_SKIP[name]
         out[name] = entry
     return out
 

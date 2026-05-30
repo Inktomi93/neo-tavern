@@ -45,6 +45,7 @@
     "csls": "tsx scripts/csls.ts",
     "cuda:setup": "uv sync --project tools/cuda",
     "api:map": "uv sync --project tools/api-map >/dev/null && uv run --project tools/api-map python tools/api-map/map_api.py",
+    "api:q": "uv run --project tools/api-map python tools/api-map/q.py",
     "prepare": "husky",
     "probe:streaming": "tsx scripts/probes/probe-streaming.ts"
   },
