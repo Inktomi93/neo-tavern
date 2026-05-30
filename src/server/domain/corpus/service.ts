@@ -107,12 +107,12 @@ export interface CorpusService {
     username: string,
     opts?: { limit?: number | undefined; minCount?: number | undefined },
   ): Promise<{ keyword: string; count: number }[]>;
-  /** Keywords that most often co-occur with `keyword` in a scene. */
+  /** Keywords that most often co-occur with `keyword` in a scene (+ sample characterIds to drill into). */
   cooccurringKeywords(
     username: string,
     keyword: string,
     limit?: number,
-  ): Promise<{ keyword: string; count: number }[]>;
+  ): Promise<{ keyword: string; count: number; characterIds: string[] }[]>;
   /** Top keywords for one character. */
   characterKeywords(
     username: string,

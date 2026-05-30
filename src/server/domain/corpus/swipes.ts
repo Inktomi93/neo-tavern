@@ -9,9 +9,13 @@ export interface SwipeInsights {
   totalSwipes: number;
   messagesWithSwipes: number;
   avgSwipesPerRerolledMessage: number;
-  /** The most re-rolled moments — where the model kept missing (or you kept refining). */
+  /** The most re-rolled moments — where the model kept missing (or you kept refining). Carries the
+   *  message + chat + character ids and the seq so the client can jump straight to the moment. */
   hotspots: {
+    messageId: string;
     chatId: string;
+    seq: number;
+    characterId: string;
     characterName: string;
     variants: number;
     snippet: string;
@@ -40,13 +44,17 @@ export async function swipeInsights(db: Db, ownerId: string): Promise<SwipeInsig
   )[0] ?? { swipes: 0, msgs: 0 };
 
   const hotspots = await db.all<{
+    messageId: string;
     chatId: string;
+    seq: number;
+    characterId: string;
     characterName: string;
     variants: number;
     snippet: string;
   }>(sql`
-    SELECT m.chat_id AS chatId, cv.name AS characterName, COUNT(mv.id) AS variants,
-           substr(m.content, 1, 140) AS snippet
+    SELECT m.id AS messageId, m.chat_id AS chatId, m.seq AS seq,
+           cv.character_id AS characterId, cv.name AS characterName,
+           COUNT(mv.id) AS variants, substr(m.content, 1, 140) AS snippet
     FROM message_variants mv
     JOIN messages m ON m.id = mv.message_id
     JOIN chats ch ON ch.id = m.chat_id
