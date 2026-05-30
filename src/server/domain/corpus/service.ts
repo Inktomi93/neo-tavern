@@ -38,6 +38,14 @@ import {
 } from "./duplicates";
 import type { EmbedItem } from "./embed-text";
 import {
+  type ForgottenGem,
+  forgottenGems,
+  type ModelRouting,
+  modelRouting,
+  type ThemeDriftBucket,
+  themeDrift,
+} from "./insights";
+import {
   characterSimilarityGraph,
   type SimilarChat,
   type SimilarityGraph,
@@ -167,6 +175,12 @@ export interface CorpusService {
   ): Promise<CharacterComparison | null>;
   /** Character archetypes — cluster card embeddings, labeled by dominant distilled facets. */
   archetypes(username: string, k?: number): Promise<Archetype[]>;
+  /** Forgotten gems — characters you invested in but haven't touched recently (revisit candidates). */
+  forgottenGems(username: string, limit?: number): Promise<ForgottenGem[]>;
+  /** Which model you reach for per genre. */
+  modelRouting(username: string): Promise<ModelRouting[]>;
+  /** How your themes shift over story time (drift). */
+  themeDrift(username: string, level?: "scene" | "arc"): Promise<ThemeDriftBucket[]>;
 }
 
 export interface CorpusServiceDeps {
@@ -320,6 +334,21 @@ export function createCorpusService(db: Db, deps: CorpusServiceDeps = {}): Corpu
     async archetypes(username, k) {
       const ownerId = await ensureUser(db, username);
       return characterArchetypes(db, ownerId, k);
+    },
+
+    async forgottenGems(username, limit) {
+      const ownerId = await ensureUser(db, username);
+      return forgottenGems(db, ownerId, limit);
+    },
+
+    async modelRouting(username) {
+      const ownerId = await ensureUser(db, username);
+      return modelRouting(db, ownerId);
+    },
+
+    async themeDrift(username, level) {
+      const ownerId = await ensureUser(db, username);
+      return themeDrift(db, ownerId, level);
     },
   };
 }

@@ -135,6 +135,24 @@ export const analyticsRouter = t.router({
     )
     .query(({ ctx, input }) => ctx.services.corpus.archetypes(ctx.username, input.k)),
 
+  // Forgotten gems — characters you invested in but haven't touched recently (revisit candidates).
+  forgottenGems: authedProcedure
+    .input(
+      z
+        .object({ limit: z.number().int().positive().max(100).optional() })
+        .optional()
+        .transform((v) => v ?? {}),
+    )
+    .query(({ ctx, input }) => ctx.services.corpus.forgottenGems(ctx.username, input.limit)),
+
+  // Which model you reach for per genre.
+  modelRouting: authedProcedure.query(({ ctx }) => ctx.services.corpus.modelRouting(ctx.username)),
+
+  // How your themes shift over story time (drift).
+  themeDrift: authedProcedure
+    .input(z.object({ level: LEVEL.optional() }).optional())
+    .query(({ ctx, input }) => ctx.services.corpus.themeDrift(ctx.username, input?.level)),
+
   // "More like this chat" — nearest chats by segment-centroid cosine.
   similarChats: authedProcedure
     .input(
