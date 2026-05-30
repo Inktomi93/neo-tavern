@@ -6,6 +6,7 @@ import { createSummarizer } from "../../embeddings/summarizer";
 import { getLog } from "../../observability/logger";
 import { newId } from "../_shared/ids";
 import { ensureUser } from "../_shared/users";
+import { askCard, compareCharactersDeep, type DeepComparison } from "./analyze";
 import { type Archetype, characterArchetypes } from "./archetypes";
 import {
   type CatalogStats,
@@ -52,6 +53,12 @@ import {
   similarChats,
 } from "./similarity";
 import { type SwipeInsights, swipeInsights } from "./swipes";
+import {
+  type ApplyTagsResult,
+  applyTagSuggestions,
+  type TagSuggestion,
+  tagSuggestions,
+} from "./tag-suggest";
 import { type ThemeRow, themes } from "./themes";
 import {
   type CharacterDossier,
@@ -181,6 +188,24 @@ export interface CorpusService {
   modelRouting(username: string): Promise<ModelRouting[]>;
   /** How your themes shift over story time (drift). */
   themeDrift(username: string, level?: "scene" | "arc"): Promise<ThemeDriftBucket[]>;
+
+  // ── analytics: LLM card analysis + tag auto-suggest (B.0 stretch) ──────────
+  /** Rich LLM comparison of two cards — similarities/differences/redundancy/verdict. */
+  compareCharactersDeep(
+    username: string,
+    characterIdA: string,
+    characterIdB: string,
+  ): Promise<DeepComparison | null>;
+  /** Grammar-constrained Q&A over a card. */
+  askCard(
+    username: string,
+    characterId: string,
+    question: string,
+  ): Promise<{ answer: string } | null>;
+  /** Distilled tags not yet in the tags table — promotion candidates (review before applying). */
+  tagSuggestions(username: string): Promise<TagSuggestion[]>;
+  /** Promote approved distilled tags into the tags table (source='auto') + link characters. */
+  applyTagSuggestions(username: string, tagNames: string[]): Promise<ApplyTagsResult>;
 }
 
 export interface CorpusServiceDeps {
@@ -349,6 +374,26 @@ export function createCorpusService(db: Db, deps: CorpusServiceDeps = {}): Corpu
     async themeDrift(username, level) {
       const ownerId = await ensureUser(db, username);
       return themeDrift(db, ownerId, level);
+    },
+
+    async compareCharactersDeep(username, characterIdA, characterIdB) {
+      const ownerId = await ensureUser(db, username);
+      return compareCharactersDeep(db, ownerId, createSummarizer(), characterIdA, characterIdB);
+    },
+
+    async askCard(username, characterId, question) {
+      const ownerId = await ensureUser(db, username);
+      return askCard(db, ownerId, createSummarizer(), characterId, question);
+    },
+
+    async tagSuggestions(username) {
+      const ownerId = await ensureUser(db, username);
+      return tagSuggestions(db, ownerId);
+    },
+
+    async applyTagSuggestions(username, tagNames) {
+      const ownerId = await ensureUser(db, username);
+      return applyTagSuggestions(db, ownerId, tagNames);
     },
   };
 }

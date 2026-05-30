@@ -153,6 +153,32 @@ export const analyticsRouter = t.router({
     .input(z.object({ level: LEVEL.optional() }).optional())
     .query(({ ctx, input }) => ctx.services.corpus.themeDrift(ctx.username, input?.level)),
 
+  // Rich LLM comparison of two cards — similarities/differences/redundancy/verdict (1 LLM call).
+  compareCharactersDeep: authedProcedure
+    .input(z.object({ a: z.string().min(1), b: z.string().min(1) }))
+    .query(({ ctx, input }) =>
+      ctx.services.corpus.compareCharactersDeep(ctx.username, input.a, input.b),
+    ),
+
+  // Grammar-constrained Q&A over a card.
+  askCard: authedProcedure
+    .input(z.object({ characterId: z.string().min(1), question: z.string().min(1).max(500) }))
+    .query(({ ctx, input }) =>
+      ctx.services.corpus.askCard(ctx.username, input.characterId, input.question),
+    ),
+
+  // Distilled tags not yet in the tags table — promotion candidates (review).
+  tagSuggestions: authedProcedure.query(({ ctx }) =>
+    ctx.services.corpus.tagSuggestions(ctx.username),
+  ),
+
+  // Promote approved distilled tags into the tags table (source='auto') + link characters. Mutation.
+  applyTagSuggestions: authedProcedure
+    .input(z.object({ tags: z.array(z.string().min(1)).min(1).max(200) }))
+    .mutation(({ ctx, input }) =>
+      ctx.services.corpus.applyTagSuggestions(ctx.username, input.tags),
+    ),
+
   // "More like this chat" — nearest chats by segment-centroid cosine.
   similarChats: authedProcedure
     .input(
