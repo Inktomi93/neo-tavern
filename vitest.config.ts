@@ -1,8 +1,8 @@
 import { playwright } from "@vitest/browser-playwright";
 import { defineConfig } from "vitest/config";
 
-// Testing doctrine lives in tests/AGENTS.md. When client/component tests land,
-// split this into node + happy-dom `projects` (see that doc for the target config).
+// Testing doctrine lives in tests/AGENTS.md. Split into two `projects`: server/shared/integration
+// run in `node`; client/component tests run in a REAL browser (@vitest/browser-playwright, chromium).
 export default defineConfig({
   resolve: {
     alias: { "@": new URL("./src/client", import.meta.url).pathname },

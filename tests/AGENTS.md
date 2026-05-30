@@ -51,7 +51,7 @@ and still milliseconds.
 | `domain/` (logic) | ✅✅ **primary** | pure unit for logic; integration w/ in-memory libSQL for repos; mock the provider boundary |
 | `providers/` (adapters) | ⚠️ minimal | only pure request/response mapping; real auth/calls verified by `pnpm verify:claude`, not unit tests |
 | `trpc/` (transport) | ✅ integration | `createCaller(testCtx)` + in-memory DB + mocked providers; assert behavior, input validation, auth |
-| `client/features/` (UI) | ✅ component | RTL + happy-dom; render → user-event → assert by role; mock tRPC at the boundary |
+| `client/features/` (UI) | ✅ component | RTL + vitest browser (playwright/chromium); render → user-event → assert by role; mock tRPC at the boundary |
 | `routes/` (thin) | ❌ mostly | `tsc` + `pnpm arch` already prove the wiring |
 | critical flows | ✅ E2E (sparingly) | ONE Playwright happy-path per flow; **never** screenshot diffs |
 
@@ -72,34 +72,22 @@ logic is concentrated where tests pay off.
 - **Always use explicit imports** (`import { test, expect, vi } from "vitest"`) — no
   globals — to satisfy `verbatimModuleSyntax` + our no-implicit-globals rules.
 
-## The kit (deferred in `docs/architecture/dependencies.md`; install when first tests land)
+## The kit (INSTALLED — catalogued in `docs/architecture/dependencies.md`)
 
 - `@vitest/coverage-v8` — coverage.
-- `happy-dom` — client test environment.
+- `@vitest/browser-playwright` — real-browser client test env (chromium), via vitest browser mode.
 - `@testing-library/react` + `@testing-library/jest-dom` + `@testing-library/user-event`.
 - `msw` — mock outbound HTTP (OpenRouter) + client fetch at the boundary.
 - `@playwright/test` — E2E, sparingly.
 - In-memory DB needs **no new dep** — libSQL `:memory:` + drizzle + drizzle-kit.
 
-## Planned `vitest.config.ts` (apply when component tests arrive)
+## `vitest.config.ts` — the node/browser projects split (BUILT)
 
-Split into projects so server runs in node and client in happy-dom:
-
-```ts
-test: {
-  projects: [
-    { test: { name: "server", environment: "node",
-        include: ["src/server/**/*.test.ts", "src/shared/**/*.test.ts", "tests/integration/**/*.test.ts"] } },
-    { test: { name: "client", environment: "happy-dom",
-        include: ["src/client/**/*.test.{ts,tsx}"],
-        setupFiles: ["tests/support/setup-dom.ts"] } }, // @testing-library/jest-dom matchers
-  ],
-  exclude: ["**/node_modules/**", "**/dist/**", "references/**", "tests/e2e/**"], // e2e = playwright's runner
-  restoreMocks: true, // fresh mock state every test (isolation)
-  coverage: { provider: "v8", include: ["src/**"],
-    exclude: ["**/*.test.*", "**/routeTree.gen.ts", "src/**/index.ts"] },
-}
-```
+The config is split into two vitest `projects`: **server / shared / integration tests run in `node`**,
+and **client / component tests run in a REAL browser** (`@vitest/browser-playwright`, chromium — not a
+DOM shim like happy-dom). It also pins a deterministic `single-user` auth env so the suite is independent
+of a developer's deployment `.env`, and excludes `tests/e2e/` (Playwright's own runner). **`vitest.config.ts`
+is the source of truth — read it, don't duplicate it here.**
 
 ## Patterns (copy these)
 

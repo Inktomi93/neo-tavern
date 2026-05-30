@@ -49,14 +49,17 @@ Full script list + dev/prod topology + the corpus import/embed commands: **`READ
 
 | You want… | Read |
 |---|---|
-| Mission, locked decisions, current phase, hard-won facts | **`CLAUDE.md`** (the agent brief) |
-| Build order + status | `docs/planning/build-plan.md` |
-| The layer cake + folder map | `docs/architecture/architecture.md` |
-| DB schema | `docs/architecture/data-model.md` |
-| ST import + RAG (the answer key) | `docs/subsystems/corpus-import.md` |
-| Logging + the `/api/_debug` API | `docs/subsystems/observability.md` |
-| Agent SDK + the `pnpm sdk:play` playground | `docs/subsystems/sdk-notes.md` |
-| The reference clones (read, don't copy) | `references/README.md` |
+| Mission, locked decisions, current phase, hard-won facts | [`CLAUDE.md`](CLAUDE.md) (the agent brief) |
+| How to work (doctrine, the enforcement) | [`AGENTS.md`](AGENTS.md) |
+| Build order + status | [`docs/planning/build-plan.md`](docs/planning/build-plan.md) |
+| The layer cake + folder map | [`docs/architecture/architecture.md`](docs/architecture/architecture.md) |
+| Coding conventions + lint/tsc traps | [`docs/architecture/conventions.md`](docs/architecture/conventions.md) |
+| DB schema (the *why*) | [`docs/architecture/data-model.md`](docs/architecture/data-model.md) |
+| Auth + per-user credentials (built) | [`docs/auth/`](docs/auth/auth-and-credentials-plan.md) · [deploy](docs/auth/auth-deploy.md) · [verify](docs/auth/auth-verify.md) |
+| ST import + RAG (the answer key) | [`docs/subsystems/corpus-import.md`](docs/subsystems/corpus-import.md) |
+| Logging + the `/api/_debug` API | [`docs/subsystems/observability.md`](docs/subsystems/observability.md) |
+| Agent SDK + the `pnpm sdk:play` playground | [`docs/subsystems/sdk-notes.md`](docs/subsystems/sdk-notes.md) |
+| The reference clones (read, don't copy) | [`references/README.md`](references/README.md) |
 
 **Current state** is the per-phase ✅ markers in `CLAUDE.md` + the live task queue (the AI agent's
 `TaskList`) + recent git log — not duplicated here, so it never goes stale.

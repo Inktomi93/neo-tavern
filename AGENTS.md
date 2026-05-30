@@ -8,9 +8,11 @@ A private, single-user RP frontend **and** a personal RAG/analytics layer over a
 RP corpus (400+ characters, hundreds of chats). **Two co-equal goals: a polished RP
 chat experience (a prettier SillyTavern — Marinara/Astra-grade) AND the corpus/RAG
 superpower (the killer differentiator).** Chat is NOT incidental (stance changed,
-owner-approved — see CLAUDE.md mission). Homelab-hosted behind authentik + caddy. One
-user: no auth code, no multi-tenant anything, no settings pages for things with one
-obvious default.
+owner-approved — see CLAUDE.md mission). Homelab-hosted behind authentik + caddy. The app
+**consumes** identity — a pluggable `AUTH_MODE` + revocable BFF cookie sessions + per-user encrypted
+keys, **never an IdP / login form** (built; the *why* is `docs/auth/auth-and-credentials-plan.md`).
+Multi-user is **designed** (ownerId-scoped, enforced even with one user) but single-user in practice —
+no multi-tenant complexity, no settings pages for things with one obvious default.
 
 ## Read first
 

@@ -40,8 +40,8 @@ pnpm embed:corpus:gpu          # GPU via in-process onnxruntime-node CUDA (~24×
 pnpm cuda:setup                # one-time: vendor CUDA-12 + cuDNN-9 into tools/cuda/.venv (uv)
 
 # 3. Ranking quality (Phase 4.6.3): CSLS hubness + two-stage cross-encoder rerank
-pnpm csls                      # precompute embeddings.hub_score (CSLS, per entity_type) — re-run on corpus change
-pnpm corpus:backfill-source-text   # fill embeddings.source_text on rows embedded before the reranker (no re-embed)
+pnpm csls                      # precompute hub_score on the vector tables (CSLS, per type) — re-run on corpus change
+pnpm corpus:backfill-source-text   # fill source_text on character_embeddings (rows embedded before the reranker; no re-embed)
 pnpm rerank:probe              # validate the bge-reranker-v2-m3 cross-encoder (CSLS vs reranked, side by side)
 pnpm discover:probe [--rerank] # validate `discover` ("who have I done X with") — characters + matching snippets
 ```
@@ -149,6 +149,12 @@ OpenRouter reachability).
 sdk-mode models live in `src/shared/models.ts` (latest Claude per tier; default **Opus 4.7**),
 exposed via the tRPC `models` query. Raw-mode models are the **live OpenRouter catalog** via the
 `rawModels` query.
+
+**App auth** (who may use the app — distinct from the provider credentials above) is a pluggable
+`AUTH_MODE` (`single-user` default · `forward-header` · `oidc`) behind authentik + caddy: the app only
+*consumes* identity (never an IdP), with revocable BFF cookie sessions and per-user encrypted keys. It's
+**built + verified live**. Design → [docs/auth/auth-and-credentials-plan.md](docs/auth/auth-and-credentials-plan.md);
+deploy recipe → [docs/auth/auth-deploy.md](docs/auth/auth-deploy.md); verification → [docs/auth/auth-verify.md](docs/auth/auth-verify.md).
 
 ## Status
 
