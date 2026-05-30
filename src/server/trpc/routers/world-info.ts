@@ -64,7 +64,7 @@ export const worldInfoRouter = t.router({
         legacyKeys: z.array(z.string()).optional(),
         enabled: z.boolean().optional(),
         priority: z.number().int().optional(),
-        metadata: z.any().optional(),
+        metadata: z.record(z.string(), z.unknown()).nullable().optional(),
       }),
     )
     .mutation(({ ctx, input }) => {
@@ -81,7 +81,7 @@ export const worldInfoRouter = t.router({
         legacyKeys: z.array(z.string()).optional(),
         enabled: z.boolean().optional(),
         priority: z.number().int().optional(),
-        metadata: z.any().optional(),
+        metadata: z.record(z.string(), z.unknown()).nullable().optional(),
       }),
     )
     .mutation(({ ctx, input }) => {

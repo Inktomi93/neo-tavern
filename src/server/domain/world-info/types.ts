@@ -35,7 +35,7 @@ export interface CreateWorldEntryInput {
   legacyKeys?: string[] | undefined;
   enabled?: boolean | undefined;
   priority?: number | undefined;
-  metadata?: unknown | undefined;
+  metadata?: Record<string, unknown> | null | undefined;
 }
 
 export interface UpdateWorldEntryInput {
@@ -44,7 +44,7 @@ export interface UpdateWorldEntryInput {
   legacyKeys?: string[] | undefined;
   enabled?: boolean | undefined;
   priority?: number | undefined;
-  metadata?: unknown | undefined;
+  metadata?: Record<string, unknown> | null | undefined;
 }
 
 export interface WorldInfoService {
