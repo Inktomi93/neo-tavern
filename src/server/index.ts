@@ -23,12 +23,17 @@ import { warmUpImageEmbedder } from "./embeddings/image-embedder";
 import { warmUpReranker } from "./embeddings/reranker";
 import { warmUpSummarizer } from "./embeddings/summarizer";
 import { env } from "./env";
+import { installEgressFirewall } from "./infra/egress-firewall";
 import { getLog, logger } from "./observability/logger";
 import { createCas } from "./storage/cas";
 import type { Services } from "./trpc/context";
 import { APP_VERSION } from "./version";
 
 const IS_PROD = env.NODE_ENV === "production";
+
+// SSRF egress firewall FIRST — before any outbound HTTP (model warm-up, OIDC discovery) can fire, so
+// the global undici dispatcher is in place. No-op when EGRESS_FIREWALL=false. (A.2.1)
+installEgressFirewall();
 
 // Composition root: this is the one place allowed to wire db + auth + domain
 // together. The db instance is created here and injected into the domain services;

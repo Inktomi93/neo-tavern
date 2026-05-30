@@ -159,6 +159,17 @@ const envSchema = z
     // ALWAYS allowed) gets a 403 before any auth runs. Unset ⇒ disabled (no behavior change).
     IP_ALLOWLIST: z.string().optional(),
 
+    // ── SSRF egress firewall (A.2.1) ──
+    // Blocks OUTBOUND HTTP to private/loopback/link-local/Tailscale IPs (DNS-rebinding-safe) via the
+    // global undici dispatcher. Default ON. Comma host-list of internal hostnames that ARE allowed to
+    // resolve to a private IP (e.g. an OIDC issuer / JWKS host on the LAN). Public targets (openrouter,
+    // HF CDN) resolve to public IPs and are always allowed.
+    EGRESS_FIREWALL: z
+      .enum(["true", "false"])
+      .default("true")
+      .transform((v) => v === "true"),
+    EGRESS_ALLOWLIST: z.string().optional(),
+
     // Admin/owner determination (group preferred, mirrors the stack's Grafana convention). An identity
     // whose `groups` contains OWNER_GROUP, OR whose handle ∈ OWNER_HANDLES, provisions as role:'admin'.
     // OWNER_HANDLES unset ⇒ [DEFAULT_USER_HANDLE] (resolved at the consumer, not here). Comma-list.
