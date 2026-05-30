@@ -5,6 +5,7 @@
 
 import { and, desc, eq } from "drizzle-orm";
 import type { Db } from "../../../db/client";
+import { parseStringArray } from "../../../db/parsers";
 import { characters, characterVersions, chats } from "../../../db/schema";
 import {
   type AssetId,
@@ -87,11 +88,11 @@ export function createCharacterService(db: Db): CharacterService {
       description: current?.description ?? null,
       personality: current?.personality ?? null,
       scenario: current?.scenario ?? null,
-      greetings: (current?.greetings as string[]) ?? null,
+      greetings: parseStringArray(current?.greetings),
       exampleMessages: current?.exampleMessages ?? null,
       systemPrompt: current?.systemPrompt ?? null,
       postHistoryInstructions: current?.postHistoryInstructions ?? null,
-      tags: (current?.tags as string[]) ?? null,
+      tags: parseStringArray(current?.tags),
       creatorNotes: current?.creatorNotes ?? null,
       avatarAssetId: current?.avatarAssetId == null ? null : castId<AssetId>(current.avatarAssetId),
       avatarHash: current?.avatar?.hash ?? null,

@@ -1,5 +1,6 @@
 import { and, asc, eq, gt, gte } from "drizzle-orm";
 import type { Db } from "../../../../db/client";
+import { parseStringArray } from "../../../../db/parsers";
 import {
   characterVersions,
   chatDigests,
@@ -32,7 +33,7 @@ export async function loadDigests(db: Db, chatId: string): Promise<DigestRow[]> 
     seqStart: r.seqStart,
     seqEnd: r.seqEnd,
     text: r.text,
-    keywords: Array.isArray(r.keywords) ? (r.keywords as string[]) : [],
+    keywords: parseStringArray(r.keywords) ?? [],
     createdAt: r.createdAt,
     embedding: r.embedding,
   }));

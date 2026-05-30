@@ -85,8 +85,11 @@ export function createSettingsService(db: Db): SettingsService {
     await logAudit(db, "SET_GLOBAL_SETTING", "settings", key, { value });
 
     const rows = await db.select().from(settings).where(eq(settings.key, key));
-    // biome-ignore lint/style/noNonNullAssertion: guaranteed to exist
-    return rows[0]!;
+    const [row] = rows;
+    if (row === undefined) {
+      throw new Error(`setGlobalSetting: row for '${key}' missing immediately after upsert`);
+    }
+    return row;
   }
 
   // App-wide runtime config (admin-gated). Reads return the RESOLVED view (env floor + stored

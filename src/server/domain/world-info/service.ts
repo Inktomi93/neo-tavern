@@ -1,5 +1,6 @@
 import { and, desc, eq } from "drizzle-orm";
 import type { Db } from "../../../db/client";
+import { parseStringArray } from "../../../db/parsers";
 import { worldBooks, worldEntries } from "../../../db/schema";
 import { castId, type WorldBookId, type WorldEntryId } from "../../../shared/ids";
 import { fetchOwned, stripUndefined } from "../_shared/helpers";
@@ -98,7 +99,7 @@ export function createWorldInfoService(db: Db): WorldInfoService {
       ...r,
       id: castId<WorldEntryId>(r.id),
       worldBookId: castId<WorldBookId>(r.worldBookId),
-      legacyKeys: (r.legacyKeys as string[] | null) ?? null,
+      legacyKeys: parseStringArray(r.legacyKeys),
       enabled: r.enabled ?? true,
       priority: r.priority ?? 0,
     }));
@@ -124,7 +125,7 @@ export function createWorldInfoService(db: Db): WorldInfoService {
       ...row,
       id: castId<WorldEntryId>(row.id),
       worldBookId: castId<WorldBookId>(row.worldBookId),
-      legacyKeys: (row.legacyKeys as string[] | null) ?? null,
+      legacyKeys: parseStringArray(row.legacyKeys),
       enabled: row.enabled ?? true,
       priority: row.priority ?? 0,
     };

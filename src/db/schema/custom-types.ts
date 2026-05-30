@@ -15,8 +15,7 @@ export const vector32 = customType<{
     const buffer = new ArrayBuffer(value.length * 4);
     const view = new DataView(buffer);
     for (let i = 0; i < value.length; i++) {
-      // biome-ignore lint/style/noNonNullAssertion: guaranteed by length
-      view.setFloat32(i * 4, value[i]!, true);
+      view.setFloat32(i * 4, value[i] ?? 0, true);
     }
     return new Uint8Array(buffer);
   },
