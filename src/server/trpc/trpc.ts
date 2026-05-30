@@ -7,6 +7,7 @@ import {
   DomainNotFoundError,
   DomainOperationError,
 } from "../domain/_shared/errors";
+import { securityEvent } from "../observability/logger";
 import type { Context } from "./context";
 import { enforceRateLimit } from "./rate-limit";
 
@@ -44,11 +45,13 @@ export const publicProcedure = t.procedure.use(domainErrorMiddleware);
 // header (SameSite=Lax + this header is the whole story, §4). The gate is per-request, keyed on
 // `viaCookie` — a header/fallback request (no cross-site surface) and all queries/subscriptions are
 // exempt, so the zero-infra default and the SSE stream are untouched.
-const authMiddleware = t.middleware(({ ctx, type, next }) => {
+const authMiddleware = t.middleware(({ ctx, type, path, next }) => {
   if (ctx.auth.identity === null) {
+    securityEvent("auth_required", { path }, "security: unauthenticated request rejected");
     throw new TRPCError({ code: "UNAUTHORIZED", message: "Authentication required." });
   }
   if (type === "mutation" && ctx.auth.viaCookie && !ctx.auth.hasCsrfHeader) {
+    securityEvent("csrf_rejected", { path, handle: ctx.auth.identity.handle });
     throw new TRPCError({ code: "FORBIDDEN", message: "Missing CSRF header." });
   }
   return next();

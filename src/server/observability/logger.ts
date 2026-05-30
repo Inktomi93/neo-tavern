@@ -149,3 +149,16 @@ export function runInRequest<T>(requestId: string, fn: () => T): T {
 export function getLog(): Logger {
   return requestContext.getStore()?.log ?? logger;
 }
+
+/** Security-relevant events (breadth-buildout A.2.5). One consistently-tagged pino line so the whole
+ *  security trail is greppable as `security:true` and filterable by `event`. Emitted at warn (these are
+ *  rejections/blocks, not errors). The auth/infra seams (SSRF block, rate-limit, CSRF reject, auth fail,
+ *  JWKS reject) call this. DELIBERATELY pino-only — for a single-operator homelab the log stream (+ the
+ *  /api/_debug ring) is the audit surface; a DB-persisted security log is intentionally not built. */
+export function securityEvent(
+  event: string,
+  fields: Record<string, unknown> = {},
+  message?: string,
+): void {
+  getLog().warn({ security: true, event, ...fields }, message ?? `security: ${event}`);
+}

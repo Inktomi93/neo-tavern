@@ -2,7 +2,7 @@ import { lookup as dnsLookup } from "node:dns";
 import { Agent, setGlobalDispatcher } from "undici";
 import { isPrivateOrLoopback } from "../auth/ip-ranges";
 import { env } from "../env";
-import { getLog } from "../observability/logger";
+import { getLog, securityEvent } from "../observability/logger";
 
 // SSRF egress firewall (breadth-buildout A.2.1). The app's outbound HTTP (OpenRouter, the HF model CDN,
 // OIDC discovery, and — the one user-influenced vector — the X-Authentik-Meta-Jwks URL) all go through
@@ -61,7 +61,8 @@ export function installEgressFirewall(): void {
             }
             const addr = String(address);
             if (shouldBlockEgress(addr, hostname, allowlist)) {
-              getLog().warn(
+              securityEvent(
+                "egress_blocked",
                 { hostname, address: addr },
                 "security: egress SSRF blocked (private address)",
               );

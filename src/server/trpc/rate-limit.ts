@@ -1,6 +1,6 @@
 import { TRPCError } from "@trpc/server";
 import { RateLimiterMemory } from "rate-limiter-flexible";
-import { getLog } from "../observability/logger";
+import { securityEvent } from "../observability/logger";
 
 // Per-user rate limiting (breadth-buildout A.2.2). In-memory (RateLimiterMemory — ST's choice, no
 // Redis; the deploy is one process). Keyed on the resolved IDENTITY (handle), NOT IP — IP is useless
@@ -28,7 +28,7 @@ export async function enforceRateLimit(opts: { path: string; key: string }): Pro
   } catch (rejection) {
     // RateLimiterMemory rejects with a RateLimiterRes (not an Error) when the bucket is empty; it does
     // not throw real errors. Treat any rejection here as "limited".
-    getLog().warn({ key: opts.key, path: opts.path }, "security: rate limit exceeded");
+    securityEvent("rate_limit", { key: opts.key, path: opts.path });
     throw new TRPCError({
       code: "TOO_MANY_REQUESTS",
       message: "Rate limit exceeded — slow down a moment.",

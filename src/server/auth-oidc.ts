@@ -7,7 +7,7 @@ import { hasCsrfHeader, SESSION_COOKIE_NAME } from "./auth/trust-header";
 import { provisionIdentity } from "./domain/_shared/users";
 import type { SessionsService } from "./domain/sessions";
 import { env } from "./env";
-import { getLog } from "./observability/logger";
+import { getLog, securityEvent } from "./observability/logger";
 
 // OIDC server routes (docs/auth/auth-and-credentials-plan.md §10) — the app as a confidential authentik
 // OIDC client (BFF). Origin-flexible: redirect_uri is DERIVED from the request origin + validated
@@ -141,9 +141,10 @@ export function registerOidcRoutes(app: Hono, db: Db, sessions: SessionsService)
         idTokenExpected: true,
       });
     } catch (err) {
-      getLog().warn(
+      securityEvent(
+        "oidc_exchange_failed",
         { err: err instanceof Error ? err.message : String(err) },
-        "auth: OIDC code exchange failed",
+        "security: OIDC code exchange failed",
       );
       return c.json({ error: "OIDC authentication failed." }, 401);
     }
@@ -165,6 +166,7 @@ export function registerOidcRoutes(app: Hono, db: Db, sessions: SessionsService)
       groups,
     });
     if (!enabled) {
+      securityEvent("account_disabled", { handle }, "security: disabled account login rejected");
       return c.json({ error: "This account is disabled." }, 403);
     }
 

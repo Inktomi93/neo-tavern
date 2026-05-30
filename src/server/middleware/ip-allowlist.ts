@@ -1,7 +1,7 @@
 import { getConnInfo } from "@hono/node-server/conninfo";
 import type { Context, MiddlewareHandler } from "hono";
 import { isInRanges, isPrivateOrLoopback } from "../auth/ip-ranges";
-import { getLog } from "../observability/logger";
+import { securityEvent } from "../observability/logger";
 
 // Optional IP/CIDR allowlist EDGE belt (env IP_ALLOWLIST) — orthogonal to AUTH_MODE, off by default.
 // A blunt network gate in front of everything: when configured, a request whose client IP is outside
@@ -52,7 +52,7 @@ export function ipAllowlistMiddleware(allowlist: readonly string[]): MiddlewareH
     if (ip && isInRanges(ip, allowed)) {
       return next();
     }
-    getLog().warn({ ip, path: c.req.path }, "security: request blocked by IP_ALLOWLIST");
+    securityEvent("ip_allowlist_blocked", { ip, path: c.req.path });
     return c.json({ error: "Forbidden." }, 403);
   };
 }

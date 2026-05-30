@@ -24,7 +24,7 @@
 import { createLocalJWKSet, createRemoteJWKSet, type JWTPayload, jwtVerify } from "jose";
 import type { ResolvedIdentity } from "../../shared/identity";
 import { env } from "../env";
-import { getLog } from "../observability/logger";
+import { securityEvent } from "../observability/logger";
 import { DEFAULT_TRUSTED_RANGES, isInRanges } from "./ip-ranges";
 
 /** The bits of config the resolver needs, passed explicitly so unit tests can vary mode/fallback
@@ -190,11 +190,11 @@ function jwksFor(
       return null;
     }
     if (url.protocol !== "https:") {
-      getLog().warn({ jwksHost: url.host }, "auth: rejecting non-https JWKS URL");
+      securityEvent("jwks_rejected", { jwksHost: url.host, reason: "non-https" });
       return null;
     }
     if (allowlist.length > 0 && !allowlist.includes(normalizeHost(url.host))) {
-      getLog().warn({ jwksHost: url.host }, "auth: rejecting JWKS URL host (not in allowlist)");
+      securityEvent("jwks_rejected", { jwksHost: url.host, reason: "off-allowlist" });
       return null;
     }
     set = createRemoteJWKSet(url);
@@ -292,9 +292,10 @@ async function resolveForwardHeader(
     } catch (err) {
       // A present-but-invalid JWT is a spoof attempt or a misconfig — do NOT silently fall through to
       // the unverified header path (that would defeat the point). Treat as no identity.
-      getLog().warn(
+      securityEvent(
+        "jwt_verify_failed",
         { err: err instanceof Error ? err.message : String(err) },
-        "auth: X-Authentik-Jwt verification failed — rejecting forwarded identity",
+        "security: X-Authentik-Jwt verification failed — rejecting forwarded identity",
       );
       return null;
     }
@@ -309,9 +310,10 @@ async function resolveForwardHeader(
   if (proxies && proxies.length > 0) {
     const ip = clientIpFromHeaders(headers);
     if (!ip || !isInRanges(ip, proxies)) {
-      getLog().warn(
+      securityEvent(
+        "forwarded_ip_rejected",
         { ip, handle: identity.handle },
-        "auth: forwarded identity from an untrusted source IP — rejecting",
+        "security: forwarded identity from an untrusted source IP — rejecting",
       );
       return null;
     }

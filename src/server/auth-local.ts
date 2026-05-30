@@ -11,7 +11,7 @@ import { hasCsrfHeader, SESSION_COOKIE_NAME } from "./auth/trust-header";
 import { ensureUser } from "./domain/_shared/users";
 import type { SessionsService } from "./domain/sessions";
 import { env } from "./env";
-import { getLog } from "./observability/logger";
+import { getLog, securityEvent } from "./observability/logger";
 
 // A minimal in-memory per-IP fixed-window throttle on the login route — the only unauthenticated,
 // CPU-heavy (scrypt) endpoint `local` mode opens. This is a stopgap until the general rate-limiter
@@ -119,7 +119,7 @@ export function registerLocalAuthRoutes(app: Hono, db: Db, sessions: SessionsSer
     const passwordOk = await verifyPassword(password, storedForVerify);
     const authed = user?.enabled === true && user.passwordHash != null && passwordOk;
     if (!authed || !user) {
-      getLog().warn({ handle }, "auth: local login failed");
+      securityEvent("login_failed", { handle });
       return c.json({ error: "Invalid credentials." }, 401);
     }
     const { token, expiresAt } = await sessions.create({
