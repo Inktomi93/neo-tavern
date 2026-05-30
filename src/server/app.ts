@@ -7,6 +7,7 @@ import sharp from "sharp";
 import type { Db } from "../db/client";
 import { isAssetHash } from "../shared/assets";
 import { processMacros } from "../shared/macro";
+import type { MacroContext } from "../shared/macro/types";
 import type { RegexPlacement, RegexScript } from "../shared/regex";
 import type { AuthConfig } from "./auth/trust-header";
 import { type AuthResolver, createAuthResolver, resolveOwner } from "./auth-context";
@@ -46,9 +47,16 @@ function registerDomainDebugRoutes(router: Hono) {
     const options = typeof body.options === "object" && body.options !== null ? body.options : {};
 
     const regexService = createRegexService();
-    // Macro context is stubbed here — real RP variables are not available in the debug REPL.
-    const ctx = {
-      ...options,
+    // Macro context is stubbed here — real RP variables are not available in the debug REPL, so the
+    // {{char}}/{{user}} family resolves against whatever string fields the caller passed in `options`
+    // (defaulting to "" — the debug REPL tests regex behavior, not macro substitution).
+    const str = (v: unknown): string => (typeof v === "string" ? v : "");
+    const ctx: MacroContext = {
+      char: str(options.char),
+      user: str(options.user),
+      persona: str(options.persona),
+      scenario: str(options.scenario),
+      env: {},
       evaluateAST: () => "",
       evaluateString: () => "",
       onWarn: (msg: string, err?: unknown) => getLog().warn({ err }, msg),
@@ -58,8 +66,7 @@ function registerDomainDebugRoutes(router: Hono) {
       text,
       scripts as RegexScript[],
       placement as RegexPlacement,
-      // biome-ignore lint/suspicious/noExplicitAny: debug REPL only — ctx is a stub
-      ctx as any,
+      ctx,
     );
     return c.json({ result });
   });
