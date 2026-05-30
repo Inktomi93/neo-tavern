@@ -85,6 +85,15 @@ only ✅-tracking in the repo; keep it one line.
   wired on import + `pnpm assets:backfill`) and the `image_embeddings` table (migration 0016,
   SigLIP-2 so400m **1152-dim**, its own `libsql_vector_idx` — NOT the 1024-dim text space). The
   visual **embed pass** (embed FROM the blob by hash) is the remaining follow-up. See `docs/assets.md`.
+- **#49 — import/fork write atomicity (LOW priority, deferred):** `importCharacter` writes a deep FK
+  graph (version→book→entries→junction→character→chats→messages) that is NOT under `withChatLock` and
+  has NO compensating rollback, so a crash mid-import can leave partial rows. Tolerable today: rare,
+  single-user, largely re-runnable (handle + `importHash` dedup heals most re-runs). **Do NOT "fix"
+  with `db.transaction()`** — it's banned (`:memory:` trap, `docs/conventions.md`; opens a fresh
+  empty connection → breaks every in-memory test). The `:memory:`-safe path is **`db.batch()`**
+  (libSQL atomic, same-connection) — currently 0 uses, so it needs a `:memory:` validation first.
+  The chat turn is already atomic via `withChatLock` + compensating rollback (`send.ts`); this is
+  only the non-locked bulk-insert paths (import, and to a lesser degree `forkChat`).
 
 **Pluggable auth + user/credential foundation — BUILT (migrations 0025–0026 + the `feat(auth)`
 commits) and verified live through the real caddy+authentik stack.** Pluggable `AUTH_MODE`

@@ -103,7 +103,11 @@ transformers.js `session_options`, OS env vars) trip `useNamingConvention`. Two 
   acquires a *fresh connection*, which for `:memory:` is a brand-new EMPTY database — so the
   writes vanish and the next `db` query throws `no such table`. A file DB is fine. For batch
   writes that must also run under in-memory tests (e.g. `domain/corpus/hubness` hub_score
-  updates), use sequential auto-commit `db.update(...)` in a loop, NOT a transaction.
+  updates), use sequential auto-commit `db.update(...)` in a loop, NOT a transaction. When you
+  genuinely need **atomic all-or-nothing** writes, the `:memory:`-safe primitive is **`db.batch()`**
+  (libSQL's atomic batch — runs on the *same* connection, so no fresh-DB trap), NOT `transaction()`.
+  Hot-path turn writes get atomicity instead from `withChatLock` + compensating rollback (`send.ts`);
+  the non-locked bulk-insert paths (import/fork) are the open candidates — backlog `#49`.
 - `foreign_keys = ON` is set per-connection in `db/client.ts`; only `ownerId → users.id` FKs
   plus the internal FKs from migration 0007 (cascade policy in `docs/data-model.md`); polymorphic
   refs (`embeddings`/`taggables` entity columns) stay plain `text`.
