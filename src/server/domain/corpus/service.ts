@@ -21,6 +21,12 @@ import {
   readDuplicateChats,
   similarCharacters,
 } from "./duplicates";
+import {
+  characterSimilarityGraph,
+  type SimilarChat,
+  type SimilarityGraph,
+  similarChats,
+} from "./similarity";
 import { type CharacterProfile, type CorpusStats, characterProfile, corpusStats } from "./stats";
 import {
   characterThemeProfile,
@@ -131,6 +137,15 @@ export interface CorpusService {
     clusterIdx: number,
     limit?: number,
   ): Promise<{ characterId: string; name: string; count: number }[]>;
+
+  // ── analytics: similarity graph + "more like this" (B.6) ───────────────────
+  /** Character similarity graph (nodes + edges) for a force-directed view. */
+  similarityGraph(
+    username: string,
+    opts?: { minSimilarity?: number | undefined; maxNodes?: number | undefined },
+  ): Promise<SimilarityGraph>;
+  /** Chats most similar to a given chat, by segment-centroid cosine. */
+  similarChats(username: string, chatId: string, limit?: number): Promise<SimilarChat[]>;
 }
 
 export interface CorpusServiceDeps {
@@ -255,6 +270,16 @@ export function createCorpusService(db: Db, deps: CorpusServiceDeps = {}): Corpu
     async themeCharacters(username, clusterIdx, limit) {
       const ownerId = await ensureUser(db, username);
       return themeCharacters(db, ownerId, clusterIdx, limit);
+    },
+
+    async similarityGraph(username, opts = {}) {
+      const ownerId = await ensureUser(db, username);
+      return characterSimilarityGraph(db, ownerId, opts);
+    },
+
+    async similarChats(username, chatId, limit) {
+      const ownerId = await ensureUser(db, username);
+      return similarChats(db, ownerId, chatId, limit);
     },
   };
 }

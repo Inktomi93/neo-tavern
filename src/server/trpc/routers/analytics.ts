@@ -123,4 +123,29 @@ export const analyticsRouter = t.router({
     .query(({ ctx, input }) =>
       ctx.services.corpus.themeCharacters(ctx.username, input.clusterIdx, input.limit),
     ),
+
+  // Character similarity graph (force-directed view).
+  similarityGraph: authedProcedure
+    .input(
+      z
+        .object({
+          minSimilarity: z.number().min(0).max(1).optional(),
+          maxNodes: z.number().int().positive().max(500).optional(),
+        })
+        .optional()
+        .transform((v) => v ?? {}),
+    )
+    .query(({ ctx, input }) => ctx.services.corpus.similarityGraph(ctx.username, input)),
+
+  // "More like this chat" — nearest chats by segment-centroid cosine.
+  similarChats: authedProcedure
+    .input(
+      z.object({
+        chatId: z.string().min(1),
+        limit: z.number().int().positive().max(50).optional(),
+      }),
+    )
+    .query(({ ctx, input }) =>
+      ctx.services.corpus.similarChats(ctx.username, input.chatId, input.limit),
+    ),
 });
