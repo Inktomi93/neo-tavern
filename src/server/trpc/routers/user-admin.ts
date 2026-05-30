@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { brandedId, type SessionId } from "../../../shared/ids";
 import { adminProcedure, t } from "../trpc";
 
 // User administration (docs/auth/auth-and-credentials-plan.md §6) — every procedure adminProcedure-gated.
@@ -26,7 +27,7 @@ export const userAdminRouter = t.router({
     ),
 
   revokeSession: adminProcedure
-    .input(z.object({ sessionId: z.string().min(1) }))
+    .input(z.object({ sessionId: brandedId<SessionId>() }))
     .mutation(({ ctx, input }) =>
       ctx.services.admin.revokeSession({ username: ctx.username, ...input }),
     ),

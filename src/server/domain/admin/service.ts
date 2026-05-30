@@ -1,6 +1,7 @@
 import { asc, eq } from "drizzle-orm";
 import type { Db } from "../../../db/client";
 import { users } from "../../../db/schema";
+import type { SessionId } from "../../../shared/ids";
 import type { SessionView } from "../../../shared/session";
 import { getLog } from "../../observability/logger";
 import { requireAdmin } from "../_shared/admin";
@@ -11,7 +12,7 @@ import { DomainNotFoundError, DomainOperationError } from "../_shared/errors";
 // real SessionsService, which satisfies this structurally.
 export interface SessionAdminPort {
   listForUser(userId: string): Promise<SessionView[]>;
-  revoke(sessionId: string): Promise<void>;
+  revoke(sessionId: SessionId): Promise<void>;
   revokeAllForUser(userId: string): Promise<number>;
 }
 
@@ -42,7 +43,7 @@ export interface AdminService {
     enabled: boolean;
   }): Promise<AdminUserView>;
   listSessions(params: { username: string; userId: string }): Promise<SessionView[]>;
-  revokeSession(params: { username: string; sessionId: string }): Promise<void>;
+  revokeSession(params: { username: string; sessionId: SessionId }): Promise<void>;
   revokeUserSessions(params: { username: string; userId: string }): Promise<{ revoked: number }>;
 }
 
@@ -108,7 +109,7 @@ export function createAdminService(db: Db, sessionsService: SessionAdminPort): A
     return sessionsService.listForUser(params.userId);
   }
 
-  async function revokeSession(params: { username: string; sessionId: string }): Promise<void> {
+  async function revokeSession(params: { username: string; sessionId: SessionId }): Promise<void> {
     await requireAdmin(db, params.username);
     await sessionsService.revoke(params.sessionId);
   }

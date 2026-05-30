@@ -3,6 +3,7 @@ import { and, asc, eq, isNull } from "drizzle-orm";
 import type { Db } from "../../../db/client";
 import { sessions, users } from "../../../db/schema";
 import type { ResolvedIdentity } from "../../../shared/identity";
+import { castId, type SessionId } from "../../../shared/ids";
 import type { SessionView } from "../../../shared/session";
 import { env } from "../../env";
 import { getLog } from "../../observability/logger";
@@ -26,14 +27,14 @@ export interface SessionsService {
   create(params: {
     userId: string;
     userAgent?: string | null;
-  }): Promise<{ token: string; sessionId: string; expiresAt: number }>;
+  }): Promise<{ token: string; sessionId: SessionId; expiresAt: number }>;
   /** Validate a cookie token → identity, or null if missing/revoked/expired/disabled. Slides expiry
    *  (throttled). This is the §2 cookie layer's injected validator. */
   validate(token: string): Promise<ResolvedIdentity | null>;
   /** Revoke the session a token belongs to (logout). No-op if already gone. */
   revokeByToken(token: string): Promise<void>;
   /** Revoke a session by id (admin: kick a specific device). */
-  revoke(sessionId: string): Promise<void>;
+  revoke(sessionId: SessionId): Promise<void>;
   /** Revoke ALL of a user's live sessions (admin disable / kick-all) → count revoked. */
   revokeAllForUser(userId: string): Promise<number>;
   /** A user's sessions, newest-activity context for the admin list. */
@@ -53,9 +54,9 @@ export function createSessionsService(db: Db): SessionsService {
   async function create(params: {
     userId: string;
     userAgent?: string | null;
-  }): Promise<{ token: string; sessionId: string; expiresAt: number }> {
+  }): Promise<{ token: string; sessionId: SessionId; expiresAt: number }> {
     const token = randomBytes(32).toString("base64url");
-    const id = newId();
+    const id = newId<SessionId>();
     const now = Date.now();
     const expiresAt = now + SESSION_TTL_MS;
     await db.insert(sessions).values({
@@ -109,7 +110,7 @@ export function createSessionsService(db: Db): SessionsService {
       .where(and(eq(sessions.tokenHash, hashToken(token)), isNull(sessions.revokedAt)));
   }
 
-  async function revoke(sessionId: string): Promise<void> {
+  async function revoke(sessionId: SessionId): Promise<void> {
     await db
       .update(sessions)
       .set({ revokedAt: Date.now() })
@@ -133,7 +134,7 @@ export function createSessionsService(db: Db): SessionsService {
   }
 
   async function listForUser(userId: string): Promise<SessionView[]> {
-    return db
+    const rows = await db
       .select({
         id: sessions.id,
         createdAt: sessions.createdAt,
@@ -145,6 +146,7 @@ export function createSessionsService(db: Db): SessionsService {
       .from(sessions)
       .where(eq(sessions.userId, userId))
       .orderBy(asc(sessions.createdAt));
+    return rows.map((r) => ({ ...r, id: castId<SessionId>(r.id) }));
   }
 
   return { create, validate, revokeByToken, revoke, revokeAllForUser, listForUser };

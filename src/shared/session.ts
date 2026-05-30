@@ -2,8 +2,10 @@
 // DTO in `shared` so the sessions feature (which produces it) and the admin feature (which lists it
 // via an injected port) can both name it WITHOUT a cross-feature import (domain-no-cross-feature). The
 // opaque token + its hash never appear here. See docs/auth/auth-and-credentials-plan.md §4.
+import type { SessionId } from "./ids";
+
 export interface SessionView {
-  id: string;
+  id: SessionId;
   createdAt: number;
   lastSeenAt: number;
   expiresAt: number;
