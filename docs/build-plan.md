@@ -100,7 +100,10 @@ only ✅-tracking in the repo; keep it one line.
   have — NOT a port of ST's QR/STscript (that's just ST's delivery for "inject + generate"):
   - **Ephemeral guidance injection** — a one-turn instruction added to the **dynamic** (post-cache-
     boundary) system prompt; never enters the append-only `messages` log, never busts the cached
-    prefix. Powers guided response (= `send` + inject) and guided swipe (= `swipe` + inject).
+    prefix. Powers **guided response** (= `send` + inject) and **guided swipe** (type guidance →
+    generate a NEW swipe of the last assistant message *under that guidance* — it does NOT reuse or
+    re-roll an existing swipe's text; our `swipe` verb already produces a fresh `message_variants`
+    variant, so guided swipe = `swipe` + inject).
   - **Rewrite / edit-intro** — "regenerate THIS message under instruction X" → a new
     `message_variants` swipe (reuses `editMessage` + the variant machinery). The intro-reformat menu
     (POV/tense/style) is just canned instruction strings.
