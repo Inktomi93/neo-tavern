@@ -3,7 +3,7 @@
 import { desc, eq } from "drizzle-orm";
 import type { Db } from "../../../db/client";
 import { personas } from "../../../db/schema";
-import { castId, type PersonaId } from "../../../shared/ids";
+import { type AssetId, castId, type PersonaId } from "../../../shared/ids";
 import { getLog } from "../../observability/logger";
 import { logAudit } from "../_shared/audit";
 import { fetchOwned, stripUndefined } from "../_shared/helpers";
@@ -28,7 +28,7 @@ export function createPersonaService(db: Db): PersonaService {
       id: castId<PersonaId>(row.id),
       name: row.name,
       description: row.description,
-      avatarAssetId: row.avatarAssetId,
+      avatarAssetId: row.avatarAssetId == null ? null : castId<AssetId>(row.avatarAssetId),
       metadata: row.metadata,
       createdAt: row.createdAt,
     };

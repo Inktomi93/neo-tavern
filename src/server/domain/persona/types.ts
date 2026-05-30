@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { PersonaId } from "../../../shared/ids";
+import { type AssetId, brandedId, type PersonaId } from "../../../shared/ids";
 import { DomainNotFoundError } from "../_shared/errors";
 
 export class PersonaNotFoundError extends DomainNotFoundError {
@@ -16,7 +16,7 @@ export class PersonaNotFoundError extends DomainNotFoundError {
 export const createPersonaSchema = z.object({
   name: z.string().min(1).max(200),
   description: z.string().max(100000),
-  avatarAssetId: z.string().nullable().optional(),
+  avatarAssetId: brandedId<AssetId>().nullable().optional(),
   metadata: z.record(z.string(), z.unknown()).nullable().optional(),
 });
 export type CreatePersonaInput = z.infer<typeof createPersonaSchema>;
@@ -28,7 +28,7 @@ export interface PersonaDetail {
   id: PersonaId;
   name: string;
   description: string;
-  avatarAssetId: string | null;
+  avatarAssetId: AssetId | null;
   metadata: unknown | null;
   createdAt: number;
 }

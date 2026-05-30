@@ -1,5 +1,10 @@
 import { z } from "zod";
-import type { AssetId, CharacterId, CharacterVersionId } from "../../../shared/ids";
+import {
+  type AssetId,
+  brandedId,
+  type CharacterId,
+  type CharacterVersionId,
+} from "../../../shared/ids";
 import { DomainNotFoundError, DomainOperationError } from "../_shared/errors";
 
 export class CharacterNotFoundError extends DomainNotFoundError {
@@ -29,7 +34,7 @@ export const createCharacterSchema = z.object({
   postHistoryInstructions: z.string().nullable().optional(),
   tags: z.array(z.string()).nullable().optional(),
   creatorNotes: z.string().nullable().optional(),
-  avatarAssetId: z.string().nullable().optional(),
+  avatarAssetId: brandedId<AssetId>().nullable().optional(),
 });
 export type CreateCharacterInput = z.infer<typeof createCharacterSchema>;
 
