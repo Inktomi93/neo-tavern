@@ -20,6 +20,10 @@ export interface MacroBlockNode {
   children: MacroAST;
 }
 
+/** A macro's arbitrary runtime variable bag (the {{get}}/{{if}} key→value store). A named alias for
+ *  the open string-keyed map so call sites and the regex extension share one vocabulary. */
+export type MacroEnv = Record<string, unknown>;
+
 export interface MacroContext {
   char: string;
   user: string;
@@ -35,7 +39,7 @@ export interface MacroContext {
   // browser (Intl.DateTimeFormat().resolvedOptions().timeZone). Absent/invalid → server-local.
   timezone?: string | undefined;
   // Allows extensions (like Regex) or future features to pass arbitrary runtime state
-  env: Record<string, unknown>;
+  env: MacroEnv;
   // Recursively evaluate strings (e.g. for nested macros in args)
   evaluateString: (text: string) => string;
   // Evaluate an AST directly (e.g. for block macro children)

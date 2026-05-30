@@ -81,7 +81,12 @@ export function resolveTurnRouting(chat: RoutableChat, config: PromptConfig): Tu
       // sources use Claude tier ids — for openrouter they're remapped to OpenRouter ids by the env.
       const model =
         chat.model !== null && isChatModelId(chat.model) ? chat.model : DEFAULT_CHAT_MODEL_ID;
-      return { runner: "agent-sdk", api: "agent-sdk", source: chat.source, model };
+      return {
+        runner: "agent-sdk",
+        api: "agent-sdk",
+        source: chat.source,
+        model,
+      } satisfies TurnRouting;
     }
     case "chat-completions":
     case "responses": {
@@ -99,7 +104,7 @@ export function resolveTurnRouting(chat: RoutableChat, config: PromptConfig): Tu
         model: chat.model ?? DEFAULT_RAW_MODEL_ID,
         params: config.params,
         providerRouting: extractProviderRouting(chat.metadata),
-      };
+      } satisfies TurnRouting;
     }
   }
 }
