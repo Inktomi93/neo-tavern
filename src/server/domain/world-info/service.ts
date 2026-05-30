@@ -1,6 +1,7 @@
 import { and, desc, eq } from "drizzle-orm";
 import type { Db } from "../../../db/client";
 import { worldBooks, worldEntries } from "../../../db/schema";
+import { castId, type WorldBookId, type WorldEntryId } from "../../../shared/ids";
 import { fetchOwned, stripUndefined } from "../_shared/helpers";
 import { newId } from "../_shared/ids";
 import { ensureUser } from "../_shared/users";
@@ -23,22 +24,25 @@ export function createWorldInfoService(db: Db): WorldInfoService {
       .from(worldBooks)
       .where(eq(worldBooks.ownerId, ownerId))
       .orderBy(desc(worldBooks.createdAt));
-    return rows;
+    return rows.map((r) => ({ ...r, id: castId<WorldBookId>(r.id) }));
   }
 
-  async function getBook(params: { username: string }, bookId: string): Promise<WorldBookView> {
+  async function getBook(
+    params: { username: string },
+    bookId: WorldBookId,
+  ): Promise<WorldBookView> {
     const ownerId = await ensureUser(db, params.username);
     const book = await fetchOwned<WorldBookView>(db, worldBooks, bookId, ownerId);
     if (!book) throw new WorldInfoNotFoundError(`book not found: ${bookId}`);
-    return book;
+    return { ...book, id: castId<WorldBookId>(book.id) };
   }
 
   async function createBook(
     params: { username: string },
     input: CreateWorldBookInput,
-  ): Promise<{ id: string }> {
+  ): Promise<{ id: WorldBookId }> {
     const ownerId = await ensureUser(db, params.username);
-    const id = newId();
+    const id = newId<WorldBookId>();
     await db.insert(worldBooks).values({
       id,
       ownerId,
@@ -51,7 +55,7 @@ export function createWorldInfoService(db: Db): WorldInfoService {
 
   async function updateBook(
     params: { username: string },
-    bookId: string,
+    bookId: WorldBookId,
     input: UpdateWorldBookInput,
   ): Promise<WorldBookView> {
     const ownerId = await ensureUser(db, params.username);
@@ -70,7 +74,7 @@ export function createWorldInfoService(db: Db): WorldInfoService {
 
   async function removeBook(
     params: { username: string },
-    bookId: string,
+    bookId: WorldBookId,
   ): Promise<{ deleted: boolean }> {
     const ownerId = await ensureUser(db, params.username);
     await getBook({ username: params.username }, bookId);
@@ -82,7 +86,7 @@ export function createWorldInfoService(db: Db): WorldInfoService {
 
   async function listEntries(
     params: { username: string },
-    bookId: string,
+    bookId: WorldBookId,
   ): Promise<WorldEntryView[]> {
     await getBook({ username: params.username }, bookId);
     const rows = await db
@@ -92,13 +96,18 @@ export function createWorldInfoService(db: Db): WorldInfoService {
       .orderBy(desc(worldEntries.priority)); // Higher priority first
     return rows.map((r) => ({
       ...r,
+      id: castId<WorldEntryId>(r.id),
+      worldBookId: castId<WorldBookId>(r.worldBookId),
       legacyKeys: (r.legacyKeys as string[] | null) ?? null,
       enabled: r.enabled ?? true,
       priority: r.priority ?? 0,
     }));
   }
 
-  async function getEntry(params: { username: string }, entryId: string): Promise<WorldEntryView> {
+  async function getEntry(
+    params: { username: string },
+    entryId: WorldEntryId,
+  ): Promise<WorldEntryView> {
     const ownerId = await ensureUser(db, params.username);
 
     // Verify ownership by joining through worldBooks
@@ -113,6 +122,8 @@ export function createWorldInfoService(db: Db): WorldInfoService {
 
     return {
       ...row,
+      id: castId<WorldEntryId>(row.id),
+      worldBookId: castId<WorldBookId>(row.worldBookId),
       legacyKeys: (row.legacyKeys as string[] | null) ?? null,
       enabled: row.enabled ?? true,
       priority: row.priority ?? 0,
@@ -121,11 +132,11 @@ export function createWorldInfoService(db: Db): WorldInfoService {
 
   async function createEntry(
     params: { username: string },
-    bookId: string,
+    bookId: WorldBookId,
     input: CreateWorldEntryInput,
-  ): Promise<{ id: string }> {
+  ): Promise<{ id: WorldEntryId }> {
     await getBook({ username: params.username }, bookId);
-    const id = newId();
+    const id = newId<WorldEntryId>();
     await db.insert(worldEntries).values({
       id,
       worldBookId: bookId,
@@ -141,7 +152,7 @@ export function createWorldInfoService(db: Db): WorldInfoService {
 
   async function updateEntry(
     params: { username: string },
-    entryId: string,
+    entryId: WorldEntryId,
     input: UpdateWorldEntryInput,
   ): Promise<WorldEntryView> {
     await getEntry({ username: params.username }, entryId);
@@ -156,7 +167,7 @@ export function createWorldInfoService(db: Db): WorldInfoService {
 
   async function removeEntry(
     params: { username: string },
-    entryId: string,
+    entryId: WorldEntryId,
   ): Promise<{ deleted: boolean }> {
     await getEntry({ username: params.username }, entryId);
     await db.delete(worldEntries).where(eq(worldEntries.id, entryId));

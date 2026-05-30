@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { brandedId, type WorldBookId, type WorldEntryId } from "../../../shared/ids";
 import { authedProcedure, t } from "../trpc";
 
 export const worldInfoRouter = t.router({
@@ -7,7 +8,7 @@ export const worldInfoRouter = t.router({
   ),
 
   getBook: authedProcedure
-    .input(z.object({ bookId: z.string().min(1) }))
+    .input(z.object({ bookId: brandedId<WorldBookId>() }))
     .query(({ ctx, input }) =>
       ctx.services.worldInfo.getBook({ username: ctx.username }, input.bookId),
     ),
@@ -26,7 +27,7 @@ export const worldInfoRouter = t.router({
   updateBook: authedProcedure
     .input(
       z.object({
-        bookId: z.string().min(1),
+        bookId: brandedId<WorldBookId>(),
         name: z.string().min(1).max(200).optional(),
         description: z.string().optional(),
       }),
@@ -37,19 +38,19 @@ export const worldInfoRouter = t.router({
     }),
 
   removeBook: authedProcedure
-    .input(z.object({ bookId: z.string().min(1) }))
+    .input(z.object({ bookId: brandedId<WorldBookId>() }))
     .mutation(({ ctx, input }) =>
       ctx.services.worldInfo.removeBook({ username: ctx.username }, input.bookId),
     ),
 
   listEntries: authedProcedure
-    .input(z.object({ bookId: z.string().min(1) }))
+    .input(z.object({ bookId: brandedId<WorldBookId>() }))
     .query(({ ctx, input }) =>
       ctx.services.worldInfo.listEntries({ username: ctx.username }, input.bookId),
     ),
 
   getEntry: authedProcedure
-    .input(z.object({ entryId: z.string().min(1) }))
+    .input(z.object({ entryId: brandedId<WorldEntryId>() }))
     .query(({ ctx, input }) =>
       ctx.services.worldInfo.getEntry({ username: ctx.username }, input.entryId),
     ),
@@ -57,7 +58,7 @@ export const worldInfoRouter = t.router({
   createEntry: authedProcedure
     .input(
       z.object({
-        bookId: z.string().min(1),
+        bookId: brandedId<WorldBookId>(),
         title: z.string().min(1).max(200),
         content: z.string().min(1).max(100000),
         legacyKeys: z.array(z.string()).optional(),
@@ -74,7 +75,7 @@ export const worldInfoRouter = t.router({
   updateEntry: authedProcedure
     .input(
       z.object({
-        entryId: z.string().min(1),
+        entryId: brandedId<WorldEntryId>(),
         title: z.string().min(1).max(200).optional(),
         content: z.string().min(1).max(100000).optional(),
         legacyKeys: z.array(z.string()).optional(),
@@ -89,7 +90,7 @@ export const worldInfoRouter = t.router({
     }),
 
   removeEntry: authedProcedure
-    .input(z.object({ entryId: z.string().min(1) }))
+    .input(z.object({ entryId: brandedId<WorldEntryId>() }))
     .mutation(({ ctx, input }) =>
       ctx.services.worldInfo.removeEntry({ username: ctx.username }, input.entryId),
     ),

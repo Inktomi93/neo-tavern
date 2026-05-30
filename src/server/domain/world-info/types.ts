@@ -1,15 +1,16 @@
+import type { WorldBookId, WorldEntryId } from "../../../shared/ids";
 import { DomainNotFoundError } from "../_shared/errors";
 
 export interface WorldBookView {
-  id: string;
+  id: WorldBookId;
   name: string;
   description: string | null;
   createdAt: number;
 }
 
 export interface WorldEntryView {
-  id: string;
-  worldBookId: string;
+  id: WorldEntryId;
+  worldBookId: WorldBookId;
   title: string;
   content: string;
   legacyKeys: string[] | null;
@@ -48,28 +49,31 @@ export interface UpdateWorldEntryInput {
 
 export interface WorldInfoService {
   listBooks(params: { username: string }): Promise<WorldBookView[]>;
-  getBook(params: { username: string }, bookId: string): Promise<WorldBookView>;
-  createBook(params: { username: string }, input: CreateWorldBookInput): Promise<{ id: string }>;
+  getBook(params: { username: string }, bookId: WorldBookId): Promise<WorldBookView>;
+  createBook(
+    params: { username: string },
+    input: CreateWorldBookInput,
+  ): Promise<{ id: WorldBookId }>;
   updateBook(
     params: { username: string },
-    bookId: string,
+    bookId: WorldBookId,
     input: UpdateWorldBookInput,
   ): Promise<WorldBookView>;
-  removeBook(params: { username: string }, bookId: string): Promise<{ deleted: boolean }>;
+  removeBook(params: { username: string }, bookId: WorldBookId): Promise<{ deleted: boolean }>;
 
-  listEntries(params: { username: string }, bookId: string): Promise<WorldEntryView[]>;
-  getEntry(params: { username: string }, entryId: string): Promise<WorldEntryView>;
+  listEntries(params: { username: string }, bookId: WorldBookId): Promise<WorldEntryView[]>;
+  getEntry(params: { username: string }, entryId: WorldEntryId): Promise<WorldEntryView>;
   createEntry(
     params: { username: string },
-    bookId: string,
+    bookId: WorldBookId,
     input: CreateWorldEntryInput,
-  ): Promise<{ id: string }>;
+  ): Promise<{ id: WorldEntryId }>;
   updateEntry(
     params: { username: string },
-    entryId: string,
+    entryId: WorldEntryId,
     input: UpdateWorldEntryInput,
   ): Promise<WorldEntryView>;
-  removeEntry(params: { username: string }, entryId: string): Promise<{ deleted: boolean }>;
+  removeEntry(params: { username: string }, entryId: WorldEntryId): Promise<{ deleted: boolean }>;
 }
 
 export class WorldInfoNotFoundError extends DomainNotFoundError {
