@@ -10,7 +10,7 @@ import { newId } from "../_shared/ids";
 
 export type { SessionView };
 
-// The revocable, server-side browser session (the BFF pattern, docs/auth-and-credentials-plan.md §4).
+// The revocable, server-side browser session (the BFF pattern, docs/auth/auth-and-credentials-plan.md §4).
 // Pure DB + crypto — NO cookie I/O here (that's the route layer: the OIDC callback sets the cookie,
 // logout clears it; resolveIdentity reads it). Sessions are minted only in oidc mode, where
 // SESSION_SECRET is required (env refinement) — so hashing always has a pepper.

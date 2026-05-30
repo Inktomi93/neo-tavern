@@ -316,7 +316,7 @@
       // The ONLY sanctioned barrels: a feature's public API (server domain
       // features + client features), plus the DB schema index. The dependency-cruiser
       // front-door rules force callers to enter a feature via its index, so these index files
-      // legitimately re-export. Tradeoff documented in docs/architecture.md.
+      // legitimately re-export. Tradeoff documented in docs/architecture/architecture.md.
       "includes": [
         "src/server/domain/*/index.ts",
         "src/client/features/*/index.ts",

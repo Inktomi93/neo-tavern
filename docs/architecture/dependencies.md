@@ -23,7 +23,7 @@ deterministically as UTC at every provider/import boundary (`src/shared/time.ts`
 in the viewer's tz via `Intl` when the UI lands.
 `atomically` — durable atomic file writes for the content-addressed asset store (`src/server/storage/cas.ts`):
 temp-under-root → fsync → rename, so a crashed write never leaves a corrupt blob at its hash. The ONE
-CAS dep (the two CAS npm libs are unmaintained/untyped; the rest is ~80 lines of our own). See `docs/assets.md`.
+CAS dep (the two CAS npm libs are unmaintained/untyped; the rest is ~80 lines of our own). See `docs/subsystems/assets.md`.
 Tooling: biome, typescript, vite, tsx, vitest, dependency-cruiser, knip, husky,
 tailwindcss (v4), concurrently.
 
@@ -102,7 +102,7 @@ tailwindcss (v4), concurrently.
 ## Server — structured logging + observability ✅ INSTALLED
 
 `pino` (+ `pino-pretty` dev) are in. The logging + `curl`-able `/api/_debug/*`
-layer is built in `src/server/observability/` — see **`docs/observability.md`**.
+layer is built in `src/server/observability/` — see **`docs/subsystems/observability.md`**.
 (Not deferred; here for the record.)
 
 ## Testing (the kit — see `tests/AGENTS.md` for the doctrine)

@@ -75,7 +75,7 @@ export const chats = sqliteTable(
     // ST import provenance. importedFrom = the source .jsonl filename — the key that
     // resolves a branch's chat_metadata.main_chat ref → the parent chat's id (scoped to
     // the character). importHash = SHA-256 of the file bytes → idempotent re-import
-    // (docker cp rewrites mtimes, so hash-not-mtime per docs/corpus-import.md).
+    // (docker cp rewrites mtimes, so hash-not-mtime per docs/subsystems/corpus-import.md).
     importedFrom: text("imported_from"),
     importHash: text("import_hash"),
     messageCount: integer("message_count").default(0),

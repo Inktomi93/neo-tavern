@@ -1,7 +1,7 @@
 # Plan: pluggable auth (single-user / forward-header / OIDC) + user & per-user-credential foundation
 
 > **STATUS: BUILT** (migrations 0025–0026 + the `feat(auth)` commits — see the git log). This doc
-> remains the **design rationale** (the *why*); `docs/auth.md` is the deploy recipe. The server/domain/
+> remains the **design rationale** (the *why*); `docs/auth/auth-deploy.md` is the deploy recipe. The server/domain/
 > API are implemented + green; the **frontend** (login UI, key-entry, user-admin screens) is the
 > remaining piece. Implementation notes vs the original plan: `resolveUsername` is async (the
 > resolution does I/O); CSRF gates per-request on `viaCookie` (not on `AUTH_MODE`); admin-gating is
@@ -135,7 +135,7 @@ X-Authentik-Username  X-Authentik-Groups  X-Authentik-Entitlements  X-Authentik-
 X-Authentik-Name  X-Authentik-Uid  X-Authentik-Jwt  X-Authentik-Meta-Jwks
 X-Authentik-Meta-Outpost  X-Authentik-Meta-Provider  X-Authentik-Meta-App  X-Authentik-Meta-Version
 ```
-The verbatim snippet (for `docs/auth.md`):
+The verbatim snippet (for `docs/auth/auth-deploy.md`):
 ```caddyfile
 (authentik) {
 	reverse_proxy /outpost.goauthentik.io/* http://authentik-server:9000 {
@@ -224,7 +224,7 @@ Caddy v2 docs/issues):
   /index.html` for client-side routing. (Whoever serves the SPA — the app's Hono `serveStatic` today —
   applies this; if caddy ever serves the bundle directly, replicate it there.)
 - **The route split** (mirrors §1d, clean): caddy serves **`/blob/*`** statically + immutable off
-  `ASSETS_DIR` (the §-assets block in `docs/assets.md`); **proxies everything else** to `neo-tavern:8788`.
+  `ASSETS_DIR` (the §-assets block in `docs/subsystems/assets.md`); **proxies everything else** to `neo-tavern:8788`.
   Forward-auth (forward-header mode only) is scoped to **`/api/*`** — never the SPA bundle or `/blob`.
 - **CSP** (the auth-review XSS mitigation): set a `Content-Security-Policy` for the SPA — start
   `default-src 'self'; img-src 'self' data: blob:; connect-src 'self'; frame-ancestors 'none';
@@ -243,7 +243,7 @@ Caddy v2 docs/issues):
 - **Cloudflare-proxied SSE — N/A (confirmed direct):** the owner is **banned from cloudflare proxying**,
   so cloudflare is DNS-only (+ DNS-01 cert) and traffic is direct to the box — **no cloudflare
   buffering/timeout threatens live-push**. Full deploy recipe + the host-vs-container upstream
-  (`host.docker.internal:8788` while host-hosted): `docs/auth.md`.
+  (`host.docker.internal:8788` while host-hosted): `docs/auth/auth-deploy.md`.
 
 ---
 
@@ -517,10 +517,10 @@ null, enabled true, role already admin from migration 0025; no sessions until fi
    Behavior-changing core; guard with existing send/swipe/chat-start tests + new resolver tests.
 3. **D** — OIDC server routes + the real `oidc` strategy backed by the `sessions` table (mint on
    callback, validate-by-hash per request, sliding expiry, revoke on logout/disable). Frontend deferred.
-4. **Docs** — `docs/auth.md` **already written** (paste-ready Caddy block for both modes + the
-   authentik setup checklist + env table — the deploy recipe); CLAUDE.md + `docs/data-model.md` already
+4. **Docs** — `docs/auth/auth-deploy.md` **already written** (paste-ready Caddy block for both modes + the
+   authentik setup checklist + env table — the deploy recipe); CLAUDE.md + `docs/architecture/data-model.md` already
    reconciled to the cookie/BFF model this pass. At build: finish the data-model rows
-   (externalId/enabled/user_credentials/sessions) + resolve the 2 CONFIRM-AT-BUILD notes in `docs/auth.md`
+   (externalId/enabled/user_credentials/sessions) + resolve the 2 CONFIRM-AT-BUILD notes in `docs/auth/auth-deploy.md`
    (the `/blob` path + the exact SSE-encode scope).
 
 ## §15. Risk register

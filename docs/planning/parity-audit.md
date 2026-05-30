@@ -369,7 +369,7 @@ stats-analytics, below — and it's the real unbuilt piece.)
 word totals, timing).
 **Our surface**: **neo = 0 procs.** `hubness.ts` exists as an internal corpus primitive but is
 exposed by **no tRPC proc**; the headline analytics (keyword co-occurrence, theme analysis,
-duplicate detection) is `docs/breadth-buildout.md` **Track B** — "plumbing-not-product," **planned,
+duplicate detection) is `docs/planning/breadth-buildout.md` **Track B** — "plumbing-not-product," **planned,
 not built**.
 **Honest read:** the `🟣 NEO-ONLY` badge implies a win, but reality is neither ST's basic per-chat
 stats NOR our differentiator analytics are exposed. This is the **largest unbuilt in-scope backend

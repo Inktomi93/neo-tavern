@@ -1,13 +1,13 @@
 # Auth & deployment — Caddy block + authentik setup
 
-The **design + rationale** lives in `docs/auth-and-credentials-plan.md` (read it for *why*). This doc
+The **design + rationale** lives in `docs/auth/auth-and-credentials-plan.md` (read it for *why*). This doc
 is the **operational recipe**: the finished Caddy block to paste into the stack's Caddyfile, the env
 vars, and the authentik setup checklist — so deploying neo-tavern is "paste the block + do authentik."
 
 > STATUS: **BUILT + deployed.** The app-side auth (`AUTH_MODE`, OIDC routes, sessions, the credential
 > resolver) is implemented and verified live through the real caddy+authentik stack; this doc is the
 > deploy recipe. The former CONFIRM-AT-BUILD notes are resolved inline. Verification runbook +
-> debugging: **`docs/auth-verify.md`** (`pnpm verify:auth`).
+> debugging: **`docs/auth/auth-verify.md`** (`pnpm verify:auth`).
 
 ## The model in one paragraph
 Identity = a pluggable `AUTH_MODE`: **`single-user`** (default, zero-infra: the owner) · **`forward-header`**
@@ -189,5 +189,5 @@ Nothing in authentik. Set `AUTH_MODE=single-user` (default) + `DEFAULT_USER_HAND
    block keeps the running config).
 5. Smoke test: `https://neo-tavern.inktomi.tech/api/healthz` → `{ok:true}`; log in; confirm live push
    (open a chat on two devices) and that compression didn't eat the SSE stream. **The step-by-step
-   verification (local probe + the live walkthrough + a debug checklist) is `docs/auth-verify.md`** —
+   verification (local probe + the live walkthrough + a debug checklist) is `docs/auth/auth-verify.md`** —
    `pnpm verify:auth` locally, `pnpm verify:auth --remote https://neo-tavern.inktomi.tech` against the deploy.

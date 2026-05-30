@@ -39,7 +39,7 @@ export function disciplineOptions(
 // — "Registered N hooks from M plugins"; with our config it proves 0/0) and pipe
 // the raw subprocess stderr into the request logger. Both emit METADATA only
 // (endpoints, request ids, source) — never the assembled prompt or reply (see
-// docs/sdk-notes.md "Observing injection"). Kept OUT of disciplineOptions() so
+// docs/subsystems/sdk-notes.md "Observing injection"). Kept OUT of disciplineOptions() so
 // that helper stays the pure leak contract the tests lock.
 export function observabilityOptions(): Partial<Options> {
   const logLevel = getAppConfig().logLevel;
@@ -56,7 +56,7 @@ export function observabilityOptions(): Partial<Options> {
 
 // Build the SDK `systemPrompt` from our assembled static/dynamic halves. The static half is the
 // cacheable prefix; when a dynamic half exists we place it after SYSTEM_PROMPT_DYNAMIC_BOUNDARY so
-// per-turn changes (keyword-WI, retrieved memory) don't bust the cached prefix (docs/sdk-notes.md).
+// per-turn changes (keyword-WI, retrieved memory) don't bust the cached prefix (docs/subsystems/sdk-notes.md).
 // Returns undefined when there's nothing to send (the SDK then uses its own default).
 export function buildSystemPrompt(
   sp: { static: string; dynamic: string } | undefined,

@@ -29,7 +29,7 @@ const envSchema = z
     // `claude login` Max subscription; see buildClaudeSdkEnv below.
     OPENROUTER_API_KEY: z.string().min(1).optional(),
 
-    // Observability (see src/server/observability + docs/observability.md).
+    // Observability (see src/server/observability + docs/subsystems/observability.md).
     LOG_LEVEL: z
       .enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"])
       .default("info"),
@@ -44,14 +44,14 @@ const envSchema = z
     // Content-addressed asset blob root (card PNGs, avatars). A sharded CAS tree
     // (src/server/storage/cas.ts) keyed by sha-256; the DB holds metadata, bytes live here.
     // Prod: a path on the mounted volume; dev default sits under the gitignored data/ dir.
-    // caddy serves these statically in prod (docs/assets.md) — the app never streams bytes.
+    // caddy serves these statically in prod (docs/subsystems/assets.md) — the app never streams bytes.
     ASSETS_DIR: z.string().min(1).default("./data/assets"),
 
     // Embedding ONNX execution provider. "cpu" (default) runs BGE-M3 on the CPU runtime —
     // fine for short query embeds (~0.04s) and the safe default for tests/dev. "cuda" runs
     // the in-process onnxruntime-node CUDA EP (~24× faster on long text — used for the
     // corpus embed pass). CUDA needs the CUDA-12 runtime libs on LD_LIBRARY_PATH (ORT's EP
-    // is built for CUDA 12; the host's system CUDA may differ) — see docs/corpus-import.md.
+    // is built for CUDA 12; the host's system CUDA may differ) — see docs/subsystems/corpus-import.md.
     EMBED_DEVICE: z.enum(["cpu", "cuda"]).default("cpu"),
     // ONNX weight precision. "fp32" (default, required on cpu) or "fp16" — fp16 on CUDA is
     // ~30% faster at the same 1024-dim output; the precision delta is negligible after
@@ -98,7 +98,7 @@ const envSchema = z
     // "Ruby" and scratch "Assistant" cards) so they never enter the corpus. Set to "" to import all.
     IMPORT_SKIP_CHARACTERS: z.string().default("Ruby,Assistant"),
 
-    // ── Auth/tenancy (see CLAUDE.md + docs/auth-and-credentials-plan.md) ──────────────────────────
+    // ── Auth/tenancy (see CLAUDE.md + docs/auth/auth-and-credentials-plan.md) ──────────────────────────
     // The app only ever CONSUMES identity (never an IdP). Auth is a LAYERED, pluggable mode: AUTH_MODE
     // picks the SSO mechanism; AUTH_FALLBACK decides the un-credentialed case. The resolver tries
     // cookie → forward-auth header → fallback per request, so `oidc` + `owner` = SSO on the domain AND
@@ -186,14 +186,14 @@ export const env = envSchema.parse(process.env);
 
 /**
  * Per-turn generation knobs the agent-sdk runner can steer via subprocess env (all verified —
- * docs/sdk-notes.md "Settable"). Today only `maxOutputTokens` has a config source (the preset's
+ * docs/subsystems/sdk-notes.md "Settable"). Today only `maxOutputTokens` has a config source (the preset's
  * `params`); the rest of the verified levers (thinking on/off, the compaction strategy) stay the
  * flat owner defaults below until per-chat config lands (#41). Passed through both env builders so
  * mode 1 and mode 2 honor it identically (the only difference between them is the auth target).
  */
 export interface ClaudeGenerationOverrides {
   /** Reply ceiling → CLAUDE_CODE_MAX_OUTPUT_TOKENS. From the preset's `params.maxOutputTokens`.
-   *  Don't set absurdly low — 64 errored to empty (docs/sdk-notes.md). undefined = SDK default. */
+   *  Don't set absurdly low — 64 errored to empty (docs/subsystems/sdk-notes.md). undefined = SDK default. */
   maxOutputTokens?: number | undefined;
   /** Owner default is thinking OFF (CLAUDE_CODE_DISABLE_THINKING="1"). The runner sets this false
    *  when the preset enables thinking — then it drives depth via the typed `thinking`/`effort`

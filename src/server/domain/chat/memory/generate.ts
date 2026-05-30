@@ -182,7 +182,7 @@ async function generateDigestsInner(
 }
 
 /**
- * (Re)build this chat's raw SEGMENTS — the verbatim half of the hybrid corpus search (docs/memory.md
+ * (Re)build this chat's raw SEGMENTS — the verbatim half of the hybrid corpus search (docs/subsystems/chat-memory.md
  * §4). Same blockSize boundary as digests, but indexes EVERY complete block across the WHOLE chat (no
  * verbatimWindow cutoff — the cross-chat search tool wants all of it findable; the still-forming
  * trailing partial block is skipped to avoid per-turn re-embed churn). Embed-only (no summarizer →

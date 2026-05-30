@@ -1,7 +1,7 @@
 import { OpenRouter } from "@openrouter/sdk";
 import { env } from "../../env";
 
-// Per-KEY client cache (docs/auth-and-credentials-plan.md §9): one OpenRouter client per distinct API
+// Per-KEY client cache (docs/auth/auth-and-credentials-plan.md §9): one OpenRouter client per distinct API
 // key, so a per-user (BYO) key never leaks into another user's client. The turn runners pass the
 // resolved key; the host-account surfaces (catalog/credits/...) use the shared host key.
 const clients = new Map<string, OpenRouter>();

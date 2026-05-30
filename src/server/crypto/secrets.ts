@@ -1,7 +1,7 @@
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import { env } from "../env";
 
-// AES-256-GCM encryption-at-rest for per-user secrets (docs/auth-and-credentials-plan.md §7) — an
+// AES-256-GCM encryption-at-rest for per-user secrets (docs/auth/auth-and-credentials-plan.md §7) — an
 // upgrade over SillyTavern's plaintext secrets.json. Exposed as an injectable SecretBox (the project's
 // DI idiom) so the store/resolver receive it and tests can supply a known key; the composition root
 // builds the env-backed one. Key = base64-decoded CREDENTIALS_KEY (32 bytes); UNSET/invalid ⇒ a

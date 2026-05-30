@@ -48,7 +48,7 @@ export interface ChatTurnParams {
   sessionStore: SessionStore;
   /** Assembled character/system prompt. `static` becomes the cached prefix; `dynamic` (if any)
    *  goes after SYSTEM_PROMPT_DYNAMIC_BOUNDARY so it re-evaluates per turn without busting the
-   *  cached prefix (see docs/sdk-notes.md). Built by domain/chat via shared/prompt-assemble. */
+   *  cached prefix (see docs/subsystems/sdk-notes.md). Built by domain/chat via shared/prompt-assemble. */
   systemPrompt?: { static: string; dynamic: string };
   /** The unified generation knobs (shared/generation.ts). The runner translates them to typed SDK
    *  Options (thinking/effort/maxBudgetUsd) + env (maxOutputTokens, thinking-disable). temperature/
@@ -56,7 +56,7 @@ export interface ChatTurnParams {
   generation?: GenerationParams | undefined;
   /** Optional live event sink (compaction/retry/rate-limit/...). The streaming-UI seam:
    *  a future SSE subscription forwards these; default undefined = collect-and-return only.
-   *  consumer until the chat UI lands; see docs/sdk-notes.md.) */
+   *  consumer until the chat UI lands; see docs/subsystems/sdk-notes.md.) */
   onEvent?: (event: TurnEvent) => void;
   /** Streaming token-delta callback — discriminated by kind (text|reasoning).
    *  The Claude agent-sdk path always emits kind="text" (CoT is internal to the SDK). */

@@ -1,4 +1,4 @@
-// The auth seam — LAYERED identity resolution (docs/auth-and-credentials-plan.md §2).
+// The auth seam — LAYERED identity resolution (docs/auth/auth-and-credentials-plan.md §2).
 //
 // The app only CONSUMES identity, never an IdP. `AUTH_MODE` picks the SSO mechanism and
 // `AUTH_FALLBACK` decides the un-credentialed case; the layers are tried in order PER REQUEST:
@@ -15,9 +15,9 @@
 // In `single-user` mode the fallback is UNCONDITIONAL (it is the only way in — the locked zero-infra
 // contract). The Host header is trustworthy here ONLY because Caddy routes by the real Host (a spoofed
 // private-IP Host never matches the site → never reaches this process) and :8788 is not publicly
-// routable (the CLAUDE.md deployment invariant); see docs/auth.md.
+// routable (the CLAUDE.md deployment invariant); see docs/auth/auth-deploy.md.
 //
-// LAYER RULE (docs/architecture.md): `auth` is infrastructure — it must NOT import `domain`. The two
+// LAYER RULE (docs/architecture/architecture.md): `auth` is infrastructure — it must NOT import `domain`. The two
 // db-dependent pieces (the session lookup; the user upsert) are therefore INJECTED by the composition
 // root, keeping this module db-free + unit-testable. `provisionIdentity` (the upsert) lives in
 // domain/_shared/users.ts; the cookie validator comes from the sessions domain service.

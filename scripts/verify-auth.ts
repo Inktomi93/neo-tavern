@@ -6,7 +6,7 @@ import { provisionIdentity } from "../src/server/domain/_shared/users";
 import { createSessionsService } from "../src/server/domain/sessions";
 import { env } from "../src/server/env";
 
-// End-to-end auth verification probe (docs/auth-verify.md). Fires real HTTP at a RUNNING neo-tavern
+// End-to-end auth verification probe (docs/auth/auth-verify.md). Fires real HTTP at a RUNNING neo-tavern
 // and asserts the auth behaviors for the server's AUTH_MODE — run it while tailing the server logs to
 // WATCH the seam (identity resolution, session create/validate, JWT verify, gate refusals). It also
 // has a read-only `--remote <url>` mode to smoke-test a live Caddy+authentik deployment.

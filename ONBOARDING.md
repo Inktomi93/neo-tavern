@@ -34,7 +34,7 @@ Full script list + dev/prod topology + the corpus import/embed commands: **`READ
 - **Machine-enforced layer cake** — `db → shared`; infra (auth/providers/embeddings) above that;
   `domain/<feature>` orchestrates infra+db; drivers (`trpc`/`jobs`) reach db **only through
   domain**. `pnpm arch` fails the build on any upward/sideways import. One dir per feature; the
-  only sanctioned barrels are feature `index.ts` front doors. **Read `docs/architecture.md`
+  only sanctioned barrels are feature `index.ts` front doors. **Read `docs/architecture/architecture.md`
   before touching imports.**
 - **Stack:** Hono · Drizzle + libSQL (native `F32_BLOB` vectors) · tRPC · React 19 + Vite +
   TanStack · Tailwind v4 · shadcn (in-repo). Biome + dependency-cruiser + vitest. **No CI**
@@ -42,7 +42,7 @@ Full script list + dev/prod topology + the corpus import/embed commands: **`READ
 - **Corpus pipeline:** `pnpm import:st` (ST PNG/JSONL → DB rows, idempotent) → `pnpm
   embed:corpus:gpu` (BGE-M3 → libSQL vectors; self-contained GPU via `tools/cuda` uv venv,
   weights cached to `.models/`). The parsers + RAG ranking are **lifted from our prior projects
-  card-curator & st-bridge** (cloned in `references/`) — see **`docs/corpus-import.md`**, the
+  card-curator & st-bridge** (cloned in `references/`) — see **`docs/subsystems/corpus-import.md`**, the
   answer key; don't re-derive.
 
 ## Where to go deeper
@@ -50,12 +50,12 @@ Full script list + dev/prod topology + the corpus import/embed commands: **`READ
 | You want… | Read |
 |---|---|
 | Mission, locked decisions, current phase, hard-won facts | **`CLAUDE.md`** (the agent brief) |
-| Build order + status | `docs/build-plan.md` |
-| The layer cake + folder map | `docs/architecture.md` |
-| DB schema | `docs/data-model.md` |
-| ST import + RAG (the answer key) | `docs/corpus-import.md` |
-| Logging + the `/api/_debug` API | `docs/observability.md` |
-| Agent SDK + the `pnpm sdk:play` playground | `docs/sdk-notes.md` |
+| Build order + status | `docs/planning/build-plan.md` |
+| The layer cake + folder map | `docs/architecture/architecture.md` |
+| DB schema | `docs/architecture/data-model.md` |
+| ST import + RAG (the answer key) | `docs/subsystems/corpus-import.md` |
+| Logging + the `/api/_debug` API | `docs/subsystems/observability.md` |
+| Agent SDK + the `pnpm sdk:play` playground | `docs/subsystems/sdk-notes.md` |
 | The reference clones (read, don't copy) | `references/README.md` |
 
 **Current state** is the per-phase ✅ markers in `CLAUDE.md` + the live task queue (the AI agent's

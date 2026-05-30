@@ -72,7 +72,7 @@ logic is concentrated where tests pay off.
 - **Always use explicit imports** (`import { test, expect, vi } from "vitest"`) — no
   globals — to satisfy `verbatimModuleSyntax` + our no-implicit-globals rules.
 
-## The kit (deferred in `docs/dependencies.md`; install when first tests land)
+## The kit (deferred in `docs/architecture/dependencies.md`; install when first tests land)
 
 - `@vitest/coverage-v8` — coverage.
 - `happy-dom` — client test environment.

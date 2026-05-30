@@ -13,7 +13,7 @@ import { env } from "../src/server/env";
  * the K=10 nearest same-(type,model) neighbours) per entity_type, so search can demote
  * "matches-everything" hubs at query time. Index-time batch pass — run AFTER `pnpm
  * embed:corpus`, re-run when the corpus changes. Reads stored vectors via the ANN index;
- * no model load / GPU needed. See docs/corpus-import.md (RAG section).
+ * no model load / GPU needed. See docs/subsystems/corpus-import.md (RAG section).
  */
 async function main(): Promise<void> {
   console.log(`[csls] DB ${env.DATABASE_URL} · K=${CSLS_K}`);

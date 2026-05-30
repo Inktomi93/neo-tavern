@@ -25,7 +25,7 @@ export const searchRouter = t.router({
     .input(knnInput)
     .query(({ ctx, input }) => ctx.services.search.discover(input)),
 
-  // Cross-chat search over the within-chat memory DIGEST substrate (docs/memory.md §4): the same
+  // Cross-chat search over the within-chat memory DIGEST substrate (docs/subsystems/chat-memory.md §4): the same
   // structured digests, queried globally but SCOPED to the caller (chat_digests.ownerId). Hits carry
   // the canon seq span for verbatim click-through. User-facing search, NOT in-character memory.
   digests: authedProcedure

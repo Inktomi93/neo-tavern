@@ -68,7 +68,7 @@ deferred half as a known second face of the same seam.
   cadence instead of never.
 - **Corpus / RAG** — embedding backfill for unindexed content, periodic `reindexAnn` (DiskANN drift),
   full re-index on a model swap, **analytics recompute** (the Track B co-occurrence/theme jobs —
-  batch by nature; `docs/breadth-buildout.md`).
+  batch by nature; `docs/planning/breadth-buildout.md`).
 - **Caches** — OpenRouter model-catalog refresh (TTL).
 - **Someday-multi-user** — per-user quota / rate-limit window resets, scheduled profile backups.
 
@@ -112,6 +112,6 @@ a product change.
 - No premature scheduler build — this doc is the decision; the code waits for the first real task.
 
 ## See also
-`docs/architecture.md` (the layer cake) · `docs/data-model.md` (cascade/GC policy) ·
-`docs/breadth-buildout.md` (Track B analytics = the deferred-job tenant) · `_shared/lock.ts` (the
+`docs/architecture/architecture.md` (the layer cake) · `docs/architecture/data-model.md` (cascade/GC policy) ·
+`docs/planning/breadth-buildout.md` (Track B analytics = the deferred-job tenant) · `_shared/lock.ts` (the
 single-instance boundary this inherits).

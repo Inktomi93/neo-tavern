@@ -2,7 +2,7 @@
 // Pure blob I/O keyed by the sha-256 of the content; imports only `shared` + node + atomically,
 // NEVER db. The domain/assets feature orchestrates this with the `assets` index rows. Scale here
 // is ~320 small PNGs for one user, so a sharded directory IS the right tier (no object store); the
-// hash key ports to S3 unchanged if that ever changes. See docs/assets.md + docs/data-model.md.
+// hash key ports to S3 unchanged if that ever changes. See docs/subsystems/assets.md + docs/architecture/data-model.md.
 //
 // Footguns handled (the reason CAS libraries exist):
 //   • sha-256, so a card blob's hash == characters.importHash (the whole-file hash already stored).

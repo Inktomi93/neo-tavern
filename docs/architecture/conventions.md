@@ -109,7 +109,7 @@ transformers.js `session_options`, OS env vars) trip `useNamingConvention`. Two 
   Hot-path turn writes get atomicity instead from `withChatLock` + compensating rollback (`send.ts`);
   the non-locked bulk-insert paths (import/fork) are the open candidates — backlog `#49`.
 - `foreign_keys = ON` is set per-connection in `db/client.ts`; only `ownerId → users.id` FKs
-  plus the internal FKs from migration 0007 (cascade policy in `docs/data-model.md`); polymorphic
+  plus the internal FKs from migration 0007 (cascade policy in `docs/architecture/data-model.md`); polymorphic
   refs (`embeddings`/`taggables` entity columns) stay plain `text`.
 
 ## Time & dates — one canonical format: epoch-ms UTC
@@ -142,7 +142,7 @@ the viewer's timezone (`Intl.DateTimeFormat`) — store UTC, display local.
 
 - **Commit directly to `main`** (homelab, no CI). `pnpm check` is the green-to-ship gate and runs
   on the husky pre-commit hook — it must pass before "done."
-- **Don't install a dep before it has a consumer** (knip flags dead deps) — check `docs/dependencies.md`.
+- **Don't install a dep before it has a consumer** (knip flags dead deps) — check `docs/architecture/dependencies.md`.
 - Adding a top-level dir? Confirm biome/tsc/vitest/knip/dependency-cruiser still scope correctly.
 - **`Edit` `old_string` must match exactly** — watch for unicode (em-dash `—`, `·`, `…`); copy
   from a fresh `Read`, don't retype.

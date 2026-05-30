@@ -151,7 +151,7 @@ describe("resolveIdentity — fallback", () => {
   });
 });
 
-// ── The bypass regression (docs/auth-and-credentials-plan.md §2) ─────────────────────────────────
+// ── The bypass regression (docs/auth/auth-and-credentials-plan.md §2) ─────────────────────────────────
 // In an SSO mode the `owner` fallback is the raw-LAN convenience path ONLY. The exact hole this guards:
 // an un-cookied request to the PUBLIC FQDN under `oidc`+`owner` must NOT resolve to the owner (which
 // the seam would promote to admin) — it must resolve to null → 401 → SSO mandatory.

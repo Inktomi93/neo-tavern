@@ -12,7 +12,7 @@ export const CSLS_POOL_FACTOR = 4;
 // discover groups a big SEGMENT pool by character, so it needs many more candidates than knn
 // — a heavy-tailed corpus (a popular card owns 100+ segments) means k characters need ~k·20
 // segments represented. Capped near the ANN budget ceiling (vector_top_k returns only a few
-// hundred for a large request — docs/conventions.md); bail to whatever covered if fewer.
+// hundred for a large request — docs/architecture/conventions.md); bail to whatever covered if fewer.
 export const DISCOVER_SEGMENT_POOL_FACTOR = 20;
 export const DISCOVER_SEGMENT_POOL_CAP = 400;
 export const DISCOVER_SEGMENTS_PER_CHAR = 3; // best + up to 2 more for drill-down evidence

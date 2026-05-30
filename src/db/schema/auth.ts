@@ -3,7 +3,7 @@ import { users } from "./tenancy";
 
 // ───────────────────────── App auth (BFF sessions + per-user credentials) ─────────────────────────
 // The app CONSUMES identity (authentik), never an IdP. These two tables back the locked auth design
-// in docs/auth-and-credentials-plan.md — they exist NOW so no follow-up migration is needed when the
+// in docs/auth/auth-and-credentials-plan.md — they exist NOW so no follow-up migration is needed when the
 // OIDC routes + credential resolver land. NOT to be confused with `session_entries` (schema/session.ts),
 // which is the SDK transcript resume-cache; THIS `sessions` table is the browser↔app login session.
 

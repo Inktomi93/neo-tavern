@@ -33,7 +33,7 @@ const domainErrorMiddleware = t.middleware(async ({ next }) => {
 
 export const publicProcedure = t.procedure.use(domainErrorMiddleware);
 
-// ── The procedure ladder (docs/auth-and-credentials-plan.md §3) ──────────────────────────────────
+// ── The procedure ladder (docs/auth/auth-and-credentials-plan.md §3) ──────────────────────────────────
 // publicProcedure → authedProcedure (+ the CSRF mutation gate) → adminProcedure. Built ONCE here;
 // every router picks the right rung. The gates read the resolved `ctx.auth` (produced at the seam) —
 // trpc never touches db/auth itself (the layer cake).

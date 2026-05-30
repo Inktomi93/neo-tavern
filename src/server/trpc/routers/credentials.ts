@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { authedProcedure, t } from "../trpc";
 
-// Per-user OpenRouter key management (docs/auth-and-credentials-plan.md §7). authedProcedure (a user
+// Per-user OpenRouter key management (docs/auth/auth-and-credentials-plan.md §7). authedProcedure (a user
 // manages their OWN key — not admin). The key is write-only over the wire: stored encrypted, never
 // returned; only a boolean presence check is readable.
 export const credentialsRouter = t.router({

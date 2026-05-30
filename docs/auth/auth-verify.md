@@ -1,6 +1,6 @@
 # Verifying auth end-to-end (the runbook)
 
-A watchable way to confirm the auth foundation (`docs/auth-and-credentials-plan.md`) behaves as
+A watchable way to confirm the auth foundation (`docs/auth/auth-and-credentials-plan.md`) behaves as
 intended, per `AUTH_MODE`, and to debug the real Caddy + authentik wiring. Two layers:
 
 1. **Local probe** — `pnpm verify:auth` fires real HTTP at a running server and asserts the mode's
@@ -62,19 +62,19 @@ seam react (`user: created tenant row`, `user: provisioned SSO identity`, `sessi
 
 **App placement.** While host-hosted, the app listens on `0.0.0.0:8788`; caddy (in docker) reaches it
 via `host.docker.internal:8788` (add `extra_hosts: ["host.docker.internal:host-gateway"]` to the caddy
-service). So in the blocks from `docs/auth.md`, swap `neo-tavern:8788` → `host.docker.internal:8788`
+service). So in the blocks from `docs/auth/auth-deploy.md`, swap `neo-tavern:8788` → `host.docker.internal:8788`
 until the app moves into the compose stack.
 
 **oidc (recommended).**
 1. authentik: create an **OAuth2/OpenID provider** (confidential) + an **Application** with slug
    `neo-tavern`; redirect URI `https://neo-tavern.inktomi.tech/api/auth/callback` (strict list, not a
    loose regex — CVE-2024-52289); scopes `openid profile email`; add your accounts to a group e.g.
-   `Neo Owners`. (Full checklist: `docs/auth.md`.)
+   `Neo Owners`. (Full checklist: `docs/auth/auth-deploy.md`.)
 2. App env: `AUTH_MODE=oidc`, `AUTH_FALLBACK=owner` (SSO on the domain **and** owner on the raw LAN IP)
    or `deny` (SSO mandatory), `OIDC_ISSUER`/`OIDC_CLIENT_ID`/`OIDC_CLIENT_SECRET`,
    `OIDC_REDIRECT_URIS=https://neo-tavern.inktomi.tech/api/auth/callback`, `SESSION_SECRET` (32+),
    `OWNER_GROUP=Neo Owners`, `CREDENTIALS_KEY` (base64 32 bytes) if you want per-user keys.
-3. Caddy: paste the `oidc` block from `docs/auth.md` (with the `host.docker.internal` swap); `caddy reload`.
+3. Caddy: paste the `oidc` block from `docs/auth/auth-deploy.md` (with the `host.docker.internal` swap); `caddy reload`.
 4. Smoke it read-only, then log in in a browser:
    ```bash
    pnpm verify:auth --remote https://neo-tavern.inktomi.tech
@@ -102,6 +102,6 @@ the forwarded `X-Authentik-Jwt` against the JWKS.
   path (intended for the trusted raw-IP path). Use `AUTH_FALLBACK=deny` to forbid it.
 - **`max-pro-sub is the owner's credential`** on a turn — the resolver gate: a non-admin can't use the
   host sub; that user needs a BYO OpenRouter key (`credentials.setMyOpenRouterKey`) or an `openrouter` chat.
-- **Turn it up:** `LOG_LEVEL=debug` + the `curl`-able `/api/_debug/*` surface (`docs/observability.md`).
+- **Turn it up:** `LOG_LEVEL=debug` + the `curl`-able `/api/_debug/*` surface (`docs/subsystems/observability.md`).
 - **Live push** — open a chat on two devices; the SSE subscription rides the same-origin cookie. Confirm
   caddy didn't compress it away (`@compressible not path /api/*` + `flush_interval -1`).

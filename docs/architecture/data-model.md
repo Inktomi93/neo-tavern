@@ -5,7 +5,7 @@ truth) and evolves via additive migrations in `src/db/migrations/`. This doc is 
 schema listing (that just drifts); it's the **design rationale** behind the tables — the "why"
 that the code can't fully carry. Conventions: `id` = text (nanoid); timestamps = integer (unix
 epoch ms — always a **UTC** instant, parsed/normalized via `src/shared/time.ts` at every
-provider/import boundary, rendered local on the client; see `docs/conventions.md` → "Time & dates");
+provider/import boundary, rendered local on the client; see `docs/architecture/conventions.md` → "Time & dates");
 JSON columns use Drizzle `{ mode: 'json' }`; enums = text + `enum` constraint.
 
 ## Character versioning (identity / content / instance)
@@ -65,7 +65,7 @@ and is regenerable from `messages` (if they ever diverge, `messages` wins). `seq
   `subpath` (SQLite treats every NULL as distinct), so `""` keeps idempotency honest. The store
   persists every frame the SDK emits and replays in `seq` order, so resume works across
   compaction (the boundary persists as a `system`/`compact_boundary` marker + a synthetic `user`
-  summary frame — measured; see `docs/sdk-notes.md`).
+  summary frame — measured; see `docs/subsystems/sdk-notes.md`).
 
 ## Provider routing — `api` × `source` × `model` (migration 0011)
 A chat's NEXT-turn routing is three columns; `messages.*` records what ACTUALLY ran (provenance):
@@ -120,14 +120,14 @@ model changes. (agent-sdk carries compaction natively in its session, so the mar
 `1024` matches BGE-M3; the `model` column + the column dimension are the only things that change
 on a model swap. `hubScore` (CSLS, migration 0005) + `sourceText` (for the reranker, 0006) ride
 along. Search: `vector_top_k('embeddings_ann', vector32(?), k)` → exact cosine re-rank → CSLS
-adjust → optional cross-encoder rerank. See `docs/corpus-import.md`. Entity type: `character` (the
+adjust → optional cross-encoder rerank. See `docs/subsystems/corpus-import.md`. Entity type: `character` (the
 corpus card layer, batch-embedded via `pnpm embed:corpus`). The retired `chat_message` memory (#40)
 **and** the old polymorphic `chat_segment` (Phase B) are **replaced** by dedicated first-class tables
 — `chat_digests` + `chat_segments` (below).
 
 ## Chat memory = `chat_digests` + `chat_segments` (own tables — migrations 0018/0019)
 
-The within-chat `{{memory}}` system (`docs/memory.md`) stores per-N-turn **structured digests** in a
+The within-chat `{{memory}}` system (`docs/subsystems/chat-memory.md`) stores per-N-turn **structured digests** in a
 **dedicated `chat_digests` table** — NOT the polymorphic `embeddings` table — so it gets real FKs:
 `chatId` → `chats.id` **cascade** (nuke-the-chat cleans up its digests), `ownerId` → `users.id`
 (indexed — per-user corpus scoping), `characterVersionId` → `characterVersions.id` RESTRICT (the
@@ -155,7 +155,7 @@ DELETE SET NULL, the FKs 0007 skipped), with a grace window so it can't race an 
 A card blob's hash equals `characters.importHash` (same whole-file sha-256) → a built-in integrity
 check on the forward-import + backfill paths. Image *analysis* (visual embeddings) is a batch job —
 the derived vector lands in `image_embeddings` (a SEPARATE 1152-dim SigLIP space, NOT the 1024-dim
-text `embeddings`), the bytes don't. Full design + the caddy serving contract: **`docs/assets.md`**.
+text `embeddings`), the bytes don't. Full design + the caddy serving contract: **`docs/subsystems/assets.md`**.
 
 ## Multi-user: designed, single-user implemented
 Every top-level *owned* entity carries `ownerId → users.id` (personas, characters, chats,
@@ -165,7 +165,7 @@ one user, so a second user is a no-op not a rewrite. Global uniques become compo
 multi-user (`unique(ownerId, handle)` etc.). Identity is resolved per-request at one seam
 (`auth/trust-header.ts` `resolveIdentity`); the **pluggable-`AUTH_MODE`** model (single-user /
 forward-header / oidc), keyed on the stable `sub`/`X-Authentik-Uid` (`users.externalId`), is **built**
-(`docs/auth-and-credentials-plan.md` is the *why*). The browser session is an
+(`docs/auth/auth-and-credentials-plan.md` is the *why*). The browser session is an
 **HttpOnly/Secure/SameSite=Lax cookie** (BFF pattern; revocable server-side `sessions`), CSRF mitigated
 by SameSite + a custom request header — not a JS-readable token. `forward-header` trusts the proxy by
 verifying `X-Authentik-Jwt` against the JWKS (the `X-Neo-Proxy` shared-secret path is NOT deployed and
@@ -241,10 +241,10 @@ transient scratch we never touch.** `session_entries` holds the SDK's opaque tra
 
 This unlocks the fork/convert escape valve and ST-import continuation without ever touching
 `~/.claude/projects`. Seeding a session from plain canon is empirically validated
-(`domain/chat/seed.ts` `buildSeedFrames`; see `docs/sdk-notes.md`).
+(`domain/chat/seed.ts` `buildSeedFrames`; see `docs/subsystems/sdk-notes.md`).
 
 ## Importing from SillyTavern (validated against real cards + chats)
-Field maps + parser `file:line` references live in **`docs/corpus-import.md`** (the answer key).
+Field maps + parser `file:line` references live in **`docs/subsystems/corpus-import.md`** (the answer key).
 Schema-side mapping summary:
 - **Card PNG** → `character_versions`: `first_mes` + `alternate_greetings` → `greetings[]`
   (folded), `description`/`personality`/`scenario`/`mes_example`/`system_prompt`/

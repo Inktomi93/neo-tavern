@@ -59,7 +59,7 @@ function determineRole(handle: string, groups: string[]): "admin" | "user" {
 }
 
 /**
- * The SEAM-ONLY identity upsert for SSO modes (docs/auth-and-credentials-plan.md §6). Called once at
+ * The SEAM-ONLY identity upsert for SSO modes (docs/auth/auth-and-credentials-plan.md §6). Called once at
  * the auth seam / OIDC callback — NOT a broadening of ensureUser (whose ~30 downstream callers only
  * have a handle and must keep working). Keys on the STABLE `externalId` when present (so a username
  * rename updates `handle` on the SAME row, never duplicates); else by handle.

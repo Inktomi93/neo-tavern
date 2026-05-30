@@ -183,7 +183,7 @@ module.exports = {
     {
       name: "client-feature-front-door",
       comment:
-        "Enter a client feature through its PUBLIC API (features/<feature>/index.ts), not its internals — so a route (or anything above) can't reach into a feature's guts. Barrels are scoped on for these index files in biome.jsonc; see docs/architecture.md.",
+        "Enter a client feature through its PUBLIC API (features/<feature>/index.ts), not its internals — so a route (or anything above) can't reach into a feature's guts. Barrels are scoped on for these index files in biome.jsonc; see docs/architecture/architecture.md.",
       severity: "error",
       from: { pathNot: "^src/client/features/" },
       to: {
@@ -205,7 +205,7 @@ module.exports = {
     {
       name: "domain-feature-front-door",
       comment:
-        "Enter a domain feature through its PUBLIC API (domain/<feature>/index.ts), not its internals. Callers above the feature (drivers, the entry) may import the index or domain/_shared only — so a feature can refactor its internals freely. This is the one place we accept barrel files (noBarrelFile is scoped off for these index.ts in biome.jsonc; see docs/architecture.md).",
+        "Enter a domain feature through its PUBLIC API (domain/<feature>/index.ts), not its internals. Callers above the feature (drivers, the entry) may import the index or domain/_shared only — so a feature can refactor its internals freely. This is the one place we accept barrel files (noBarrelFile is scoped off for these index.ts in biome.jsonc; see docs/architecture/architecture.md).",
       severity: "error",
       from: { pathNot: "^src/server/domain/" },
       to: {

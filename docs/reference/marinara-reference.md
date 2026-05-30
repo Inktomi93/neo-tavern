@@ -101,7 +101,7 @@ scene/encounter setting. (Game-mode — mostly out of scope for us.)
   synchronous=NORMAL, busy_timeout=5000, foreign_keys=ON). We add perf pragmas (1GB cache, 2GB mmap,
   temp_store=MEMORY, `PRAGMA optimize`) she doesn't.
 - **Transactions:** she uses ~12 `db.transaction()` (works for her — file-DB tests). **We can't**
-  (`:memory:` test trap, `docs/conventions.md`) → we use lock + compensating rollback + append-only.
+  (`:memory:` test trap, `docs/architecture/conventions.md`) → we use lock + compensating rollback + append-only.
   Not a gap, a different deliberate trade. (See backlog `#49`.)
 - **FK policy:** she's **cascade-only** (17×, 0 restrict / 0 set-null); we use differentiated
   `cascade`/`restrict`/`set null` (DB-enforced safety). We're ahead.
@@ -147,5 +147,5 @@ substitution-based macro engine (ours is a real AST). Backups: maybe revisit as 
 feature, but our delegated path is fine.
 
 ## See also
-`docs/parity-audit.md` (the ST-vs-neo audit) · `docs/build-plan.md` `#50` (guided generations) ·
-`docs/maintenance-and-scheduling.md` · `references/README.md` (the refs index).
+`docs/planning/parity-audit.md` (the ST-vs-neo audit) · `docs/planning/build-plan.md` `#50` (guided generations) ·
+`docs/planning/maintenance-and-scheduling.md` · `references/README.md` (the refs index).

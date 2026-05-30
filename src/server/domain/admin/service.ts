@@ -15,7 +15,7 @@ export interface SessionAdminPort {
   revokeAllForUser(userId: string): Promise<number>;
 }
 
-// User administration (docs/auth-and-credentials-plan.md §6) — the multi-user management surface,
+// User administration (docs/auth/auth-and-credentials-plan.md §6) — the multi-user management surface,
 // every method admin-gated (requireAdmin, defense-in-depth even though the tRPC adminProcedure also
 // gates). Session listing/revocation lands in commit 4 (it needs the sessions service). No UI here.
 

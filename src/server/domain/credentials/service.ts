@@ -3,7 +3,7 @@ import type { SecretBox } from "../../crypto/secrets";
 import { clearUserKey, hasUserKey, storeUserKey } from "../_shared/credentials";
 import { ensureUser } from "../_shared/users";
 
-// Caller-scoped per-user credential management (docs/auth-and-credentials-plan.md §7) — the tRPC-facing
+// Caller-scoped per-user credential management (docs/auth/auth-and-credentials-plan.md §7) — the tRPC-facing
 // thin wrapper over the _shared store. The plaintext key is never stored (encrypted at rest) and never
 // returned (only `hasMyOpenRouterKey`). Not admin — a user manages their OWN key.
 export interface CredentialsService {

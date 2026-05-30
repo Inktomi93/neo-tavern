@@ -95,7 +95,7 @@ const COUNTED_TABLES: SQLiteTable[] = [
 ];
 
 export function createDebugService(db: Db): DebugService {
-  // count(*) via a raw query keyed on the schema's table name. NOTE (docs/conventions.md): count(*)
+  // count(*) via a raw query keyed on the schema's table name. NOTE (docs/architecture/conventions.md): count(*)
   // can read 0 on a vector-indexed table in some bindings — embeddings is the one to eyeball.
   async function countRows(table: SQLiteTable): Promise<number> {
     const rows = await db.select({ n: count() }).from(table);

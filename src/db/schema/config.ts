@@ -57,4 +57,4 @@ export const settings = sqliteTable("settings", {
 // mounted volume in a sharded CAS tree keyed by `hash` (src/server/storage/cas.ts); the row is
 // metadata only. There is NO `path` column — the locator IS the hash (cas.blobPath(hash)), so a
 // moved/re-rooted volume needs no DB rewrite. Bytes NEVER go in the DB. GC is mark-sweep over the
-// avatar refs below (no refcount column — refcounts drift). See docs/data-model.md / docs/assets.md.
+// avatar refs below (no refcount column — refcounts drift). See docs/architecture/data-model.md / docs/subsystems/assets.md.

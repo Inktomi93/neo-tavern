@@ -112,7 +112,7 @@ function asObj(v: unknown): Record<string, unknown> | null {
  *  (epoch s/ms · ISO 8601 · ST "2025-07-03@14h56m48s[989ms]" · "August 27, 2025 6:36pm").
  *  ALL formats are interpreted as UTC (`Date.UTC` / the shared UTC parsers) — diverging from
  *  card-curator's local-naive behavior ON PURPOSE: one canonical UTC instant, no server-tz drift
- *  (docs/data-model.md + shared/time.ts). The client renders in the viewer's zone. */
+ *  (docs/architecture/data-model.md + shared/time.ts). The client renders in the viewer's zone. */
 export function parseStDate(v: unknown): number | null {
   if (v == null || v === "") return null;
 

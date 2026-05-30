@@ -7,7 +7,7 @@ import { getLog } from "../../observability/logger";
 import { DomainForbiddenError, DomainOperationError } from "./errors";
 import { newId } from "./ids";
 
-// Per-user credential store + the turn-time credential RESOLVER (docs/auth-and-credentials-plan.md
+// Per-user credential store + the turn-time credential RESOLVER (docs/auth/auth-and-credentials-plan.md
 // §7/§8). Lives in _shared (not a feature) so the chat verbs can call the resolver without a
 // cross-feature import, and the `credentials` feature service can reuse the store. The SecretBox is
 // injected (built from env at the composition root) so encryption is testable + degrades when no key

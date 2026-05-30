@@ -30,7 +30,7 @@ export interface CreatePresetParams {
   name: string;
   kind: string;
   // `| undefined` (not bare `?`) so a zod `.optional()` value spread from the router fits under
-  // exactOptionalPropertyTypes (docs/conventions.md). omitted → seeded from DEFAULT_PROMPT_CONFIG.
+  // exactOptionalPropertyTypes (docs/architecture/conventions.md). omitted → seeded from DEFAULT_PROMPT_CONFIG.
   config?: PromptConfig | undefined;
 }
 
@@ -38,7 +38,7 @@ export interface UpdatePresetParams {
   username: string;
   presetId: string;
   // identity edits (name/kind) are always in place — they're not provenance. `| undefined` for the
-  // exactOptionalPropertyTypes ↔ zod-optional spread (docs/conventions.md).
+  // exactOptionalPropertyTypes ↔ zod-optional spread (docs/architecture/conventions.md).
   name?: string | undefined;
   kind?: string | undefined;
   // copy-on-write: in place if the current version is unpinned, else fork.

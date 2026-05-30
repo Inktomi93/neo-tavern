@@ -140,7 +140,7 @@ auto-maintains. The one footgun: a bare bulk `DELETE FROM` (emptying a vector ta
 index → next insert fails — so a full wipe goes through **`clearVectorTable`** (`db/vector-ops.ts`,
 drop→delete→recreate), recover a poisoned DB with **`pnpm db:reindex`**, and a missing index self-heals
 at boot (`assertVectorIndexes`). So **incremental re-embed = targeted DELETE + re-INSERT** (just like
-card-curator's ChromaDB delete-and-readd). See `docs/conventions.md`.
+card-curator's ChromaDB delete-and-readd). See `docs/architecture/conventions.md`.
 
 **Card embed text** = card-curator `EMBED_FIELDS` (`config.py:63`): name, tags, description,
 personality, scenario, first_mes (+ optional alternate_greetings); **excludes** mes_example /
@@ -161,7 +161,7 @@ needs a real column.
 
 The CLI (`scripts/import-st.ts`) is the bulk-migration path; the import *domain*
 (`domain/import` — `parseCardPng`/`parseChatJsonl`/`collectBundlesFromDir`/`importCharacter`) is the
-reusable core. **`IMPORT_SKIP_CHARACTERS` is now a runtime AppSetting** (`docs/settings-audit.md`),
+reusable core. **`IMPORT_SKIP_CHARACTERS` is now a runtime AppSetting** (`docs/subsystems/settings.md`),
 not just env — the CLI reads it via `getAppConfig().importSkipCharacters` (after `reloadAppConfig`),
 so an admin's stored skip-list applies to imports without redeploying.
 

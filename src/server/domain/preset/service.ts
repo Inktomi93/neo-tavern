@@ -1,5 +1,5 @@
 // Preset CRUD over the presets / preset_versions triad — copy-on-write, mirroring the character
-// versioning in domain/import (the reference implementation cited in docs/data-model.md). Editing
+// versioning in domain/import (the reference implementation cited in docs/architecture/data-model.md). Editing
 // the current version's CONFIG mutates it in place when no chat/message pins it, else forks a new
 // version + repoints currentVersionId — so messages.presetVersionId stays immutable provenance.
 // Identity edits (name/kind) are always in place. Owner-scoped in this layer (every read/write

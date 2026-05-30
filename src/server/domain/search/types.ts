@@ -136,7 +136,7 @@ export interface SearchService {
   }): Promise<DiscoverCharacter[]>;
 
   /**
-   * Cross-chat corpus search over the structured DIGEST substrate (docs/memory.md §4): the same
+   * Cross-chat corpus search over the structured DIGEST substrate (docs/subsystems/chat-memory.md §4): the same
    * within-chat memory digests, queried GLOBALLY but SCOPED to the owner. A USER-facing search tool
    * — distinct from in-character memory injection, which never crosses chats. Hits carry the canon
    * seq span for verbatim click-through.

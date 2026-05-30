@@ -8,7 +8,7 @@ import type { SessionsService } from "./domain/sessions";
 import { env } from "./env";
 import { getLog } from "./observability/logger";
 
-// OIDC server routes (docs/auth-and-credentials-plan.md §10) — the app as a confidential authentik
+// OIDC server routes (docs/auth/auth-and-credentials-plan.md §10) — the app as a confidential authentik
 // OIDC client (BFF). Origin-flexible: redirect_uri is DERIVED from the request origin + validated
 // against an allowlist (so login works via the domain OR a LAN HTTPS host), NEVER reflected blindly
 // (the open-redirect / CVE-2024-52289 class). The session rides in an HttpOnly/Secure/SameSite=Lax

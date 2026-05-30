@@ -6,7 +6,7 @@
 // importedFrom) and writes rows. The jobs-layer runner (pnpm import:st) does the file
 // walking + hashing + parsing and drives this through the front door.
 //
-// Idempotency (locked, see docs/data-model.md + corpus-import.md):
+// Idempotency (locked, see docs/architecture/data-model.md + corpus-import.md):
 //   • character: matched by (ownerId, handle). Same importHash ⇒ no-op. Different ⇒ a new
 //     character_versions row (copy-on-write: existing chats stay pinned to their old
 //     version), currentVersionId advances.

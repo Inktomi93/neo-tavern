@@ -99,7 +99,7 @@ describe("debug service", () => {
 
     // Read counts through a Map — string-literal .get() args dodge BOTH the index-signature
     // dot/bracket conflict (tsc) and useNamingConvention on snake_case keys (Biome). See
-    // docs/conventions.md.
+    // docs/architecture/conventions.md.
     const empty = new Map(Object.entries((await svc.stats()).tables));
     expect(empty.get("chats")).toBe(0);
     expect(empty.get("messages")).toBe(0);

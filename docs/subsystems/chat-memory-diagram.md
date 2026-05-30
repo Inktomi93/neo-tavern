@@ -1,6 +1,6 @@
 # The neo-tavern memory system — a visual guide
 
-> A show-and-tell companion to the design record in **`docs/memory.md`**. This file is all
+> A show-and-tell companion to the design record in **`docs/subsystems/chat-memory.md`**. This file is all
 > pictures + plain language: hand it to someone and they should be able to *see* how the whole
 > thing works without reading a line of code. Every diagram is colour-coded to one legend (below).
 
@@ -365,6 +365,6 @@ truth — they're just additional lenses over the same append-only log.
 mixB / mixC / tiered) · `fanOut` (4) · `maxTier` (3) · `retrieveK` (4) · `rerankTo` (3) ·
 `minScore` (0.25) · `keywordMatch` · `summarizer` (local-first Qwen-4B → hosted Haiku fallback).
 
-*Defaults re-derived from the real corpus for the 32k window (`docs/memory.md` §9). All three vector
+*Defaults re-derived from the real corpus for the 32k window (`docs/subsystems/chat-memory.md` §9). All three vector
 tables — `character_embeddings`, `chat_digests`, `chat_segments` — are owner-keyed + FK'd. Schema:
 `src/db/schema.ts`.*

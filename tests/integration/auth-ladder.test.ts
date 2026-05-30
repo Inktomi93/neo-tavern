@@ -1,7 +1,7 @@
 import { expect } from "vitest";
 import { ANONYMOUS_AUTH, authFor, callerFor, test } from "../support/fixtures";
 
-// The tRPC procedure ladder (docs/auth-and-credentials-plan.md §3) exercised through the REAL router
+// The tRPC procedure ladder (docs/auth/auth-and-credentials-plan.md §3) exercised through the REAL router
 // + middleware — each gate proven to fire AND to be correctly scoped (not blanket). The callers state
 // the auth they act under explicitly (no synthesized identity), so these aren't vacuous passes.
 

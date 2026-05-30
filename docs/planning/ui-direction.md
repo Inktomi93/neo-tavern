@@ -53,7 +53,7 @@ built (fork/convert/seed/variants):
 Tailwind v4 + shadcn/radix ✓ · lucide icons · **sonner** toasts + a **centralized dialog store**
 (Marinara's `dialog.store` — port it) · **Zustand** for chat/ui state · in-house markdown ·
 **@dnd-kit** for preset reorder · **@tanstack/react-virtual** for long lists. Install per-feature as it
-lands (knip flags dead deps) — see `docs/dependencies.md`.
+lands (knip flags dead deps) — see `docs/architecture/dependencies.md`.
 
 ## Slicing — already ours, and ENFORCED
 Astra `packages/{ui-kit, core, features/<f>+index, st-surfaces, app/{desktop,mobile}}` ≈ our
@@ -94,7 +94,7 @@ The owner's `SillyTavern-CardRefinery` (cloned to `references/card-refinery`) �
 Analyze** pipeline — drops in later as two sealed, additive slices: `client/features/refinery/` +
 `server/domain/refinery/`. Zero churn to chat/corpus (feature isolation). The schema already has its
 landing spot: `character_versions.refineryScore`/`refineryAnalysis` + copy-on-write versioning ("the
-refinery mints versions while preserving history" — `docs/data-model.md`). It's TypeScript +
+refinery mints versions while preserving history" — `docs/architecture/data-model.md`). It's TypeScript +
 domain-sliced (`src/domain/{pipeline,character,schema}`), so the **pipeline logic + schema + prompts**
 lift cleanly (the answer-key pattern, like the corpus importer). **Caveat (owner): its state layer is a
 hand-rolled React + Zustand mess with known state issues — do NOT port that.** Lift the `domain/pipeline`
@@ -109,7 +109,7 @@ on after the core chat loop feels right.
 
 ## New-chat flow: client-side draft → commit on first send
 
-Chat creation is **lazy** (see `CLAUDE.md` / `docs/data-model.md`). The "New chat" surface is a
+Chat creation is **lazy** (see `CLAUDE.md` / `docs/architecture/data-model.md`). The "New chat" surface is a
 **client-side draft** — no server row yet:
 
 1. Open the draft for a chosen library character. Pre-fill provider/model, persona, and preset from

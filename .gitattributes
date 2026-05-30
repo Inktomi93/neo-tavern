@@ -25,4 +25,4 @@
 # Generated / lockfiles — collapse in GitHub diffs, exclude from language stats.
 pnpm-lock.yaml              linguist-generated=true
 src/client/routeTree.gen.ts linguist-generated=true
-docs/dependency-graph.mmd   linguist-generated=true
+docs/architecture/dependency-graph.mmd   linguist-generated=true

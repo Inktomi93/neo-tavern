@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 import { deriveRedirectUri, SESSION_COOKIE_NAME, sessionCookieOptions } from "./auth-oidc";
 
 // The security-critical PURE logic of the OIDC routes (the network legs — discovery, code exchange —
-// are exercised by the manual smoke test in docs/auth.md, per tests/AGENTS.md "mock only the provider
+// are exercised by the manual smoke test in docs/auth/auth-deploy.md, per tests/AGENTS.md "mock only the provider
 // boundary; don't build a brittle full-OIDC mock").
 
 describe("deriveRedirectUri — origin-flexible, allowlist-validated (the open-redirect guard, §16)", () => {

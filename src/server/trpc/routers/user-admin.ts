@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { adminProcedure, t } from "../trpc";
 
-// User administration (docs/auth-and-credentials-plan.md §6) — every procedure adminProcedure-gated.
+// User administration (docs/auth/auth-and-credentials-plan.md §6) — every procedure adminProcedure-gated.
 // No UI.
 export const userAdminRouter = t.router({
   listUsers: adminProcedure.query(({ ctx }) =>

@@ -62,7 +62,7 @@ export const imageEmbeddings = sqliteTable(
   ],
 );
 
-// Chat-history MEMORY substrate — the structured per-N-turn "digest" (docs/memory.md). ONE substrate,
+// Chat-history MEMORY substrate — the structured per-N-turn "digest" (docs/subsystems/chat-memory.md). ONE substrate,
 // two scopes: (1) within-chat memory injection (per-chat exact in-process cosine — never the global
 // ANN); (2) cross-chat, per-user corpus search (the hand-added `chat_digests_ann` index). Derived,
 // regenerable from canon (messages) — NOT the polymorphic `embeddings` table, so it gets real FKs:
@@ -114,7 +114,7 @@ export const chatDigests = sqliteTable(
   ],
 );
 
-// Chat-history SEGMENT layer — the raw-verbatim half of the hybrid corpus search (docs/memory.md
+// Chat-history SEGMENT layer — the raw-verbatim half of the hybrid corpus search (docs/subsystems/chat-memory.md
 // §4). First-class sibling of `chat_digests`, sharing the SAME per-block boundary (blockIdx /
 // seqStart..seqEnd) so a block's digest (structured) and segment (raw) link 1:1. Where digests are
 // the precision/theme substrate, segments preserve the exact phrasing — "find the moment X said Y".

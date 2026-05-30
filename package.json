@@ -29,7 +29,7 @@
     "test:watch": "vitest",
     "knip": "knip",
     "arch": "depcruise src --config .dependency-cruiser.cjs",
-    "arch:graph": "depcruise src --include-only ^src --output-type mermaid --config .dependency-cruiser.cjs --output-to docs/dependency-graph.mmd",
+    "arch:graph": "depcruise src --include-only ^src --output-type mermaid --config .dependency-cruiser.cjs --output-to docs/architecture/dependency-graph.mmd",
     "verify:claude": "tsx scripts/probes/verify-claude.ts",
     "verify:auth": "tsx scripts/verify-auth.ts",
     "sdk:play": "tsx scripts/probes/sdk-playground.ts",

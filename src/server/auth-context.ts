@@ -22,7 +22,7 @@ export interface AuthResolver {
  * AUTH_MODE/fallback (env is parsed once at import, so it can't be varied per-test) — production omits
  * it and gets the live `authConfigFromEnv()`.
  *
- * The resolution mirrors the documented policy (docs/auth-and-credentials-plan.md §2/§3):
+ * The resolution mirrors the documented policy (docs/auth/auth-and-credentials-plan.md §2/§3):
  *   • no identity (deny, or owner-fallback refused on a public origin) → null → authedProcedure 401s.
  *   • owner fallback (raw-LAN path) → the admin owner, NO db touch + NO enabled gate (the owner is the
  *     owner by definition, not a revocable user).

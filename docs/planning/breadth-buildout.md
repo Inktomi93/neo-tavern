@@ -262,7 +262,7 @@ the wrong tool — for three reasons, the first two **measured on the live DB (2
 5. **Similarity graph + similar-cards** — S (lower-threshold sweep).
 6. **Themes** (schema incl. `msgMidAt`, `scripts/compute-themes.ts` k-means, naming, endpoints) — M; requires `pnpm memory:backfill` first.
 7. **Tag auto-suggest, forgotten gems, card-comparison** — stretch.
-Each step = precompute script → rollup table → tRPC → (later) UI; independently shippable. Endpoints are ready before the UI (`docs/ui-direction.md` Corpus/Analytics panel). Total: pillars+core breadth ~3–4 wk; stretch +1–2 wk.
+Each step = precompute script → rollup table → tRPC → (later) UI; independently shippable. Endpoints are ready before the UI (`docs/planning/ui-direction.md` Corpus/Analytics panel). Total: pillars+core breadth ~3–4 wk; stretch +1–2 wk.
 
 ## B.9 Risks / open questions
 Keyword normalization depth (cheap regex vs embed-merge). Chat-centroid validity for short chats (filter >20 msgs). Keyword data quality (filter hub tokens). Choosing k (elbow/silhouette, expose `--k`). Theme-naming quality depends on `topicAnchor` distinctiveness (it's well-prompted in `memory/constants.ts TIER0_SYSTEM`). The `msgMidAt` gap (B.4) is the one real schema add.

@@ -2,8 +2,8 @@
 
 **This supersedes the original design doc.** It records what we **built**, what we **measured on the
 real corpus**, and the **refinements + migrations** that turn it into something usable. It is the
-authoritative spec; read alongside `src/server/domain/chat/memory.ts`, `docs/data-model.md`,
-`docs/memory-diagram.md` (the visual companion), and `docs/sdk-notes.md`.
+authoritative spec; read alongside `src/server/domain/chat/memory.ts`, `docs/architecture/data-model.md`,
+`docs/subsystems/chat-memory-diagram.md` (the visual companion), and `docs/subsystems/sdk-notes.md`.
 
 > **One-line status:** the substrate (structured digests, tiering, hybrid corpus, CSLS) is **built and
 > green**. This plan corrects the *retrieval model* (it's flat query-driven RAG, not a tiered

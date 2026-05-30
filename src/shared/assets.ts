@@ -1,6 +1,6 @@
 // Asset addressing — shared across the client/server boundary. An asset is identified by the
 // sha-256 hex of its bytes (the CAS key); the app emits `/blob/<hash>` URLs that caddy rewrites
-// to the sharded on-disk path (docs/assets.md). Pure string helpers — no I/O, no node deps.
+// to the sharded on-disk path (docs/subsystems/assets.md). Pure string helpers — no I/O, no node deps.
 
 /** The route prefix the client requests and caddy serves (file_server rooted at ASSETS_DIR). */
 export const BLOB_ROUTE = "/blob";

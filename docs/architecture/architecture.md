@@ -153,7 +153,7 @@ Commands:
 
 - **`pnpm arch`** — validates all of the above. Runs inside `pnpm check` and the
   pre-commit hook.
-- **`pnpm arch:graph`** — regenerates the live module graph to `docs/dependency-graph.mmd`.
+- **`pnpm arch:graph`** — regenerates the live module graph to `docs/architecture/dependency-graph.mmd`.
 - Dead code is owned by **`pnpm knip`** (dependency-cruiser's orphan check is a
   secondary warning).
 

@@ -21,7 +21,7 @@ pnpm build    # vite build → dist/client
 pnpm start    # NODE_ENV=production: Hono serves dist/client + /api on PORT (default 8788)
 pnpm check    # the green-to-ship gate: biome + tsc + arch + vitest
 pnpm arch     # validate the layer cake / dependency direction (also inside check)
-pnpm arch:graph  # regenerate docs/dependency-graph.mmd
+pnpm arch:graph  # regenerate docs/architecture/dependency-graph.mmd
 pnpm knip     # dead-code / unused-dependency scan (not part of `check`)
 ```
 
@@ -49,12 +49,12 @@ pnpm discover:probe [--rerank] # validate `discover` ("who have I done X with") 
 - **GPU is self-contained:** `embed:corpus:gpu` auto-bootstraps a project-local uv venv
   (`tools/cuda/`, gitignored) with the CUDA-12 runtime — no system CUDA install. Model
   weights cache to repo-local `.models/` (gitignored). Both are pinned via env
-  (`EMBED_DEVICE`, `EMBED_DTYPE`, `MODEL_CACHE_DIR`). See `docs/corpus-import.md`.
+  (`EMBED_DEVICE`, `EMBED_DTYPE`, `MODEL_CACHE_DIR`). See `docs/subsystems/corpus-import.md`.
 - Staging the corpus (root-owned ST docker volume): `docker cp sillytavern:/home/node/app/
   data/<profile> corpus-staging/<profile>` (gitignored; the `tests/fixtures/` subset is committed).
 
 The folder structure and dependency direction are a machine-enforced **layer
-cake** — see [docs/architecture.md](docs/architecture.md). `pnpm arch`
+cake** — see [docs/architecture/architecture.md](docs/architecture/architecture.md). `pnpm arch`
 (dependency-cruiser) fails the build if anything imports upward or sideways
 across a layer boundary.
 
@@ -153,11 +153,11 @@ exposed via the tRPC `models` query. Raw-mode models are the **live OpenRouter c
 ## Status
 
 Not narrated here (it rots). Current state = the **git log** + the **code** (`src/db/schema.ts` +
-migrations are the truth) + the **deferred backlog in `docs/build-plan.md`**. Short version: rails +
+migrations are the truth) + the **deferred backlog in `docs/planning/build-plan.md`**. Short version: rails +
 the corpus RAG product + the chat *backend* (prompt assembly, the 4 provider modes, swipes/edits/fork)
 are built and green; the chat *frontend* is the main thing left.
 
 Deferred **dependencies** (what to add, when, and the exact command) live in
-[docs/dependencies.md](docs/dependencies.md) — `package.json` can't hold comments,
+[docs/architecture/dependencies.md](docs/architecture/dependencies.md) — `package.json` can't hold comments,
 so that's the parking lot. Domain reference repos (SillyTavern, Astra, Marinara)
 clone into a gitignored `references/` — see [references/README.md](references/README.md).

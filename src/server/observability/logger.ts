@@ -6,7 +6,7 @@ import { env } from "../env";
 
 // In-process observability: structured pino logs that ALSO land in bounded ring
 // buffers, so the /api/_debug API can serve "everything" over HTTP — no tailing.
-// Doctrine (docs/observability.md): logs are METADATA; RP content lives in the DB.
+// Doctrine (docs/subsystems/observability.md): logs are METADATA; RP content lives in the DB.
 
 const LOG_RING_CAPACITY = 2000;
 const REQUEST_RING_CAPACITY = 500;

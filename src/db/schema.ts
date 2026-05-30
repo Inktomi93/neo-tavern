@@ -1,5 +1,5 @@
-// Drizzle schema — the v1 spec from docs/data-model.md, machine-of-record.
-// Layer rule (docs/architecture.md): `db` imports only `shared` + externals; never
+// Drizzle schema — the v1 spec from docs/architecture/data-model.md, machine-of-record.
+// Layer rule (docs/architecture/architecture.md): `db` imports only `shared` + externals; never
 // `server`/`client`. Column names are explicit snake_case (no `casing` inference —
 // drizzle's casing has live bugs; explicit is deterministic).
 

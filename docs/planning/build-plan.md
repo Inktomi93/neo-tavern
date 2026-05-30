@@ -54,7 +54,7 @@ only ✅-tracking in the repo; keep it one line.
   swipe UI (`← 3/5 →` over `message_variants`), a provider/model picker (wiring `setProvider` +
   the `models`/`rawModels` queries), the context-fill meter (`contextWindow` is captured per
   turn), list virtualization (`@tanstack/react-virtual`) for long chats / the 400+ char library.
-  Also the app shell: the `Chat | Corpus | Characters` nav rail (`docs/ui-direction.md`).
+  Also the app shell: the `Chat | Corpus | Characters` nav rail (`docs/planning/ui-direction.md`).
 - **#43 — preset CRUD service ✅ DONE; prompt-manager editor (frontend) remaining**: `domain/preset`
   copy-on-write over the `presets`/`preset_versions` triad is BUILT — create/list/get/update/delete +
   the tRPC `preset.*` router; editing config mutates an unpinned version in place, forks `v=max+1` +
@@ -84,12 +84,12 @@ only ✅-tracking in the repo; keep it one line.
   content-addressed asset store (`storage/cas.ts` + `domain/assets`: store/backfill/GC/fsck; avatars
   wired on import + `pnpm assets:backfill`) and the `image_embeddings` table (migration 0016,
   SigLIP-2 so400m **1152-dim**, its own `libsql_vector_idx` — NOT the 1024-dim text space). The
-  visual **embed pass** (embed FROM the blob by hash) is the remaining follow-up. See `docs/assets.md`.
+  visual **embed pass** (embed FROM the blob by hash) is the remaining follow-up. See `docs/subsystems/assets.md`.
 - **#49 — import/fork write atomicity (LOW priority, deferred):** `importCharacter` writes a deep FK
   graph (version→book→entries→junction→character→chats→messages) that is NOT under `withChatLock` and
   has NO compensating rollback, so a crash mid-import can leave partial rows. Tolerable today: rare,
   single-user, largely re-runnable (handle + `importHash` dedup heals most re-runs). **Do NOT "fix"
-  with `db.transaction()`** — it's banned (`:memory:` trap, `docs/conventions.md`; opens a fresh
+  with `db.transaction()`** — it's banned (`:memory:` trap, `docs/architecture/conventions.md`; opens a fresh
   empty connection → breaks every in-memory test). The `:memory:`-safe path is **`db.batch()`**
   (libSQL atomic, same-connection) — currently 0 uses, so it needs a `:memory:` validation first.
   The chat turn is already atomic via `withChatLock` + compensating rollback (`send.ts`); this is
@@ -118,7 +118,7 @@ only ✅-tracking in the repo; keep it one line.
   - **POV via preset-variables, NOT hardcoded buttons:** the cleanest POV mechanism is Marinara's
     `ChoiceBlock` pattern — a preset defines named variables (`{{POV}}`, tense, …) with a
     question + options, user picks per chat, injected via the macro engine. This unifies POV +
-    the macro `variables` gap in one feature on our `PromptConfig`. See `docs/marinara-reference.md`
+    the macro `variables` gap in one feature on our `PromptConfig`. See `docs/reference/marinara-reference.md`
     (her engine = her ST preset productized) for the full pattern + `file:line` refs.
 - **#51 — config/settings standardization (typed · migrateable · cleanable):** unify the typed-blob
   config tiers so the migration pattern is one thing you can't half-implement or forget. Today the
@@ -157,8 +157,8 @@ procedure ladder (public→authed+CSRF→admin); revocable server-side **`sessio
 **HttpOnly/Secure/SameSite=Lax cookie (BFF)** with a custom-header CSRF mitigation (NOT bearer tokens —
 that early framing was superseded); encrypted per-user credentials (BYO OpenRouter key) gated by one
 turn-time **credential resolver**; OIDC routes (openid-client v6). The *why* is
-**`docs/auth-and-credentials-plan.md`**; deploy recipe **`docs/auth.md`**; verification runbook
-**`docs/auth-verify.md`** (`pnpm verify:auth`). Remaining auth-adjacent work: the **frontend** (login
+**`docs/auth/auth-and-credentials-plan.md`**; deploy recipe **`docs/auth/auth-deploy.md`**; verification runbook
+**`docs/auth/auth-verify.md`** (`pnpm verify:auth`). Remaining auth-adjacent work: the **frontend** (login
 UI, key-entry, user-admin screens) — see the client UI workstream.
 
 **Untracked sub-items (fold into the issues above when they land):**
@@ -166,7 +166,7 @@ UI, key-entry, user-admin screens) — see the client UI workstream.
   system-prompt/world-info — not ST's 47 fields) + a World Info editor (`always` vs `keyword`). (≈ #45.)
 - Alternate greetings → `message_variants` on import (importer write side; uses the swipe machinery).
 - Analytics (Phase 6): `domain` queries + `features` charts (`recharts`), one chart at a time.
-- Install per-feature deps as they land (knip flags dead deps) — see `docs/dependencies.md`.
+- Install per-feature deps as they land (knip flags dead deps) — see `docs/architecture/dependencies.md`.
 
 ## Why chat before the corpus (which is also the product)
 

@@ -2,7 +2,7 @@ import { z } from "zod";
 
 // The DB-backed, admin-editable runtime-config OVERRIDE contract. Only the handful of `env.ts` knobs
 // that are genuine runtime operational toggles (non-secret, non-bootstrap, non-GPU-box) live here —
-// the rest stay env (see docs/settings-audit.md "server-config triage" for the boundary). Every field
+// the rest stay env (see docs/subsystems/settings.md "server-config triage" for the boundary). Every field
 // is OPTIONAL: absence means "no override → use the env default" (env is the floor). The server-side
 // resolver (server/config/app-config.ts) layers a stored override over env-derived defaults; this
 // shared module is platform-agnostic and deliberately does NOT import env.

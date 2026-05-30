@@ -33,7 +33,7 @@ export const generationParamsSchema = z.object({
   logitBias: z.record(z.string(), z.number()).optional(),
   stop: z.array(z.string()).optional(),
   // Reply ceiling — BOTH runners (agent-sdk: CLAUDE_CODE_MAX_OUTPUT_TOKENS; openrouter: the request
-  // field). Don't set absurdly low (64 errored to empty on agent-sdk — docs/sdk-notes.md).
+  // field). Don't set absurdly low (64 errored to empty on agent-sdk — docs/subsystems/sdk-notes.md).
   maxOutputTokens: z.number().int().positive().optional(),
   // Reasoning — BOTH runners (different mechanisms). `thinking` is the on/off toggle: "off" disables,
   // "adaptive" lets the model decide depth (guided by `effort`). `thinkingBudgetTokens`, when set,
@@ -61,7 +61,7 @@ export const generationParamsSchema = z.object({
       instructions: z.string().optional(),
     })
     .optional(),
-  // Memory — within-chat structured-digest recall (docs/memory.md). Runner-AGNOSTIC: fills the
+  // Memory — within-chat structured-digest recall (docs/subsystems/chat-memory.md). Runner-AGNOSTIC: fills the
   // {{memory}} marker in the DYNAMIC (cache-safe) half, so it works in every mode and coexists with
   // compaction (orthogonal — memory reaches back past the window compaction drops). When `enabled`,
   // domain/chat digests OLDER messages (per `blockSize`-message blocks, once aged below

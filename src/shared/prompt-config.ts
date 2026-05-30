@@ -6,12 +6,12 @@ import { regexScriptSchema } from "./regex";
 // `preset_versions.config` (migration 0007). It is ONE immutable snapshot per version
 // (copy-on-write), which is why it lives as a blob, not normalized section rows: a message's
 // `presetVersionId` must point at exactly the structure that produced it, and mutating a
-// shared section row would silently rewrite past provenance. See docs/data-model.md.
+// shared section row would silently rewrite past provenance. See docs/architecture/data-model.md.
 //
 // A prompt is an ORDERED list of sections (order = array index, the draggable order in the
 // UI — no separate sectionOrder field to desync). At assembly time the sections before the
 // single optional `boundary` become the STATIC (cache-stable) system prompt; everything after
-// becomes the DYNAMIC suffix (re-evaluated per turn, cache-safe — see docs/sdk-notes.md).
+// becomes the DYNAMIC suffix (re-evaluated per turn, cache-safe — see docs/subsystems/sdk-notes.md).
 
 export const PROMPT_ROLES = ["system", "user", "assistant"] as const;
 export type PromptRole = (typeof PROMPT_ROLES)[number];

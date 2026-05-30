@@ -2,7 +2,7 @@
 // avatar references on character_versions / personas. The blob is content (storage/cas.ts); the row
 // is metadata; this is where they're kept coherent. No ownerId — assets are global + deduped by hash
 // (identical art across users is one blob). GC is mark-sweep over the avatar refs (no refcount
-// column to drift). See docs/data-model.md + docs/assets.md.
+// column to drift). See docs/architecture/data-model.md + docs/subsystems/assets.md.
 
 import { stat } from "node:fs/promises";
 import { and, eq, inArray, isNotNull, or } from "drizzle-orm";
