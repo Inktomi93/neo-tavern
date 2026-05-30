@@ -5,6 +5,7 @@ import { ChatNotFoundError, createChatService } from "../../src/server/domain/ch
 import type { ChatTurnParams } from "../../src/server/providers/claude-sdk";
 import type { RawTurnParams } from "../../src/server/providers/openrouter";
 import { type ChatTurnResult, TurnError } from "../../src/server/providers/turn";
+import { castId, type MessageId } from "../../src/shared/ids";
 import { freshDb, seedCharacter, seedChatRow } from "../support/db";
 
 function cannedTurn(reply: string): ChatTurnResult {
@@ -509,7 +510,8 @@ test("selectVariant flips back to an earlier swipe without regenerating", async 
   await chat.swipe({ username: "owner", chatId, expectedSeq: 2 }); // now 2 variants, idx 1 active
   const callsAfterSwipe = calls.length;
 
-  const tipId = (await chat.listMessages({ username: "owner", chatId })).at(-1)?.id ?? "";
+  const tipId =
+    (await chat.listMessages({ username: "owner", chatId })).at(-1)?.id ?? castId<MessageId>("");
   const msgs = await chat.selectVariant({
     username: "owner",
     chatId,
@@ -550,7 +552,8 @@ test("editMessage updates content + editedAt in place, no model call", async () 
 
   const { chatId } = await seedChatRow(db);
   await chat.send({ username: "owner", chatId, expectedSeq: 0, content: "hello" });
-  const userMsgId = (await chat.listMessages({ username: "owner", chatId }))[0]?.id ?? "";
+  const userMsgId =
+    (await chat.listMessages({ username: "owner", chatId }))[0]?.id ?? castId<MessageId>("");
 
   const msgs = await chat.editMessage({
     username: "owner",

@@ -3,6 +3,12 @@ import { createDb, type Db, runMigrations } from "../../src/db/client";
 import { characters, characterVersions, chats, messages, users } from "../../src/db/schema";
 import { env } from "../../src/server/env";
 import type { ChatApi, ChatSource } from "../../src/shared/chat-routing";
+import {
+  type CharacterId,
+  type CharacterVersionId,
+  type ChatId,
+  castId,
+} from "../../src/shared/ids";
 
 // Fresh in-memory libSQL with migrations applied. Per tests/AGENTS.md: call per test
 // (not a shared singleton) so each test gets an isolated database.
@@ -28,7 +34,7 @@ export async function seedCharacter(
     tags?: string[];
     greetings?: string[];
   },
-): Promise<{ characterId: string; ownerId: string; characterVersionId: string }> {
+): Promise<{ characterId: CharacterId; ownerId: string; characterVersionId: CharacterVersionId }> {
   const now = Date.now();
   const cvId = `${opts.id}-v1`;
   // Mirror ensureUser's one access decision so the seeded owner is REALISTIC: the DEFAULT_USER_HANDLE
@@ -57,7 +63,11 @@ export async function seedCharacter(
     createdAt: now,
   });
   await db.update(characters).set({ currentVersionId: cvId }).where(eq(characters.id, opts.id));
-  return { characterId: opts.id, ownerId: opts.ownerId, characterVersionId: cvId };
+  return {
+    characterId: castId<CharacterId>(opts.id),
+    ownerId: opts.ownerId,
+    characterVersionId: castId<CharacterVersionId>(cvId),
+  };
 }
 
 let chatSeedCounter = 0;
@@ -82,7 +92,7 @@ export async function seedChatRow(
     // greeting, user hasn't replied" state, for swipe/edit tests. Mirrors lifecycle's seedGreeting.
     greeting?: string;
   } = {},
-): Promise<{ chatId: string; characterVersionId: string; ownerId: string }> {
+): Promise<{ chatId: ChatId; characterVersionId: CharacterVersionId; ownerId: string }> {
   const ownerId = opts.ownerId ?? "owner";
   const n = chatSeedCounter++;
   const api = opts.api ?? "agent-sdk";
@@ -93,7 +103,7 @@ export async function seedChatRow(
     description: opts.description ?? "a test character",
     greetings: opts.greeting ? [opts.greeting] : [],
   });
-  const chatId = `seedchat-${n}`;
+  const chatId = castId<ChatId>(`seedchat-${n}`);
   const now = Date.now();
   await db.insert(chats).values({
     id: chatId,
@@ -122,4 +132,5 @@ export async function seedChatRow(
     await db.update(chats).set({ messageCount: 1 }).where(eq(chats.id, chatId));
   }
   return { chatId, characterVersionId, ownerId };
+  // chatId/characterVersionId are branded (castId above) so callers get typed ids for free.
 }

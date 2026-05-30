@@ -12,8 +12,13 @@ import {
   presetVersions,
   users,
 } from "../../../db/schema";
+import { type ChatId, castId, type MessageId } from "../../../shared/ids";
 import type { ChatTurnResult } from "../../providers/turn";
 import { createChatService } from "./service";
+
+const CH1 = castId<ChatId>("ch1");
+const CH2 = castId<ChatId>("ch2");
+const M2 = castId<MessageId>("m2");
 
 // Swipe persistence/provenance, with an INJECTED fake runner (no real model — tests/AGENTS.md:
 // mock only the provider boundary; the DB is real in-memory libSQL).
@@ -106,7 +111,7 @@ describe("swipe provenance", () => {
     const svc = createChatService(db, { runTurn: async () => fakeTurn() });
     await seed();
 
-    const result = await svc.swipe({ username: "u1", chatId: "ch1", expectedSeq: 2 });
+    const result = await svc.swipe({ username: "u1", chatId: CH1, expectedSeq: 2 });
     expect(result.status).toBe("ok");
 
     // The message row now describes the ACTIVE (new) variant in content AND provenance.
@@ -139,9 +144,9 @@ describe("swipe provenance", () => {
   test("selectVariant reverts the row's tokens/model to match the chosen variant", async () => {
     const svc = createChatService(db, { runTurn: async () => fakeTurn() });
     await seed();
-    await svc.swipe({ username: "u1", chatId: "ch1", expectedSeq: 2 });
+    await svc.swipe({ username: "u1", chatId: CH1, expectedSeq: 2 });
 
-    await svc.selectVariant({ username: "u1", chatId: "ch1", messageId: "m2", variantIdx: 0 });
+    await svc.selectVariant({ username: "u1", chatId: CH1, messageId: M2, variantIdx: 0 });
 
     const tip = (await db.select().from(messages).where(eq(messages.id, "m2")))[0];
     expect(tip?.content).toBe("first gen");
@@ -168,7 +173,7 @@ describe("swipe provenance", () => {
     const svc = createChatService(db, { runTurn: async () => turnWithEvent });
     await seed();
 
-    await svc.swipe({ username: "u1", chatId: "ch1", expectedSeq: 2 });
+    await svc.swipe({ username: "u1", chatId: CH1, expectedSeq: 2 });
 
     const events = await db.select().from(chatEvents).where(eq(chatEvents.chatId, "ch1"));
     expect(events).toHaveLength(1);
@@ -204,7 +209,7 @@ describe("manual compaction", () => {
     });
     await seed(); // ch1 is agent-sdk with sessionId "sess-1"
 
-    const result = await svc.compact({ username: "u1", chatId: "ch1" });
+    const result = await svc.compact({ username: "u1", chatId: CH1 });
 
     expect(result.compacted).toBe(true);
     expect(sawPrompt.startsWith("/compact ")).toBe(true); // steered compaction prompt
@@ -253,7 +258,7 @@ describe("manual compaction", () => {
 
     const result = await svc.send({
       username: "u1",
-      chatId: "ch1",
+      chatId: CH1,
       expectedSeq: 2,
       content: "hello",
     });
@@ -289,7 +294,7 @@ describe("manual compaction", () => {
       updatedAt: Date.now(),
     }); // no sessionId
 
-    expect(await svc.compact({ username: "u1", chatId: "ch2" })).toEqual({ compacted: false });
+    expect(await svc.compact({ username: "u1", chatId: CH2 })).toEqual({ compacted: false });
   });
 });
 
@@ -358,7 +363,7 @@ describe("cross-mode compaction pickup (openrouter)", () => {
 
     const result = await svc.send({
       username: "u1",
-      chatId: "ch1",
+      chatId: CH1,
       expectedSeq: 4,
       content: "now-5",
     });

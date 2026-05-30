@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, gt, lt, sql } from "drizzle-orm";
 import type { Db } from "../../../../db/client";
 import { chatEvents, chats, messages, sessionEntries } from "../../../../db/schema";
+import { type ChatId, castId, type MessageId } from "../../../../shared/ids";
 import type { TurnEvent } from "../../../providers/turn";
 import { newId } from "../../_shared/ids";
 import { ChatNotFoundError, ChatOperationError, type MessageView } from "../types";
@@ -23,7 +24,7 @@ export function frameContentToText(content: unknown): string {
 
 export function toView(row: typeof messages.$inferSelect, variantCount: number): MessageView {
   return {
-    id: row.id,
+    id: castId<MessageId>(row.id),
     seq: row.seq,
     role: row.role,
     content: row.content,
@@ -69,7 +70,7 @@ export async function loadOwnedChat(
   const rows = await query.execute({ chatId, ownerId });
   const chat = rows[0];
   if (!chat) {
-    throw new ChatNotFoundError(chatId);
+    throw new ChatNotFoundError(castId<ChatId>(chatId));
   }
   return chat;
 }

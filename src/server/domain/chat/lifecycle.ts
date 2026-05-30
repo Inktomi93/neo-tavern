@@ -9,6 +9,7 @@ import {
   personas,
   presets,
 } from "../../../db/schema";
+import type { ChatId } from "../../../shared/ids";
 import { assemblePrompt } from "../../../shared/prompt-assemble";
 import { getLog } from "../../observability/logger";
 import { TurnError } from "../../providers/turn";
@@ -178,7 +179,7 @@ export function createLifecycle(
       params.personaId ?? settings.defaultPersonaId ?? null,
     );
 
-    const chatId = params.chatId ?? newId();
+    const chatId = params.chatId ?? newId<ChatId>();
     const now = Date.now();
     const title = (params.title ?? version.name).trim() || version.name;
 

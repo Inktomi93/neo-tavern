@@ -2,9 +2,12 @@ import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, test } from "vitest";
 import { createDb, type Db, runMigrations } from "../../../db/client";
 import { characters, characterVersions, chats, messages, users } from "../../../db/schema";
+import { type ChatId, castId } from "../../../shared/ids";
 import { estimateTokens } from "../../../shared/tokens";
 import { createChatService } from "./service";
 import { ChatNotFoundError } from "./types";
+
+const CH1 = castId<ChatId>("ch1");
 
 // Read paths (listChats / getChat / enriched listMessages) need no provider — direct row inserts
 // set up state, then assert through the service's public API. In-memory libSQL per tests/AGENTS.md.
@@ -96,7 +99,7 @@ describe("chat read paths", () => {
       updatedAt: 10,
     });
 
-    const detail = await svc.getChat({ username: "u1", chatId: "ch1" });
+    const detail = await svc.getChat({ username: "u1", chatId: CH1 });
     expect(detail.title).toBe("mine");
     expect(detail.characterName).toBe("Probe");
     expect(detail.characterId).toBe("c1");
@@ -104,7 +107,7 @@ describe("chat read paths", () => {
     expect(detail.hasSession).toBe(true);
 
     // ensureUser("u2") makes u2 a real user, so this is "exists-but-not-yours" → NOT_FOUND, not a leak.
-    await expect(svc.getChat({ username: "u2", chatId: "ch1" })).rejects.toBeInstanceOf(
+    await expect(svc.getChat({ username: "u2", chatId: CH1 })).rejects.toBeInstanceOf(
       ChatNotFoundError,
     );
   });
@@ -135,7 +138,7 @@ describe("chat read paths", () => {
       createdAt: 10,
     });
 
-    const [msg] = await svc.listMessages({ username: "u1", chatId: "ch1" });
+    const [msg] = await svc.listMessages({ username: "u1", chatId: CH1 });
 
     expect(msg?.tokensIn).toBe(200);
     expect(msg?.contextWindow).toBe(200000);
@@ -155,7 +158,7 @@ describe("chat read paths", () => {
       updatedAt: 10,
     });
 
-    const preview = await svc.previewAssembly({ username: "u1", chatId: "ch1" });
+    const preview = await svc.previewAssembly({ username: "u1", chatId: CH1 });
 
     // Defaults: agent-sdk on the sub, the resolver's default model, the default preset.
     expect(preview.routing).toMatchObject({

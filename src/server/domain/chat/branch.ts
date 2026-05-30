@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { and, asc, eq, lte } from "drizzle-orm";
 import { chats, chatWorldEntries, messages, sessionEntries } from "../../../db/schema";
+import type { ChatId } from "../../../shared/ids";
 import { getLog } from "../../observability/logger";
 import { newId } from "../_shared/ids";
 import { withChatLock } from "../_shared/lock";
@@ -22,7 +23,7 @@ export function createBranch(ctx: ChatContext) {
   // fork model): copy messages seq ≤ atSeq + the config pins; the original stays intact. raw-target
   // rebuilds history from the copied canon (no session). sdk-target seeds session_entries from the
   // copied canon via the empirically-validated buildSeedFrames (./seed) so resume works.
-  async function forkChat(params: ForkChatParams): Promise<{ chatId: string }> {
+  async function forkChat(params: ForkChatParams): Promise<{ chatId: ChatId }> {
     const ownerId = await ensureUser(db, params.username);
     const source = await loadOwnedChat(ownerId, params.chatId);
 
@@ -45,7 +46,7 @@ export function createBranch(ctx: ChatContext) {
     }
 
     const now = Date.now();
-    const newChatId = newId();
+    const newChatId = newId<ChatId>();
     // model carries only when api+source are unchanged (same catalog); switching provider resets to
     // the target default (null → resolver default).
     const sameProvider = params.targetApi === source.api && params.targetSource === source.source;

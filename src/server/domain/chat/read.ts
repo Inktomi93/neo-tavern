@@ -1,5 +1,13 @@
 import { and, desc, eq } from "drizzle-orm";
 import { assets, characterVersions, chats } from "../../../db/schema";
+import {
+  type CharacterId,
+  type CharacterVersionId,
+  type ChatId,
+  castId,
+  type PersonaId,
+  type PresetVersionId,
+} from "../../../shared/ids";
 import { assemblePrompt } from "../../../shared/prompt-assemble";
 import { ensureUser } from "../_shared/users";
 import type { ChatContext } from "./context/factory";
@@ -43,7 +51,7 @@ export function createRead(ctx: ChatContext) {
   // biome-ignore lint/suspicious/noExplicitAny: generic drizzle result row
   function mapChatSummary(r: any): ChatSummary {
     return {
-      id: r.id,
+      id: castId<ChatId>(r.id),
       title: r.title,
       characterName: r.characterName,
       avatarHash: r.avatarHash ?? null,
@@ -127,12 +135,13 @@ export function createRead(ctx: ChatContext) {
 
     return {
       ...mapChatSummary(row),
-      characterId: row.characterId ?? null,
-      characterVersionId: row.characterVersionId,
-      personaId: row.personaId,
-      pinnedPersonaId: row.pinnedPersonaId,
-      presetVersionId: row.presetVersionId,
-      parentChatId: row.parentChatId,
+      characterId: row.characterId === null ? null : castId<CharacterId>(row.characterId),
+      characterVersionId: castId<CharacterVersionId>(row.characterVersionId),
+      personaId: row.personaId === null ? null : castId<PersonaId>(row.personaId),
+      pinnedPersonaId: row.pinnedPersonaId === null ? null : castId<PersonaId>(row.pinnedPersonaId),
+      presetVersionId:
+        row.presetVersionId === null ? null : castId<PresetVersionId>(row.presetVersionId),
+      parentChatId: row.parentChatId === null ? null : castId<ChatId>(row.parentChatId),
       forkedAt: row.forkedAt,
       hasSession: row.sessionId !== null,
     };

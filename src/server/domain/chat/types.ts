@@ -1,4 +1,13 @@
 import type { ChatApi, ChatSource } from "../../../shared/chat-routing";
+import type {
+  CharacterId,
+  CharacterVersionId,
+  ChatId,
+  MessageId,
+  PersonaId,
+  PresetId,
+  PresetVersionId,
+} from "../../../shared/ids";
 import type { TurnErrorKind } from "../../providers/turn";
 import { DomainNotFoundError, DomainOperationError } from "../_shared/errors";
 
@@ -13,7 +22,7 @@ export type { ChatApi, ChatSource };
 // kept exact per variant; the richer cost/context/cache/ttft fields reflect the latest GENERATION
 // (not yet stored per variant — message_variants holds the per-gen record).
 export interface MessageView {
-  id: string;
+  id: MessageId;
   seq: number;
   role: "user" | "assistant" | "system";
   content: string; // the ACTIVE variant's text (= variants[activeVariantIdx].content) when variants exist
@@ -40,7 +49,7 @@ export interface MessageView {
 
 // Chat list-row view (chat.list) — what the chat-list rail renders. Owner-scoped, newest first.
 export interface ChatSummary {
-  id: string;
+  id: ChatId;
   title: string;
   characterName: string | null;
   avatarHash: string | null;
@@ -58,12 +67,12 @@ export interface ChatSummary {
 
 // Single-chat view (chat.get) — the summary + the pins/links the chat header + provider picker need.
 export interface ChatDetail extends ChatSummary {
-  characterId: string | null;
-  characterVersionId: string;
-  personaId: string | null; // the ACTIVE persona (user-field {{user}})
-  pinnedPersonaId: string | null; // the persona pinned at open (card {{user}}); null → falls back to personaId
-  presetVersionId: string | null;
-  parentChatId: string | null;
+  characterId: CharacterId | null;
+  characterVersionId: CharacterVersionId;
+  personaId: PersonaId | null; // the ACTIVE persona (user-field {{user}})
+  pinnedPersonaId: PersonaId | null; // the persona pinned at open (card {{user}}); null → falls back to personaId
+  presetVersionId: PresetVersionId | null;
+  parentChatId: ChatId | null;
   forkedAt: number | null;
   /** Whether an agent-sdk resume session exists (the raw uuid isn't useful to the client). */
   hasSession: boolean;
@@ -96,16 +105,16 @@ export interface StartChatParams {
   username: string;
   // Client-supplied UUID so the client can subscribe to streamMessages before the first turn runs.
   // Omitted → generated server-side.
-  chatId?: string | undefined;
+  chatId?: ChatId | undefined;
   // The existing character version this chat is with (owner-scoped). Required.
-  characterVersionId: string;
+  characterVersionId: CharacterVersionId;
   // Defaults to the character's name when omitted.
   title?: string | undefined;
   // Seeds (caller arg → user-settings default → schema/runtime default). A stale/unowned preset or
   // persona id degrades to null (never fails creation). `presetId` is a preset IDENTITY (resolved to
   // its current version). `max-pro-sub` is the owner's credential — guarded for non-owners.
-  personaId?: string | undefined;
-  presetId?: string | undefined;
+  personaId?: PersonaId | undefined;
+  presetId?: PresetId | undefined;
   api?: ChatApi | undefined;
   source?: ChatSource | undefined;
   model?: string | null | undefined;
@@ -122,7 +131,7 @@ export interface StartChatParams {
 }
 
 export interface StartChatResult {
-  chatId: string;
+  chatId: ChatId;
   result: SendResult;
 }
 
@@ -148,7 +157,7 @@ export interface AssemblyPreview {
 
 export interface SendParams {
   username: string;
-  chatId: string;
+  chatId: ChatId;
   /** The client's last-seen tip (MAX seq it knows). Mismatch → "stale". */
   expectedSeq: number;
   content: string;
@@ -158,7 +167,7 @@ export interface SendParams {
 
 export interface ForkChatParams {
   username: string;
-  chatId: string;
+  chatId: ChatId;
   /** Branch point: copy canon messages with seq ≤ atSeq into the new chat. */
   atSeq: number;
   /** The fork's api + source. agent-sdk targets seed session_entries from the copied canon;
@@ -169,7 +178,7 @@ export interface ForkChatParams {
 
 export interface SetProviderParams {
   username: string;
-  chatId: string;
+  chatId: ChatId;
   /** The api/source to switch this chat to (the generalized escape valve). Switching INTO agent-sdk
    *  seeds a session from canon; switching OUT drops it; max↔openrouter keeps the session. */
   api: ChatApi;
@@ -180,7 +189,7 @@ export interface SetProviderParams {
 
 export interface SwipeParams {
   username: string;
-  chatId: string;
+  chatId: ChatId;
   /** The chat's current MAX seq (swipe MUTATES the tip — it does NOT advance seq). Mismatch → stale. */
   expectedSeq: number;
   /** Browser IANA timezone for {{time}}/{{date}} this turn (Intl…timeZone). Absent → server-local. */
@@ -189,22 +198,22 @@ export interface SwipeParams {
 
 export interface SelectVariantParams {
   username: string;
-  chatId: string;
-  messageId: string;
+  chatId: ChatId;
+  messageId: MessageId;
   /** Which existing swipe to make active. */
   variantIdx: number;
 }
 
 export interface EditMessageParams {
   username: string;
-  chatId: string;
-  messageId: string;
+  chatId: ChatId;
+  messageId: MessageId;
   content: string;
 }
 
 export interface CompactParams {
   username: string;
-  chatId: string;
+  chatId: ChatId;
   /** RP-tuned /compact steering; falls back to the preset's compaction.instructions, then a default. */
   instructions?: string | undefined;
 }
@@ -216,16 +225,16 @@ export interface ChatService {
   /** The caller's chats, newest-updated first (owner-scoped). Drives the chat-list rail. */
   listChats(params: { username: string }): Promise<ChatSummary[]>;
   /** One owned chat's metadata (summary + pins/links). Throws ChatNotFoundError if unowned. */
-  getChat(params: { username: string; chatId: string }): Promise<ChatDetail>;
+  getChat(params: { username: string; chatId: ChatId }): Promise<ChatDetail>;
   /** Dry-run: what the next turn's prompt + routing would be, without generating. */
-  previewAssembly(params: { username: string; chatId: string }): Promise<AssemblyPreview>;
-  listMessages(params: { username: string; chatId: string }): Promise<MessageView[]>;
+  previewAssembly(params: { username: string; chatId: ChatId }): Promise<AssemblyPreview>;
+  listMessages(params: { username: string; chatId: ChatId }): Promise<MessageView[]>;
   send(params: SendParams): Promise<SendResult>;
   /** Switch a chat's api/source/model in place (the generalized escape valve). Handles the session
    *  implications (seed when entering agent-sdk, drop when leaving). Throws on an incoherent combo. */
   setProvider(params: SetProviderParams): Promise<void>;
   /** Branch a chat at `atSeq` into a new chat (parentChatId/forkedAt). Returns the new id. */
-  forkChat(params: ForkChatParams): Promise<{ chatId: string }>;
+  forkChat(params: ForkChatParams): Promise<{ chatId: ChatId }>;
   /** Regenerate the last assistant turn as a NEW variant (swipe). Returns the same result shape as
    *  send (ok / stale / error) — a swipe is a generation, so it can be stale or fail like any turn. */
   swipe(params: SwipeParams): Promise<SendResult>;
@@ -233,19 +242,20 @@ export interface ChatService {
   selectVariant(params: SelectVariantParams): Promise<MessageView[]>;
   /** Edit a message's content in place (+ the active variant). No model call; re-seeds the sdk session. */
   editMessage(params: EditMessageParams): Promise<MessageView[]>;
+  // (compact/delete/updateTitle/star/archive below take ChatId)
   /** Manually compact an agent-sdk chat's session (steered `/compact`). No-op (compacted:false) for
    *  openrouter chats or a chat with no session yet. The lever for compaction mode "off". */
   compact(params: CompactParams): Promise<{ compacted: boolean }>;
-  delete(params: { username: string; chatId: string }): Promise<{ deleted: boolean }>;
-  updateTitle(params: { username: string; chatId: string; title: string }): Promise<void>;
-  star(params: { username: string; chatId: string; starred: boolean }): Promise<void>;
-  archive(params: { username: string; chatId: string; archived: boolean }): Promise<void>;
+  delete(params: { username: string; chatId: ChatId }): Promise<{ deleted: boolean }>;
+  updateTitle(params: { username: string; chatId: ChatId; title: string }): Promise<void>;
+  star(params: { username: string; chatId: ChatId; starred: boolean }): Promise<void>;
+  archive(params: { username: string; chatId: ChatId; archived: boolean }): Promise<void>;
 }
 
 // Thrown when a chat doesn't exist or isn't owned by the caller. The trpc layer maps
 // this to a NOT_FOUND error (domain can't import @trpc/server — wrong direction).
 export class ChatNotFoundError extends DomainNotFoundError {
-  constructor(chatId: string) {
+  constructor(chatId: ChatId) {
     super("Chat", chatId);
   }
 }

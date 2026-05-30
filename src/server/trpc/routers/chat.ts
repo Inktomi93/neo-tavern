@@ -1,6 +1,14 @@
 import { on } from "node:events";
 import { z } from "zod";
 import { chatApiSchema, chatSourceSchema } from "../../../shared/chat-routing";
+import {
+  brandedId,
+  type CharacterVersionId,
+  type ChatId,
+  type MessageId,
+  type PersonaId,
+  type PresetId,
+} from "../../../shared/ids";
 import { chatStreamEmitter } from "../../domain/chat";
 import { authedProcedure, t } from "../trpc";
 
@@ -15,11 +23,11 @@ export const chatRouter = t.router({
     .input(
       z
         .object({
-          chatId: z.string().min(1).optional(),
-          characterVersionId: z.string().min(1),
+          chatId: brandedId<ChatId>().optional(),
+          characterVersionId: brandedId<CharacterVersionId>(),
           title: z.string().min(1).max(200).optional(),
-          personaId: z.string().min(1).optional(),
-          presetId: z.string().min(1).optional(),
+          personaId: brandedId<PersonaId>().optional(),
+          presetId: brandedId<PresetId>().optional(),
           api: chatApiSchema.optional(),
           source: chatSourceSchema.optional(),
           model: z.string().min(1).nullable().optional(),
@@ -42,13 +50,13 @@ export const chatRouter = t.router({
 
   // One owned chat's metadata (summary + pins/links). NOT_FOUND if unowned.
   get: authedProcedure
-    .input(z.object({ chatId: z.string().min(1) }))
+    .input(z.object({ chatId: brandedId<ChatId>() }))
     .query(({ ctx, input }) =>
       ctx.services.chat.getChat({ username: ctx.username, chatId: input.chatId }),
     ),
 
   messages: authedProcedure
-    .input(z.object({ chatId: z.string().min(1) }))
+    .input(z.object({ chatId: brandedId<ChatId>() }))
     .query(({ ctx, input }) =>
       ctx.services.chat.listMessages({ username: ctx.username, chatId: input.chatId }),
     ),
@@ -56,7 +64,7 @@ export const chatRouter = t.router({
   // Dry-run: the system prompt + routing the NEXT turn would use, WITHOUT generating. The
   // "what will this send / why did this world-info fire" inspector. NOT_FOUND if unowned.
   previewAssembly: authedProcedure
-    .input(z.object({ chatId: z.string().min(1) }))
+    .input(z.object({ chatId: brandedId<ChatId>() }))
     .query(({ ctx, input }) =>
       ctx.services.chat.previewAssembly({ username: ctx.username, chatId: input.chatId }),
     ),
@@ -64,7 +72,7 @@ export const chatRouter = t.router({
   send: authedProcedure
     .input(
       z.object({
-        chatId: z.string().min(1),
+        chatId: brandedId<ChatId>(),
         expectedSeq: z.number().int().nonnegative(),
         content: z.string().min(1),
         // Browser IANA zone for {{time}}/{{date}} this turn; invalid → server-local (graceful).
@@ -75,7 +83,7 @@ export const chatRouter = t.router({
 
   // Subscribe to real-time token deltas for a specific chat.
   streamMessages: authedProcedure
-    .input(z.object({ chatId: z.string().min(1) }))
+    .input(z.object({ chatId: brandedId<ChatId>() }))
     .subscription(async function* ({ input, signal }) {
       try {
         for await (const [event] of on(chatStreamEmitter, "delta", { signal })) {
@@ -93,7 +101,7 @@ export const chatRouter = t.router({
   setProvider: authedProcedure
     .input(
       z.object({
-        chatId: z.string().min(1),
+        chatId: brandedId<ChatId>(),
         api: z.enum(["agent-sdk", "chat-completions", "responses"]),
         source: z.enum(["max-pro-sub", "openrouter"]),
         model: z.string().min(1).nullish(),
@@ -107,7 +115,7 @@ export const chatRouter = t.router({
   fork: authedProcedure
     .input(
       z.object({
-        chatId: z.string().min(1),
+        chatId: brandedId<ChatId>(),
         atSeq: z.number().int().positive(),
         targetApi: z.enum(["agent-sdk", "chat-completions", "responses"]),
         targetSource: z.enum(["max-pro-sub", "openrouter"]),
@@ -119,7 +127,7 @@ export const chatRouter = t.router({
   swipe: authedProcedure
     .input(
       z.object({
-        chatId: z.string().min(1),
+        chatId: brandedId<ChatId>(),
         expectedSeq: z.number().int().nonnegative(),
         // Browser IANA zone for {{time}}/{{date}} this turn; invalid → server-local (graceful).
         timezone: z.string().optional(),
@@ -131,8 +139,8 @@ export const chatRouter = t.router({
   selectVariant: authedProcedure
     .input(
       z.object({
-        chatId: z.string().min(1),
-        messageId: z.string().min(1),
+        chatId: brandedId<ChatId>(),
+        messageId: brandedId<MessageId>(),
         variantIdx: z.number().int().nonnegative(),
       }),
     )
@@ -144,8 +152,8 @@ export const chatRouter = t.router({
   editMessage: authedProcedure
     .input(
       z.object({
-        chatId: z.string().min(1),
-        messageId: z.string().min(1),
+        chatId: brandedId<ChatId>(),
+        messageId: brandedId<MessageId>(),
         content: z.string().min(1),
       }),
     )
@@ -156,24 +164,24 @@ export const chatRouter = t.router({
   // Manually compact an agent-sdk chat's session (steered /compact). { compacted: false } if the
   // chat can't be compacted (openrouter, or no session yet).
   compact: authedProcedure
-    .input(z.object({ chatId: z.string().min(1), instructions: z.string().min(1).optional() }))
+    .input(z.object({ chatId: brandedId<ChatId>(), instructions: z.string().min(1).optional() }))
     .mutation(({ ctx, input }) => ctx.services.chat.compact({ username: ctx.username, ...input })),
 
   delete: authedProcedure
-    .input(z.object({ chatId: z.string().min(1) }))
+    .input(z.object({ chatId: brandedId<ChatId>() }))
     .mutation(({ ctx, input }) => ctx.services.chat.delete({ username: ctx.username, ...input })),
 
   updateTitle: authedProcedure
-    .input(z.object({ chatId: z.string().min(1), title: z.string().min(1).max(200) }))
+    .input(z.object({ chatId: brandedId<ChatId>(), title: z.string().min(1).max(200) }))
     .mutation(({ ctx, input }) =>
       ctx.services.chat.updateTitle({ username: ctx.username, ...input }),
     ),
 
   star: authedProcedure
-    .input(z.object({ chatId: z.string().min(1), starred: z.boolean() }))
+    .input(z.object({ chatId: brandedId<ChatId>(), starred: z.boolean() }))
     .mutation(({ ctx, input }) => ctx.services.chat.star({ username: ctx.username, ...input })),
 
   archive: authedProcedure
-    .input(z.object({ chatId: z.string().min(1), archived: z.boolean() }))
+    .input(z.object({ chatId: brandedId<ChatId>(), archived: z.boolean() }))
     .mutation(({ ctx, input }) => ctx.services.chat.archive({ username: ctx.username, ...input })),
 });
