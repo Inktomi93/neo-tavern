@@ -29,7 +29,7 @@ export function createTagService(db: Db): TagService {
 
   async function getTag(params: { username: string }, tagId: TagId): Promise<TagView> {
     const ownerId = await ensureUser(db, params.username);
-    const tag = await fetchOwned<TagView>(db, tags, tagId, ownerId);
+    const tag = await fetchOwned(db, tags, tagId, ownerId);
     if (!tag) throw new TagNotFoundError(`tag not found: ${tagId}`);
     return { ...tag, id: castId<TagId>(tag.id) };
   }

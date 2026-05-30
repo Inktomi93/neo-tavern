@@ -33,7 +33,7 @@ export function createWorldInfoService(db: Db): WorldInfoService {
     bookId: WorldBookId,
   ): Promise<WorldBookView> {
     const ownerId = await ensureUser(db, params.username);
-    const book = await fetchOwned<WorldBookView>(db, worldBooks, bookId, ownerId);
+    const book = await fetchOwned(db, worldBooks, bookId, ownerId);
     if (!book) throw new WorldInfoNotFoundError(`book not found: ${bookId}`);
     return { ...book, id: castId<WorldBookId>(book.id) };
   }

@@ -17,16 +17,16 @@ type OwnedTable = SQLiteTable & {
   ownerId: AnySQLiteColumn;
 };
 
-export async function fetchOwned<TRow>(
+export async function fetchOwned<T extends OwnedTable>(
   db: Db,
-  table: OwnedTable,
+  table: T,
   id: string,
   ownerId: string,
-): Promise<TRow | undefined> {
+): Promise<T["$inferSelect"] | undefined> {
   const result = await db
     .select()
     .from(table)
     .where(and(eq(table.id, id), eq(table.ownerId, ownerId)))
     .limit(1);
-  return result[0] as TRow | undefined;
+  return result[0];
 }
