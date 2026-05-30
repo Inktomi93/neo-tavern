@@ -6,6 +6,12 @@
 import { and, desc, eq } from "drizzle-orm";
 import type { Db } from "../../../db/client";
 import { characters, characterVersions, chats } from "../../../db/schema";
+import {
+  type AssetId,
+  type CharacterId,
+  type CharacterVersionId,
+  castId,
+} from "../../../shared/ids";
 import { getLog } from "../../observability/logger";
 import { fetchOwned, stripUndefined } from "../_shared/helpers";
 import { newId } from "../_shared/ids";
@@ -25,7 +31,7 @@ export function createCharacterService(db: Db): CharacterService {
   // Owner-scoped fetch of the identity row.
   async function ownedCharacter(
     ownerId: string,
-    characterId: string,
+    characterId: CharacterId,
   ): Promise<CharacterRow | undefined> {
     return fetchOwned(db, characters, characterId, ownerId);
   }
@@ -43,6 +49,8 @@ export function createCharacterService(db: Db): CharacterService {
   }
 
   // A version is "pinned" once a chat records it as its characterVersionId.
+  // Private read helper — takes the raw column string (callers pass row values); branding it would
+  // only force casts at internal call sites with no safety gain.
   async function versionPinned(versionId: string): Promise<boolean> {
     const byChat = await db.query.chats.findFirst({
       columns: { id: true },
@@ -62,9 +70,12 @@ export function createCharacterService(db: Db): CharacterService {
           });
 
     return {
-      id: character.id,
+      id: castId<CharacterId>(character.id),
       handle: character.handle,
-      currentVersionId: character.currentVersionId,
+      currentVersionId:
+        character.currentVersionId === null
+          ? null
+          : castId<CharacterVersionId>(character.currentVersionId),
       starred: character.starred ?? false,
       archived: character.archived ?? false,
       createdAt: character.createdAt,
@@ -82,7 +93,7 @@ export function createCharacterService(db: Db): CharacterService {
       postHistoryInstructions: current?.postHistoryInstructions ?? null,
       tags: (current?.tags as string[]) ?? null,
       creatorNotes: current?.creatorNotes ?? null,
-      avatarAssetId: current?.avatarAssetId ?? null,
+      avatarAssetId: current?.avatarAssetId == null ? null : castId<AssetId>(current.avatarAssetId),
       avatarHash: current?.avatar?.hash ?? null,
     };
   }
@@ -95,7 +106,7 @@ export function createCharacterService(db: Db): CharacterService {
       // Check for handle conflicts.
       await checkHandleConflict(ownerId, input.handle);
 
-      const characterId = newId();
+      const characterId = newId<CharacterId>();
       await db.insert(characters).values({
         id: characterId,
         ownerId,
@@ -103,7 +114,7 @@ export function createCharacterService(db: Db): CharacterService {
         createdAt: now,
       });
 
-      const versionId = newId();
+      const versionId = newId<CharacterVersionId>();
       await db.insert(characterVersions).values({
         id: versionId,
         characterId,
@@ -147,13 +158,17 @@ export function createCharacterService(db: Db): CharacterService {
       });
 
       return rows.map((c) => ({
-        id: c.id,
+        id: castId<CharacterId>(c.id),
         handle: c.handle,
         name: c.currentVersion?.name ?? null,
         description: c.currentVersion?.description ?? null,
-        avatarAssetId: c.currentVersion?.avatarAssetId ?? null,
+        avatarAssetId:
+          c.currentVersion?.avatarAssetId == null
+            ? null
+            : castId<AssetId>(c.currentVersion.avatarAssetId),
         avatarHash: c.currentVersion?.avatar?.hash ?? null,
-        currentVersionId: c.currentVersionId,
+        currentVersionId:
+          c.currentVersionId === null ? null : castId<CharacterVersionId>(c.currentVersionId),
         version: c.currentVersion?.version ?? null,
         starred: c.starred ?? false,
         archived: c.archived ?? false,
@@ -219,7 +234,7 @@ export function createCharacterService(db: Db): CharacterService {
 
         if (row.currentVersionId === null) {
           // No version yet — mint v1.
-          const versionId = newId();
+          const versionId = newId<CharacterVersionId>();
           await db.insert(characterVersions).values({
             id: versionId,
             characterId,
@@ -253,7 +268,7 @@ export function createCharacterService(db: Db): CharacterService {
           const current = cvRows.find((v) => v.id === row.currentVersionId);
           if (!current) throw new Error("Current version missing");
 
-          const versionId = newId();
+          const versionId = newId<CharacterVersionId>();
           await db.insert(characterVersions).values({
             id: versionId,
             characterId,

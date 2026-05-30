@@ -1,8 +1,9 @@
+import type { AssetId, CharacterId, CharacterVersionId } from "../../../shared/ids";
 import { DomainNotFoundError, DomainOperationError } from "../_shared/errors";
 
 export class CharacterNotFoundError extends DomainNotFoundError {
-  public characterId: string;
-  constructor(characterId: string) {
+  public characterId: CharacterId;
+  constructor(characterId: CharacterId) {
     super("Character", characterId);
     this.characterId = characterId;
   }
@@ -36,9 +37,9 @@ export type UpdateCharacterInput = Partial<CreateCharacterInput> & {
 };
 
 export interface CharacterDetail {
-  id: string;
+  id: CharacterId;
   handle: string;
-  currentVersionId: string | null;
+  currentVersionId: CharacterVersionId | null;
   starred: boolean;
   archived: boolean;
   createdAt: number;
@@ -58,18 +59,18 @@ export interface CharacterDetail {
   postHistoryInstructions: string | null;
   tags: string[] | null;
   creatorNotes: string | null;
-  avatarAssetId: string | null;
+  avatarAssetId: AssetId | null;
   avatarHash: string | null;
 }
 
 export interface CharacterSummary {
-  id: string;
+  id: CharacterId;
   handle: string;
   name: string | null;
   description: string | null;
-  avatarAssetId: string | null;
+  avatarAssetId: AssetId | null;
   avatarHash: string | null;
-  currentVersionId: string | null;
+  currentVersionId: CharacterVersionId | null;
   version: number | null;
   starred: boolean;
   archived: boolean;
@@ -79,11 +80,11 @@ export interface CharacterSummary {
 export interface CharacterService {
   create(owner: { username: string }, input: CreateCharacterInput): Promise<CharacterDetail>;
   list(owner: { username: string }): Promise<CharacterSummary[]>;
-  get(owner: { username: string }, characterId: string): Promise<CharacterDetail>;
+  get(owner: { username: string }, characterId: CharacterId): Promise<CharacterDetail>;
   update(
     owner: { username: string },
-    characterId: string,
+    characterId: CharacterId,
     input: UpdateCharacterInput,
   ): Promise<CharacterDetail>;
-  remove(owner: { username: string }, characterId: string): Promise<{ deleted: boolean }>;
+  remove(owner: { username: string }, characterId: CharacterId): Promise<{ deleted: boolean }>;
 }

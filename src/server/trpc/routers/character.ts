@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { brandedId, type CharacterId } from "../../../shared/ids";
 import type { CreateCharacterInput, UpdateCharacterInput } from "../../domain/character";
 import { authedProcedure, t } from "../trpc";
 
@@ -18,7 +19,7 @@ const createSchema = z.object({
 });
 
 const updateSchema = createSchema.partial().extend({
-  characterId: z.string().min(1),
+  characterId: brandedId<CharacterId>(),
   starred: z.boolean().optional(),
   archived: z.boolean().optional(),
 });
@@ -27,7 +28,7 @@ export const characterRouter = t.router({
   list: authedProcedure.query(({ ctx }) => ctx.services.character.list({ username: ctx.username })),
 
   get: authedProcedure
-    .input(z.object({ characterId: z.string().min(1) }))
+    .input(z.object({ characterId: brandedId<CharacterId>() }))
     .query(({ ctx, input }) =>
       ctx.services.character.get({ username: ctx.username }, input.characterId),
     ),
@@ -48,7 +49,7 @@ export const characterRouter = t.router({
   }),
 
   remove: authedProcedure
-    .input(z.object({ characterId: z.string().min(1) }))
+    .input(z.object({ characterId: brandedId<CharacterId>() }))
     .mutation(({ ctx, input }) =>
       ctx.services.character.remove({ username: ctx.username }, input.characterId),
     ),
