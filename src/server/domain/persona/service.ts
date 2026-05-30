@@ -3,6 +3,7 @@
 import { desc, eq } from "drizzle-orm";
 import type { Db } from "../../../db/client";
 import { personas } from "../../../db/schema";
+import { castId, type PersonaId } from "../../../shared/ids";
 import { getLog } from "../../observability/logger";
 import { logAudit } from "../_shared/audit";
 import { fetchOwned, stripUndefined } from "../_shared/helpers";
@@ -15,13 +16,16 @@ type PersonaRow = typeof personas.$inferSelect;
 export function createPersonaService(db: Db): PersonaService {
   const log = getLog();
 
-  async function ownedPersona(ownerId: string, personaId: string): Promise<PersonaRow | undefined> {
+  async function ownedPersona(
+    ownerId: string,
+    personaId: PersonaId,
+  ): Promise<PersonaRow | undefined> {
     return fetchOwned(db, personas, personaId, ownerId);
   }
 
   function detailOf(row: PersonaRow): PersonaDetail {
     return {
-      id: row.id,
+      id: castId<PersonaId>(row.id),
       name: row.name,
       description: row.description,
       avatarAssetId: row.avatarAssetId,
@@ -34,7 +38,7 @@ export function createPersonaService(db: Db): PersonaService {
     async create({ username }, input) {
       const ownerId = await ensureUser(db, username);
       const now = Date.now();
-      const personaId = newId();
+      const personaId = newId<PersonaId>();
 
       await db.insert(personas).values({
         id: personaId,

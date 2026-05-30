@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { brandedId, type PersonaId } from "../../../shared/ids";
 import type { CreatePersonaInput, UpdatePersonaInput } from "../../domain/persona";
 import { authedProcedure, t } from "../trpc";
 
@@ -8,13 +9,13 @@ const createSchema = z.object({
   avatarAssetId: z.string().nullable().optional(),
   metadata: z.any().optional(),
 });
-const updateSchema = createSchema.partial().extend({ personaId: z.string().min(1) });
+const updateSchema = createSchema.partial().extend({ personaId: brandedId<PersonaId>() });
 
 export const personaRouter = t.router({
   list: authedProcedure.query(({ ctx }) => ctx.services.persona.list({ username: ctx.username })),
 
   get: authedProcedure
-    .input(z.object({ personaId: z.string().min(1) }))
+    .input(z.object({ personaId: brandedId<PersonaId>() }))
     .query(({ ctx, input }) =>
       ctx.services.persona.get({ username: ctx.username }, input.personaId),
     ),
@@ -35,7 +36,7 @@ export const personaRouter = t.router({
   }),
 
   remove: authedProcedure
-    .input(z.object({ personaId: z.string().min(1) }))
+    .input(z.object({ personaId: brandedId<PersonaId>() }))
     .mutation(({ ctx, input }) =>
       ctx.services.persona.remove({ username: ctx.username }, input.personaId),
     ),

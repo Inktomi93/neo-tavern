@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { freshDb } from "../../../../tests/support/db";
 import { users } from "../../../db/schema";
+import { castId, type PersonaId } from "../../../shared/ids";
 import { createPersonaService } from "./service";
 import { PersonaNotFoundError } from "./types";
 
@@ -42,7 +43,9 @@ describe("PersonaService", () => {
 
     const p = await service.create({ username: "user" }, { name: "N1", description: "D1" });
 
-    await expect(service.get({ username: "user" }, "bogus")).rejects.toThrow(PersonaNotFoundError);
+    await expect(service.get({ username: "user" }, castId<PersonaId>("bogus"))).rejects.toThrow(
+      PersonaNotFoundError,
+    );
     await expect(service.get({ username: "user2" }, p.id)).rejects.toThrow(PersonaNotFoundError);
   });
 

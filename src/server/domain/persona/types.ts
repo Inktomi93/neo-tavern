@@ -1,8 +1,9 @@
+import type { PersonaId } from "../../../shared/ids";
 import { DomainNotFoundError } from "../_shared/errors";
 
 export class PersonaNotFoundError extends DomainNotFoundError {
-  public personaId: string;
-  constructor(personaId: string) {
+  public personaId: PersonaId;
+  constructor(personaId: PersonaId) {
     super("Persona", personaId);
     this.personaId = personaId;
   }
@@ -23,7 +24,7 @@ export interface UpdatePersonaInput {
 }
 
 export interface PersonaDetail {
-  id: string;
+  id: PersonaId;
   name: string;
   description: string;
   avatarAssetId: string | null;
@@ -34,11 +35,11 @@ export interface PersonaDetail {
 export interface PersonaService {
   create(owner: { username: string }, input: CreatePersonaInput): Promise<PersonaDetail>;
   list(owner: { username: string }): Promise<PersonaDetail[]>;
-  get(owner: { username: string }, personaId: string): Promise<PersonaDetail>;
+  get(owner: { username: string }, personaId: PersonaId): Promise<PersonaDetail>;
   update(
     owner: { username: string },
-    personaId: string,
+    personaId: PersonaId,
     input: UpdatePersonaInput,
   ): Promise<PersonaDetail>;
-  remove(owner: { username: string }, personaId: string): Promise<{ deleted: boolean }>;
+  remove(owner: { username: string }, personaId: PersonaId): Promise<{ deleted: boolean }>;
 }
