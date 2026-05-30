@@ -8,6 +8,7 @@
 import { desc, eq } from "drizzle-orm";
 import type { Db } from "../../../db/client";
 import { chats, messages, presets, presetVersions } from "../../../db/schema";
+import { castId, type PresetId, type PresetVersionId } from "../../../shared/ids";
 import {
   DEFAULT_PROMPT_CONFIG,
   type PromptConfig,
@@ -33,7 +34,7 @@ export function createPresetService(db: Db): PresetService {
   const log = getLog();
 
   // Owner-scoped fetch of the identity row (the scoping seam — unowned ⇒ treated as not found).
-  async function ownedPreset(ownerId: string, presetId: string): Promise<PresetRow | undefined> {
+  async function ownedPreset(ownerId: string, presetId: PresetId): Promise<PresetRow | undefined> {
     return fetchOwned(db, presets, presetId, ownerId);
   }
 
@@ -69,10 +70,11 @@ export function createPresetService(db: Db): PresetService {
     const config: PromptConfig =
       current === undefined ? DEFAULT_PROMPT_CONFIG : parsePromptConfig(current.config);
     return {
-      id: preset.id,
+      id: castId<PresetId>(preset.id),
       name: preset.name,
       kind: preset.kind,
-      currentVersionId: preset.currentVersionId,
+      currentVersionId:
+        preset.currentVersionId === null ? null : castId<PresetVersionId>(preset.currentVersionId),
       version: current?.version ?? null,
       createdAt: preset.createdAt,
       updatedAt: preset.updatedAt,
@@ -86,12 +88,12 @@ export function createPresetService(db: Db): PresetService {
     async create({ username, name, kind, config }) {
       const ownerId = await ensureUser(db, username);
       const now = Date.now();
-      const presetId = newId();
+      const presetId = newId<PresetId>();
       const blob = config ?? DEFAULT_PROMPT_CONFIG;
       await db
         .insert(presets)
         .values({ id: presetId, ownerId, name, kind, createdAt: now, updatedAt: now });
-      const versionId = newId();
+      const versionId = newId<PresetVersionId>();
       await db.insert(presetVersions).values({
         id: versionId,
         presetId,
@@ -131,10 +133,11 @@ export function createPresetService(db: Db): PresetService {
                   .limit(1)
               )[0]?.version ?? null);
         summaries.push({
-          id: p.id,
+          id: castId<PresetId>(p.id),
           name: p.name,
           kind: p.kind,
-          currentVersionId: p.currentVersionId,
+          currentVersionId:
+            p.currentVersionId === null ? null : castId<PresetVersionId>(p.currentVersionId),
           version: v,
           createdAt: p.createdAt,
           updatedAt: p.updatedAt,
@@ -163,7 +166,7 @@ export function createPresetService(db: Db): PresetService {
         const pinned = row.currentVersionId !== null && (await versionPinned(row.currentVersionId));
         if (row.currentVersionId === null) {
           // No version yet (shouldn't happen via create) — mint v1.
-          const versionId = newId();
+          const versionId = newId<PresetVersionId>();
           await db.insert(presetVersions).values({
             id: versionId,
             presetId,
@@ -187,7 +190,7 @@ export function createPresetService(db: Db): PresetService {
                 .orderBy(desc(presetVersions.version))
                 .limit(1)
             )[0]?.v ?? 0;
-          const versionId = newId();
+          const versionId = newId<PresetVersionId>();
           await db.insert(presetVersions).values({
             id: versionId,
             presetId,

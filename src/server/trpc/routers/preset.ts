@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { brandedId, type PresetId } from "../../../shared/ids";
 import { promptConfigSchema } from "../../../shared/prompt-config";
 import { authedProcedure, t } from "../trpc";
 
@@ -8,7 +9,7 @@ const createSchema = z.object({
   config: promptConfigSchema.optional(),
 });
 
-const updateSchema = createSchema.partial().extend({ presetId: z.string().min(1) });
+const updateSchema = createSchema.partial().extend({ presetId: brandedId<PresetId>() });
 
 // Thin driver: validate input, call the domain service, translate domain errors. No db access.
 
@@ -18,7 +19,7 @@ export const presetRouter = t.router({
 
   // One owned preset + its current config. NOT_FOUND if unowned.
   get: authedProcedure
-    .input(z.object({ presetId: z.string().min(1) }))
+    .input(z.object({ presetId: brandedId<PresetId>() }))
     .query(({ ctx, input }) => ctx.services.preset.get({ username: ctx.username, ...input })),
 
   create: authedProcedure
@@ -33,6 +34,6 @@ export const presetRouter = t.router({
 
   // Hard delete. BAD_REQUEST (preset_in_use) if a version is pinned by a chat/message.
   remove: authedProcedure
-    .input(z.object({ presetId: z.string().min(1) }))
+    .input(z.object({ presetId: brandedId<PresetId>() }))
     .mutation(({ ctx, input }) => ctx.services.preset.remove({ username: ctx.username, ...input })),
 });

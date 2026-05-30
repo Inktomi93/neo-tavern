@@ -1,3 +1,4 @@
+import type { PresetId, PresetVersionId } from "../../../shared/ids";
 import type { PromptConfig } from "../../../shared/prompt-config";
 import { DomainNotFoundError, DomainOperationError } from "../_shared/errors";
 
@@ -8,10 +9,10 @@ import { DomainNotFoundError, DomainOperationError } from "../_shared/errors";
 // `messages.presetVersionId` stays an immutable record of the structure that produced each turn.
 
 export interface PresetSummary {
-  id: string;
+  id: PresetId;
   name: string;
   kind: string; // free-text library label (NOT a structural type)
-  currentVersionId: string | null;
+  currentVersionId: PresetVersionId | null;
   version: number | null; // the current version's number
   createdAt: number;
   updatedAt: number;
@@ -36,7 +37,7 @@ export interface CreatePresetParams {
 
 export interface UpdatePresetParams {
   username: string;
-  presetId: string;
+  presetId: PresetId;
   // identity edits (name/kind) are always in place — they're not provenance. `| undefined` for the
   // exactOptionalPropertyTypes ↔ zod-optional spread (docs/architecture/conventions.md).
   name?: string | undefined;
@@ -49,17 +50,17 @@ export interface PresetService {
   create(params: CreatePresetParams): Promise<PresetDetail>;
   list(params: { username: string }): Promise<PresetSummary[]>;
   /** One owned preset + its current config. Throws PresetNotFoundError if missing/unowned. */
-  get(params: { username: string; presetId: string }): Promise<PresetDetail>;
+  get(params: { username: string; presetId: PresetId }): Promise<PresetDetail>;
   update(params: UpdatePresetParams): Promise<PresetDetail>;
   /** Hard delete. Throws PresetOperationError("preset_in_use") if any version is pinned by a
    *  chat/message (the RESTRICT FK) — archive-don't-delete, like characters. */
-  remove(params: { username: string; presetId: string }): Promise<{ deleted: true }>;
+  remove(params: { username: string; presetId: PresetId }): Promise<{ deleted: true }>;
 }
 
 // Missing or not owned by the caller → the transport maps this to NOT_FOUND (domain can't import
 // @trpc/server — wrong direction). Mirrors ChatNotFoundError.
 export class PresetNotFoundError extends DomainNotFoundError {
-  constructor(presetId: string) {
+  constructor(presetId: PresetId) {
     super("Preset", presetId);
   }
 }
