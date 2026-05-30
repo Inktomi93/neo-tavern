@@ -11,6 +11,7 @@ import type { MacroContext } from "../shared/macro/types";
 import type { RegexPlacement, RegexScript } from "../shared/regex";
 import type { AuthConfig } from "./auth/trust-header";
 import { type AuthResolver, createAuthResolver, resolveOwner } from "./auth-context";
+import { registerLocalAuthRoutes } from "./auth-local";
 import { registerOidcRoutes } from "./auth-oidc";
 import { createRegexService } from "./domain/_shared/regex";
 import { createAssetsService } from "./domain/assets";
@@ -107,6 +108,9 @@ export function buildApp(
   // OIDC login/callback/logout/me — public Hono routes (no-op unless AUTH_MODE=oidc). The session
   // cookie it mints is what the tRPC auth seam (above) reads.
   registerOidcRoutes(app, db, services.sessions);
+  // Local username+password login/logout/me — public Hono routes (no-op unless AUTH_MODE=local). Mints
+  // the SAME session cookie via the same sessions service, read by the same auth seam.
+  registerLocalAuthRoutes(app, db, services.sessions);
 
   const debugRouter = new Hono();
   debugRouter.use("/*", debugAuthMiddleware);

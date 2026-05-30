@@ -1,7 +1,8 @@
 import type { Hono } from "hono";
-import { deleteCookie, getCookie, setCookie } from "hono/cookie";
+import { getCookie } from "hono/cookie";
 import * as client from "openid-client";
 import type { Db } from "../db/client";
+import { clearSessionCookie, sessionCookieOptions, setSessionCookie } from "./auth/cookie";
 import { SESSION_COOKIE_NAME } from "./auth/trust-header";
 import { provisionIdentity } from "./domain/_shared/users";
 import type { SessionsService } from "./domain/sessions";
@@ -16,21 +17,9 @@ import { getLog } from "./observability/logger";
 
 // SESSION_COOKIE_NAME (the `__Host-`-prefixed name) is owned by auth/trust-header (the raw
 // resolveIdentity parser uses it too); re-exported here for the OIDC routes + tests.
-export { SESSION_COOKIE_NAME };
-
-// The session cookie attributes — the locked §11 contract: HttpOnly (an XSS can't exfiltrate it),
-// Secure (no plaintext-http session — ALSO required by the `__Host-` name prefix), SameSite=Lax
-// (blocks cross-site POST but still rides the top-level OAuth callback redirect — why Lax, not
-// Strict), Path "/" + NO Domain (the other two `__Host-` requirements). So the host-binding holds.
-export function sessionCookieOptions(maxAgeSeconds: number) {
-  return {
-    httpOnly: true,
-    secure: true,
-    sameSite: "Lax" as const,
-    path: "/",
-    maxAge: maxAgeSeconds,
-  };
-}
+// The session-cookie write helpers + the §11 contract now live in auth/cookie.ts (shared with the
+// local-auth routes). Re-exported here so existing importers (auth-oidc.test.ts) are unaffected.
+export { SESSION_COOKIE_NAME, sessionCookieOptions };
 
 /** The comma-list allowlist of permitted callback origins' full URLs (env.OIDC_REDIRECT_URIS). */
 function redirectAllowlist(): string[] {
@@ -184,12 +173,7 @@ export function registerOidcRoutes(app: Hono, db: Db, sessions: SessionsService)
       userAgent: c.req.header("user-agent") ?? null,
     });
     // The BFF win: the session token rides in the cookie, NEVER the URL/fragment.
-    setCookie(
-      c,
-      SESSION_COOKIE_NAME,
-      token,
-      sessionCookieOptions(Math.floor((expiresAt - Date.now()) / 1000)),
-    );
+    setSessionCookie(c, token, expiresAt);
     getLog().info({ handle, userId: id }, "auth: OIDC login");
     // 302 back to the app root on the originating origin (no token in the redirect).
     return c.redirect(`${new URL(tx.redirectUri).origin}/`);
@@ -200,9 +184,7 @@ export function registerOidcRoutes(app: Hono, db: Db, sessions: SessionsService)
     if (token) {
       await sessions.revokeByToken(token);
     }
-    // `secure: true` is required to clear a `__Host-` cookie (the expiring Set-Cookie must itself be a
-    // valid __Host- cookie: Secure + Path=/ + no Domain), or the browser ignores it and the cookie lives.
-    deleteCookie(c, SESSION_COOKIE_NAME, { path: "/", secure: true });
+    clearSessionCookie(c);
     return c.json({ ok: true });
   });
 

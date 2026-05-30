@@ -203,6 +203,39 @@ describe("resolveIdentity — origin-gated owner fallback (SSO modes)", () => {
   });
 });
 
+// ── local-password mode (AUTH_MODE=local) ────────────────────────────────────────────────────────
+// `local` rides the SAME cookie layer as oidc (a session minted by password login) and the SAME
+// origin-gated owner fallback (LAN owner convenience, public host must log in).
+describe("resolveIdentity — local mode", () => {
+  test("a valid session cookie resolves to the cookie identity (viaCookie)", async () => {
+    const headers = new Headers({ ...PUBLIC_ORIGIN, cookie: "__Host-neo_session=tok" });
+    const { identity, viaCookie } = await resolveIdentity(headers, cfg({ mode: "local" }), {
+      validateSessionCookie: async (t) =>
+        t === "tok" ? { externalId: null, handle: "alice", groups: [] } : null,
+    });
+    expect(identity?.handle).toBe("alice");
+    expect(viaCookie).toBe(true);
+  });
+
+  test("no cookie on the PUBLIC origin resolves to null (must log in — NOT the owner)", async () => {
+    const headers = new Headers({ ...PUBLIC_ORIGIN });
+    const { identity, viaFallback } = await resolveIdentity(headers, cfg({ mode: "local" }), {
+      validateSessionCookie: async () => null,
+    });
+    expect(identity).toBeNull();
+    expect(viaFallback).toBe(false);
+  });
+
+  test("no cookie on the LAN origin resolves to the owner fallback (convenience)", async () => {
+    const headers = new Headers({ ...LAN_ORIGIN });
+    const { identity, viaFallback } = await resolveIdentity(headers, cfg({ mode: "local" }), {
+      validateSessionCookie: async () => null,
+    });
+    expect(identity?.handle).toBe("owner");
+    expect(viaFallback).toBe(true);
+  });
+});
+
 describe("isLocalOrigin", () => {
   const localHosts = [
     "127.0.0.1",
@@ -211,6 +244,7 @@ describe("isLocalOrigin", () => {
     "172.16.0.1",
     "172.31.255.255",
     "192.168.1.50:8788",
+    "100.100.50.50", // Tailscale CGNAT 100.64.0.0/10
     "169.254.10.1",
     "localhost",
     "localhost:5173",
@@ -221,6 +255,7 @@ describe("isLocalOrigin", () => {
   const publicHosts = [
     "neo-tavern.inktomi.tech",
     "8.8.8.8",
+    "100.200.0.1", // outside Tailscale CGNAT 100.64.0.0/10 (public)
     "172.32.0.1", // just outside 172.16/12
     "172.15.0.1", // just below 172.16/12
     "example.com:443",
@@ -245,5 +280,10 @@ describe("isLocalOrigin", () => {
   });
   test("an explicit trusted host (case-insensitive) is local", () => {
     expect(isLocalOrigin(new Headers({ host: "Neo.LAN" }), ["neo.lan"])).toBe(true);
+  });
+  test("an extra CIDR range (TRUSTED_PRIVATE_RANGES) widens the trusted set", () => {
+    // 203.0.113.0/24 is public by default → not local, unless added as an extra range.
+    expect(isLocalOrigin(new Headers({ host: "203.0.113.7" }), [])).toBe(false);
+    expect(isLocalOrigin(new Headers({ host: "203.0.113.7" }), [], ["203.0.113.0/24"])).toBe(true);
   });
 });

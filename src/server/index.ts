@@ -2,6 +2,7 @@ import { serve } from "@hono/node-server";
 import { createDb, optimizeDb, runMigrations } from "../db/client";
 import { assertVectorIndexes } from "../db/vector-ops";
 import { buildApp } from "./app";
+import { seedLocalOwner } from "./auth-local";
 import { reloadAppConfig } from "./config/app-config";
 import { createSecretBox, credentialsKeyFromEnv } from "./crypto/secrets";
 import { createAdminService } from "./domain/admin";
@@ -67,6 +68,10 @@ const services: Services = {
   tag: createTagService(db),
   worldInfo: createWorldInfoService(db),
 };
+
+// Seed the owner's local password (AUTH_MODE=local only; idempotent — see auth-local.ts). No-op in
+// every other mode, so the zero-infra single-user boot is unchanged.
+await seedLocalOwner(db);
 
 const app = buildApp(db, cas, services, IS_PROD);
 

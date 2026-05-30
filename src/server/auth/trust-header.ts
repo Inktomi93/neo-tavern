@@ -25,17 +25,22 @@ import { createLocalJWKSet, createRemoteJWKSet, type JWTPayload, jwtVerify } fro
 import type { ResolvedIdentity } from "../../shared/identity";
 import { env } from "../env";
 import { getLog } from "../observability/logger";
+import { DEFAULT_TRUSTED_RANGES, isInRanges } from "./ip-ranges";
 
 /** The bits of config the resolver needs, passed explicitly so unit tests can vary mode/fallback
  *  without re-parsing env. `authConfigFromEnv()` builds the live one. */
 export interface AuthConfig {
-  mode: "single-user" | "forward-header" | "oidc";
+  mode: "single-user" | "local" | "forward-header" | "oidc";
   fallback: "owner" | "deny";
   defaultHandle: string;
   verifyForwardJwt: boolean;
   // Extra hostnames trusted as a LOCAL origin for the owner fallback in SSO modes (private/loopback IP
   // literals + `localhost` are always local and need no entry). The public FQDN must NEVER appear here.
   trustedLocalHosts: string[];
+  // Extra CIDR ranges (env TRUSTED_PRIVATE_RANGES) added to the built-in private set for the local-origin
+  // gate — e.g. a custom Tailscale subnet-router range or a non-default Docker network. Optional; absent
+  // ⇒ just the built-in DEFAULT_TRUSTED_RANGES (loopback/RFC1918/Tailscale/link-local/ULA).
+  trustedPrivateRanges?: string[];
 }
 
 /** Injected, db-dependent resolution steps (wired at the composition root; absent ⇒ that layer is
@@ -75,7 +80,17 @@ export function authConfigFromEnv(): AuthConfig {
     defaultHandle: env.DEFAULT_USER_HANDLE,
     verifyForwardJwt: env.FORWARD_AUTH_VERIFY_JWT,
     trustedLocalHosts: parseHostList(env.TRUSTED_LOCAL_HOSTS),
+    trustedPrivateRanges: parseCsv(env.TRUSTED_PRIVATE_RANGES),
   };
+}
+
+/** Parse a comma-list env value into trimmed non-empty entries (CIDR strings, header names, …). */
+function parseCsv(raw: string | undefined): string[] {
+  if (!raw) return [];
+  return raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
 }
 
 /** Parse the TRUSTED_LOCAL_HOSTS comma-list into normalized (lowercased, port-stripped) hostnames. */
@@ -192,8 +207,9 @@ export async function resolveIdentity(
   config: AuthConfig,
   deps: ResolveDeps = {},
 ): Promise<IdentityResolution> {
-  // 1. Session cookie (oidc).
-  if (config.mode === "oidc" && deps.validateSessionCookie) {
+  // 1. Session cookie (oidc OR local — both mint the SAME __Host-neo_session via the sessions service;
+  //    only HOW the session is created differs [OIDC callback vs password login], not how it's read).
+  if ((config.mode === "oidc" || config.mode === "local") && deps.validateSessionCookie) {
     const token = readCookie(headers, SESSION_COOKIE_NAME);
     if (token) {
       const identity = await deps.validateSessionCookie(token);
@@ -226,7 +242,9 @@ export async function resolveIdentity(
  */
 function ownerFallbackAllowed(headers: Headers, config: AuthConfig): boolean {
   if (config.mode === "single-user") return true;
-  return isLocalOrigin(headers, config.trustedLocalHosts);
+  // `local` behaves like the SSO modes here: the owner fallback is granted only on a LOCAL origin (the
+  // raw-LAN/Tailscale path); on the public host an un-cookied request gets null → 401 → must log in.
+  return isLocalOrigin(headers, config.trustedLocalHosts, config.trustedPrivateRanges);
 }
 
 /**
@@ -236,13 +254,22 @@ function ownerFallbackAllowed(headers: Headers, config: AuthConfig): boolean {
  * never grant it. Safe because Caddy routes by the real Host (a spoofed private-IP Host never reaches
  * this process) and :8788 is not publicly routable (the deployment invariant). Fails closed.
  */
-export function isLocalOrigin(headers: Headers, trustedHosts: string[]): boolean {
+export function isLocalOrigin(
+  headers: Headers,
+  trustedHosts: string[],
+  extraRanges: string[] = [],
+): boolean {
   const rawHost = headers.get("host");
   if (!rawHost) return false;
   const host = normalizeHost(rawHost);
   if (host.length === 0) return false;
+  if (host === "localhost") return true;
   if (trustedHosts.includes(host)) return true;
-  return isPrivateOrLoopbackHost(host);
+  // A private/loopback/Tailscale/link-local IP literal (the shared matcher; a hostname won't parse → no
+  // match → SSO required). The env-extra CIDRs widen the built-in set without replacing it.
+  const ranges =
+    extraRanges.length > 0 ? [...DEFAULT_TRUSTED_RANGES, ...extraRanges] : DEFAULT_TRUSTED_RANGES;
+  return isInRanges(host, ranges);
 }
 
 /** Lowercase + strip the :port, handling the bracketed IPv6 form (`[::1]:8788` → `::1`). */
@@ -258,30 +285,8 @@ function normalizeHost(host: string): string {
   return h;
 }
 
-/** loopback / RFC1918 / link-local (IPv4) + loopback / ULA (fc00::/7) / link-local (fe80::/10) IPv6. */
-function isPrivateOrLoopbackHost(host: string): boolean {
-  if (host === "localhost") return true;
-  const ipv4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
-  if (ipv4) {
-    const [a, b] = ipv4.slice(1).map(Number) as [number, number, number, number];
-    if (a > 255 || b > 255) return false;
-    if (a === 127) return true; // 127.0.0.0/8 loopback
-    if (a === 10) return true; // 10.0.0.0/8
-    if (a === 172 && b >= 16 && b <= 31) return true; // 172.16.0.0/12
-    if (a === 192 && b === 168) return true; // 192.168.0.0/16
-    if (a === 169 && b === 254) return true; // 169.254.0.0/16 link-local
-    return false;
-  }
-  // IPv6 literal (a Host's bracketed IPv6 is de-bracketed by normalizeHost → still contains ":"). The
-  // ":" guard is essential: WITHOUT it a hostname like `fd00.example.com` / `fc-corp.internal` would
-  // match the fc/fd prefix and be wrongly trusted as a local origin.
-  if (host.includes(":")) {
-    if (host === "::1") return true; // ::1 loopback
-    if (host.startsWith("fc") || host.startsWith("fd")) return true; // fc00::/7 unique-local
-    if (host.startsWith("fe80")) return true; // fe80::/10 link-local
-  }
-  return false;
-}
+// (Private-range matching moved to ./ip-ranges.ts — one home, now incl. Tailscale CGNAT 100.64.0.0/10
+// and proper CIDR matching for the env-configured allowlist/trusted-proxy lists.)
 
 // NOTE: the old `resolveUsername` back-compat wrapper was REMOVED — it ignored the cookie layer and
 // fell back to the owner handle UNCONDITIONALLY (even under AUTH_FALLBACK=deny), so the export/import/

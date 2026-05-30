@@ -25,6 +25,11 @@ export const users = sqliteTable("users", {
   role: text("role", { enum: ["admin", "user"] })
     .notNull()
     .default("user"),
+  // Local password login (AUTH_MODE=local). NULL for every SSO/forward-header/single-user account —
+  // those have no local credential (identity comes from the IdP or the owner fallback). Format is
+  // self-contained "scrypt$<saltB64>$<hashB64>" (auth/password.ts); a NULL here means "no local login
+  // for this user", so a stray local POST /api/auth/login can never authenticate an SSO-only row.
+  passwordHash: text("password_hash"),
   createdAt: integer("created_at").notNull(),
 });
 

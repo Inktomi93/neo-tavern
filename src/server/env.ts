@@ -108,10 +108,12 @@ const envSchema = z
     // The owner handle that single-user uses; also the fallback identity. Set to your authentik
     // username so the SSO path and the raw-LAN-IP fallback map to ONE user row.
 
-    // Which SSO mechanism is active. `single-user` (DEFAULT) = no SSO, zero infra; `forward-header` =
-    // caddy+authentik forward-auth (verify X-Authentik-Jwt via JWKS); `oidc` = the app is an authentik
-    // OIDC client over HTTPS (cookie/BFF sessions).
-    AUTH_MODE: z.enum(["single-user", "forward-header", "oidc"]).default("single-user"),
+    // Which auth mechanism is active. `single-user` (DEFAULT) = no SSO, zero infra; `local` =
+    // username+password accounts the app itself stores (the no-SSO path — cookie/BFF sessions, seeded
+    // owner via LOCAL_INITIAL_PASSWORD); `forward-header` = caddy+authentik/authelia forward-auth (verify
+    // X-Authentik-Jwt via JWKS, or trusted Remote-*/X-Authentik-* headers); `oidc` = the app is an
+    // authentik OIDC client over HTTPS (cookie/BFF sessions).
+    AUTH_MODE: z.enum(["single-user", "local", "forward-header", "oidc"]).default("single-user"),
     // What identity an UN-credentialed request gets. `owner` (DEFAULT) → the owner; `deny` → no
     // identity (401), making SSO mandatory. CRITICAL: in an SSO mode (oidc/forward-header) the `owner`
     // fallback is ORIGIN-GATED — granted only on a LOCAL origin (a private/loopback Host literal, or a
@@ -125,6 +127,36 @@ const envSchema = z
     // `neo.lan`, an mDNS `homelab.local`). Private/loopback IP literals + `localhost` are always local
     // and need no entry here. The public FQDN must NEVER be listed (that would re-open the bypass).
     TRUSTED_LOCAL_HOSTS: z.string().optional(),
+    // Extra CIDR ranges (comma-list) ADDED to the built-in private set (RFC1918 + Tailscale 100.64/10 +
+    // link-local + ULA + loopback) for the local-origin owner-fallback gate AND the trusted-proxy gate.
+    // For a custom Tailscale subnet-router range or a non-default Docker network. Defaults already cover
+    // stock Tailscale + Docker, so most deploys leave this unset.
+    TRUSTED_PRIVATE_RANGES: z.string().optional(),
+
+    // ── local-password mode (AUTH_MODE=local) ──
+    // Seeds the owner account's password on first boot (handle = DEFAULT_USER_HANDLE, role admin). Set
+    // once; after the owner changes it the seed is idempotent (won't clobber). Required in `local` mode
+    // (refinement below). Min 8 chars (mirrors auth/password.ts MIN_PASSWORD_LENGTH).
+    LOCAL_INITIAL_PASSWORD: z.string().min(8).optional(),
+
+    // ── forward-header configurability (the authentik JWKS path is unchanged; these tune the UNSIGNED
+    //    trusted-header path: Authelia Remote-* and custom proxies) ──
+    // Comma CIDR list of proxy source IPs allowed to supply UNSIGNED trusted headers (Authelia Remote-*,
+    // or authentik with FORWARD_AUTH_VERIFY_JWT=false). A direct hit on :8788 from outside these ranges
+    // can't spoof Remote-User. The authentik signed-JWT path skips this (the signature is the proof).
+    // Unset ⇒ the built-in private set (DEFAULT_TRUSTED_RANGES) + TRUSTED_PRIVATE_RANGES.
+    FORWARD_AUTH_TRUSTED_PROXIES: z.string().optional(),
+    // Optional custom trusted-header NAMES for an arbitrary forward-auth proxy. Unset ⇒ auto-accept the
+    // two known families (authentik X-Authentik-* and Authelia Remote-*).
+    FORWARD_AUTH_USER_HEADER: z.string().min(1).optional(),
+    FORWARD_AUTH_GROUPS_HEADER: z.string().min(1).optional(),
+    FORWARD_AUTH_UID_HEADER: z.string().min(1).optional(),
+    FORWARD_AUTH_NAME_HEADER: z.string().min(1).optional(),
+
+    // ── IP allowlist edge belt (orthogonal to AUTH_MODE; off by default) ──
+    // Comma CIDR list; when set, a request from a client IP outside it (and outside loopback, which is
+    // ALWAYS allowed) gets a 403 before any auth runs. Unset ⇒ disabled (no behavior change).
+    IP_ALLOWLIST: z.string().optional(),
 
     // Admin/owner determination (group preferred, mirrors the stack's Grafana convention). An identity
     // whose `groups` contains OWNER_GROUP, OR whose handle ∈ OWNER_HANDLES, provisions as role:'admin'.
@@ -176,6 +208,19 @@ const envSchema = z
             code: "custom",
             path: [key],
             message: `${key} is required when AUTH_MODE=oidc`,
+          });
+        }
+      }
+    }
+    // local-password mode needs the session pepper (sessions ride the same cookie) and an initial owner
+    // password to seed. Fail fast rather than boot an unusable login.
+    if (val.AUTH_MODE === "local") {
+      for (const key of ["SESSION_SECRET", "LOCAL_INITIAL_PASSWORD"] as const) {
+        if (!val[key]) {
+          ctx.addIssue({
+            code: "custom",
+            path: [key],
+            message: `${key} is required when AUTH_MODE=local`,
           });
         }
       }

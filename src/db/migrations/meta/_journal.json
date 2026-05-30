@@ -8,6 +8,13 @@
       "when": 1780088092101,
       "tag": "0000_baseline",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1780160251078,
+      "tag": "0001_local_password",
+      "breakpoints": true
     }
   ]
 }
