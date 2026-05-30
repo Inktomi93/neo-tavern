@@ -9,13 +9,14 @@ import { and, eq, inArray, isNotNull, or } from "drizzle-orm";
 import type { Db } from "../../../db/client";
 import { assets, characters, characterVersions, personas } from "../../../db/schema";
 import type { AssetKind } from "../../../shared/assets";
+import { type AssetId, castId } from "../../../shared/ids";
 import { getLog } from "../../observability/logger";
 import type { Cas } from "../../storage/cas";
 import { logAudit } from "../_shared/audit";
 import { newId } from "../_shared/ids";
 
 export interface StoredAsset {
-  assetId: string;
+  assetId: AssetId;
   hash: string;
   size: number;
   /** false if the blob already existed (dedup). */
@@ -85,10 +86,11 @@ function sniffMime(bytes: Uint8Array): string {
 export function createAssetsService(db: Db, cas: Cas): AssetsService {
   const log = getLog();
 
-  async function assetIdForHash(hash: string): Promise<string | undefined> {
-    return (
+  async function assetIdForHash(hash: string): Promise<AssetId | undefined> {
+    const id = (
       await db.select({ id: assets.id }).from(assets).where(eq(assets.hash, hash)).limit(1)
     )[0]?.id;
+    return id === undefined ? undefined : castId<AssetId>(id);
   }
 
   const store: AssetsService["store"] = async (bytes, kind, mime) => {
@@ -96,7 +98,14 @@ export function createAssetsService(db: Db, cas: Cas): AssetsService {
     // Upsert the index row by hash (the blob may already exist from a prior put, or be brand new).
     await db
       .insert(assets)
-      .values({ id: newId(), kind, mime, size: put.size, hash: put.hash, uploadedAt: Date.now() })
+      .values({
+        id: newId<AssetId>(),
+        kind,
+        mime,
+        size: put.size,
+        hash: put.hash,
+        uploadedAt: Date.now(),
+      })
       .onConflictDoNothing({ target: assets.hash });
     const assetId = await assetIdForHash(put.hash);
     if (assetId === undefined)
@@ -272,7 +281,7 @@ export function createAssetsService(db: Db, cas: Cas): AssetsService {
         await db
           .insert(assets)
           .values({
-            id: newId(),
+            id: newId<AssetId>(),
             kind,
             mime: sniffMime(bytes),
             size: bytes.byteLength,
