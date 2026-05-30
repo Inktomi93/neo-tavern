@@ -8,6 +8,7 @@ import {
   DomainOperationError,
 } from "../domain/_shared/errors";
 import type { Context } from "./context";
+import { enforceRateLimit } from "./rate-limit";
 
 export const t = initTRPC.context<Context>().create();
 
@@ -52,7 +53,17 @@ const authMiddleware = t.middleware(({ ctx, type, next }) => {
   }
   return next();
 });
-export const authedProcedure = publicProcedure.use(authMiddleware);
+
+// Per-user rate limit (A.2.2): authed MUTATIONS only (queries/subscriptions — incl. the SSE stream —
+// are never throttled). Keyed on the resolved handle. The GPU/$-spending turn verbs get a second,
+// stricter bucket inside enforceRateLimit.
+const rateLimitMiddleware = t.middleware(async ({ ctx, type, path, next }) => {
+  if (type === "mutation") {
+    await enforceRateLimit({ path, key: ctx.auth.identity?.handle ?? "anon" });
+  }
+  return next();
+});
+export const authedProcedure = publicProcedure.use(authMiddleware).use(rateLimitMiddleware);
 
 // adminProcedure: authed + admin role. The role is resolved at the seam (provisionIdentity for SSO;
 // owner for the fallback), so the gate is a plain field check — no db round-trip in the transport.
