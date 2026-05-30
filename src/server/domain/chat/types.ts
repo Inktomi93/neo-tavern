@@ -135,8 +135,8 @@ export interface AssemblyPreview {
   /** The assembled system prompt halves (static = cached prefix, dynamic = per-turn suffix). */
   systemPrompt: { static: string; dynamic: string };
   trace: {
-    staticChars: number;
-    dynamicChars: number;
+    staticTokens: number;
+    dynamicTokens: number;
     staticSections: string[];
     dynamicSections: string[];
     worldInfoAttached: number;

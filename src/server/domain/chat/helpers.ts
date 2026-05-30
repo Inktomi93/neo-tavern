@@ -1,4 +1,5 @@
 import type { AssembleContext, AssembledPrompt } from "../../../shared/prompt-assemble";
+import { estimateTokens } from "../../../shared/tokens";
 import type { ChatTurnResult, TurnError } from "../../providers/turn";
 import type { MessageView, SendResult } from "./types";
 
@@ -57,8 +58,8 @@ export function buildPromptTrace(
   systemPrompt: AssembledPrompt,
   assembleCtx: AssembleContext,
 ): {
-  staticChars: number;
-  dynamicChars: number;
+  staticTokens: number;
+  dynamicTokens: number;
   staticSections: string[];
   dynamicSections: string[];
   worldInfoAttached: number;
@@ -67,8 +68,11 @@ export function buildPromptTrace(
   hasPersona: boolean;
 } {
   return {
-    staticChars: systemPrompt.static.length,
-    dynamicChars: systemPrompt.dynamic.length,
+    // Generic QuadChars token estimate (shared/tokens.ts) — replaces the old raw char counts as the
+    // prompt-size metric. Advisory, not billing truth (that's the provider `usage`). Cheap to
+    // compute here; surfaces in the send log + the read() trace.
+    staticTokens: estimateTokens(systemPrompt.static),
+    dynamicTokens: estimateTokens(systemPrompt.dynamic),
     staticSections: systemPrompt.trace.staticSections,
     dynamicSections: systemPrompt.trace.dynamicSections,
     worldInfoAttached: assembleCtx.worldEntries.length,

@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, test } from "vitest";
 import { createDb, type Db, runMigrations } from "../../../db/client";
 import { characters, characterVersions, chats, messages, users } from "../../../db/schema";
+import { estimateTokens } from "../../../shared/tokens";
 import { createChatService } from "./service";
 import { ChatNotFoundError } from "./types";
 
@@ -165,7 +166,8 @@ describe("chat read paths", () => {
     expect(preview.preset).toBe("default");
     // The character assembled into a non-empty static (cacheable) prefix; no persona attached.
     expect(preview.systemPrompt.static.length).toBeGreaterThan(0);
-    expect(preview.trace.staticChars).toBe(preview.systemPrompt.static.length);
+    // Generic QuadChars estimate of that prefix (shared/tokens.ts) — replaces the old raw char count.
+    expect(preview.trace.staticTokens).toBe(estimateTokens(preview.systemPrompt.static));
     expect(preview.trace.hasPersona).toBe(false);
   });
 });
