@@ -2,6 +2,11 @@ import type { Embedder } from "../../embeddings/embedder";
 import type { ImageEmbedder } from "../../embeddings/image-embedder";
 import type { Reranker } from "../../embeddings/reranker";
 
+/** Restrict a chat-content search to one chat or to a character's chats. */
+export type SearchScope =
+  | { characterId?: string | undefined; chatId?: string | undefined }
+  | undefined;
+
 export interface SearchHit {
   entityType: string;
   entityId: string;
@@ -148,6 +153,7 @@ export interface SearchService {
     rerank?: boolean | undefined;
     /** Restrict to a digest altitude: 'scene' (tier 0), 'arc' (tier 1+), or 'any' (default). */
     tier?: "scene" | "arc" | "any" | undefined;
+    scope?: SearchScope;
   }): Promise<DigestSearchHit[]>;
 
   /** Cross-chat corpus search over the raw SEGMENT substrate (verbatim half of the hybrid). Same
@@ -157,6 +163,7 @@ export interface SearchService {
     username: string;
     k?: number | undefined;
     rerank?: boolean | undefined;
+    scope?: SearchScope;
   }): Promise<SegmentSearchHit[]>;
 
   /** The hybrid "mix" — ONE ranked list over both substrates (digests = theme, segments =
@@ -166,6 +173,7 @@ export interface SearchService {
     username: string;
     k?: number | undefined;
     rerank?: boolean | undefined;
+    scope?: SearchScope;
   }): Promise<CorpusHit[]>;
 
   /** Image search over the image_embeddings table using SigLIP text encoding. */

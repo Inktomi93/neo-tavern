@@ -17,9 +17,7 @@ import {
   type BrowseCharacter,
   type BrowseFilter,
   browseCharacters,
-  type CharacterDistillation,
   characterFacets,
-  characterSummary,
   computeCharacterSummaries,
   type DistillStats,
 } from "./distill";
@@ -30,7 +28,6 @@ import {
   type DuplicateComputeStats,
   readDuplicateCharacters,
   readDuplicateChats,
-  similarCharacters,
 } from "./duplicates";
 import type { EmbedItem } from "./embed-text";
 import {
@@ -39,14 +36,7 @@ import {
   type SimilarityGraph,
   similarChats,
 } from "./similarity";
-import { type CharacterProfile, type CorpusStats, characterProfile, corpusStats } from "./stats";
-import {
-  characterThemeProfile,
-  type ThemeRow,
-  themeCharacters,
-  themes,
-  themeTimeline,
-} from "./themes";
+import { type ThemeRow, themes } from "./themes";
 import {
   type CharacterDossier,
   characterDossier,
@@ -97,16 +87,6 @@ export interface CorpusService {
     username: string,
     opts?: { threshold?: number | undefined; includeForked?: boolean | undefined },
   ): Promise<DuplicateChatPair[]>;
-  /** "More like this" for one character — live ANN kNN. */
-  similarCharacters(
-    username: string,
-    characterId: string,
-    limit?: number,
-  ): Promise<{ characterId: string; name: string; similarity: number }[]>;
-  /** Corpus dashboard — totals, per-model usage, most-RP'd characters, activity timeline (pure SQL). */
-  corpusStats(username: string): Promise<CorpusStats>;
-  /** One character's full aggregate profile + top keywords (tier-0, content-collapsed). */
-  characterProfile(username: string, characterId: string): Promise<CharacterProfile | null>;
 
   // ── analytics: keyword co-occurrence (Pillar A, B.3) ───────────────────────
   /** Recompute the co-occurrence + character-keyword rollups (script-driven). */
@@ -135,23 +115,6 @@ export interface CorpusService {
   // ── analytics: emergent themes (Pillar B, B.4) ─────────────────────────────
   /** All themes (k-means clusters) at a level (scene|arc), largest first. */
   themes(username: string, level?: "scene" | "arc"): Promise<ThemeRow[]>;
-  /** A theme's activity over STORY time (msgMidAt-bucketed). */
-  themeTimeline(
-    username: string,
-    clusterIdx: number,
-    bucketDays?: number,
-  ): Promise<{ bucket: string; count: number }[]>;
-  /** Which themes a character's chats touch. */
-  characterThemeProfile(
-    username: string,
-    characterId: string,
-  ): Promise<{ clusterIdx: number; themeName: string; count: number }[]>;
-  /** The characters most present in a theme. */
-  themeCharacters(
-    username: string,
-    clusterIdx: number,
-    limit?: number,
-  ): Promise<{ characterId: string; name: string; count: number }[]>;
 
   // ── analytics: similarity graph + "more like this" (B.6) ───────────────────
   /** Character similarity graph (nodes + edges) for a force-directed view. */
@@ -165,8 +128,6 @@ export interface CorpusService {
   // ── analytics: character distillation + browse (B.0) ───────────────────────
   /** Recompute every character's grammar-constrained distillation (script-driven). */
   computeCharacterSummaries(): Promise<DistillStats>;
-  /** One character's distilled facets (genre/tone/tags + elevator pitch + overview). */
-  characterSummary(username: string, characterId: string): Promise<CharacterDistillation | null>;
   /** The filterable character catalog — distillation facets + engagement, filtered/sorted. */
   browseCharacters(username: string, filter?: BrowseFilter): Promise<BrowseCharacter[]>;
   /** Distinct genres/tones present (for filter dropdowns). */
@@ -258,21 +219,6 @@ export function createCorpusService(db: Db, deps: CorpusServiceDeps = {}): Corpu
       return readDuplicateChats(db, ownerId, opts);
     },
 
-    async similarCharacters(username, characterId, limit) {
-      const ownerId = await ensureUser(db, username);
-      return similarCharacters(db, characterId, ownerId, limit);
-    },
-
-    async corpusStats(username) {
-      const ownerId = await ensureUser(db, username);
-      return corpusStats(db, ownerId);
-    },
-
-    async characterProfile(username, characterId) {
-      const ownerId = await ensureUser(db, username);
-      return characterProfile(db, ownerId, characterId);
-    },
-
     computeCooccurrence(opts = {}) {
       return computeCooccurrence(db, opts);
     },
@@ -297,21 +243,6 @@ export function createCorpusService(db: Db, deps: CorpusServiceDeps = {}): Corpu
       return themes(db, ownerId, level);
     },
 
-    async themeTimeline(username, clusterIdx, bucketDays) {
-      const ownerId = await ensureUser(db, username);
-      return themeTimeline(db, ownerId, clusterIdx, bucketDays);
-    },
-
-    async characterThemeProfile(username, characterId) {
-      const ownerId = await ensureUser(db, username);
-      return characterThemeProfile(db, ownerId, characterId);
-    },
-
-    async themeCharacters(username, clusterIdx, limit) {
-      const ownerId = await ensureUser(db, username);
-      return themeCharacters(db, ownerId, clusterIdx, limit);
-    },
-
     async similarityGraph(username, opts = {}) {
       const ownerId = await ensureUser(db, username);
       return characterSimilarityGraph(db, ownerId, opts);
@@ -324,11 +255,6 @@ export function createCorpusService(db: Db, deps: CorpusServiceDeps = {}): Corpu
 
     computeCharacterSummaries() {
       return computeCharacterSummaries(db, { summarizer: createSummarizer() });
-    },
-
-    async characterSummary(username, characterId) {
-      const ownerId = await ensureUser(db, username);
-      return characterSummary(db, ownerId, characterId);
     },
 
     async browseCharacters(username, filter = {}) {

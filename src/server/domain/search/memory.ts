@@ -6,7 +6,26 @@ import type { Reranker } from "../../embeddings/reranker";
 import { getLog } from "../../observability/logger";
 import { ensureUser } from "../_shared/users";
 import { CSLS_POOL_FACTOR, OWNER_OVERFETCH, SNIPPET_CHARS } from "./constants";
-import type { CorpusHit, DigestSearchHit, SegmentSearchHit } from "./types";
+import type { CorpusHit, DigestSearchHit, SearchScope, SegmentSearchHit } from "./types";
+
+// Optional scope filter — restrict a chat-content search to one chat or to a character's chats. Applied
+// in the WHERE alongside owner/tier (the same JOIN-then-WHERE shape; `character_version_id` resolves a
+// character's versions). `cd`/`cs` is the digest/segment table alias.
+function scopeCond(alias: "cd" | "cs", scope: SearchScope): ReturnType<typeof sql> {
+  if (!scope) return sql``;
+  if (scope.chatId) {
+    return alias === "cd"
+      ? sql` AND cd.chat_id = ${scope.chatId}`
+      : sql` AND cs.chat_id = ${scope.chatId}`;
+  }
+  if (scope.characterId) {
+    const sub = sql`(SELECT id FROM character_versions WHERE character_id = ${scope.characterId})`;
+    return alias === "cd"
+      ? sql` AND cd.character_version_id IN ${sub}`
+      : sql` AND cs.character_version_id IN ${sub}`;
+  }
+  return sql``;
+}
 
 export function createSearchMemory(db: Db, embedder: Embedder, reranker: Reranker) {
   async function digests(params: {
@@ -16,8 +35,9 @@ export function createSearchMemory(db: Db, embedder: Embedder, reranker: Reranke
     rerank?: boolean | undefined;
     /** Restrict to a digest altitude: 'scene' (tier 0), 'arc' (tier 1+), or 'any' (default). */
     tier?: "scene" | "arc" | "any" | undefined;
+    scope?: SearchScope;
   }): Promise<DigestSearchHit[]> {
-    const { queryText, k = 10, rerank = false, tier = "any" } = params;
+    const { queryText, k = 10, rerank = false, tier = "any", scope } = params;
     const ownerId = await ensureUser(db, params.username);
     const embedding = await embedder.embed(queryText);
     const query = JSON.stringify(Array.from(embedding));
@@ -46,7 +66,7 @@ export function createSearchMemory(db: Db, embedder: Embedder, reranker: Reranke
              cd.hub_score AS hubScore
       FROM vector_top_k('chat_digests_ann', vector32(${query}), ${poolK}) AS v
       JOIN chat_digests cd ON cd.rowid = v.id
-      WHERE cd.owner_id = ${ownerId}${tierCond}
+      WHERE cd.owner_id = ${ownerId}${tierCond}${scopeCond("cd", scope)}
       ORDER BY dist ASC
     `);
     // CSLS hubness correction (same formula as knn; null hub_score → raw distance).
@@ -106,8 +126,9 @@ export function createSearchMemory(db: Db, embedder: Embedder, reranker: Reranke
     username: string;
     k?: number | undefined;
     rerank?: boolean | undefined;
+    scope?: SearchScope;
   }): Promise<SegmentSearchHit[]> {
-    const { queryText, k = 10, rerank = false } = params;
+    const { queryText, k = 10, rerank = false, scope } = params;
     const ownerId = await ensureUser(db, params.username);
     const embedding = await embedder.embed(queryText);
     const query = JSON.stringify(Array.from(embedding));
@@ -128,7 +149,7 @@ export function createSearchMemory(db: Db, embedder: Embedder, reranker: Reranke
              cs.hub_score AS hubScore
       FROM vector_top_k('chat_segments_ann', vector32(${query}), ${poolK}) AS v
       JOIN chat_segments cs ON cs.rowid = v.id
-      WHERE cs.owner_id = ${ownerId}
+      WHERE cs.owner_id = ${ownerId}${scopeCond("cs", scope)}
       ORDER BY dist ASC
     `);
     const adjusted = rows.map((row) => ({
@@ -188,8 +209,9 @@ export function createSearchMemory(db: Db, embedder: Embedder, reranker: Reranke
     username: string;
     k?: number | undefined;
     rerank?: boolean | undefined;
+    scope?: SearchScope;
   }): Promise<CorpusHit[]> {
-    const { queryText, k = 10, rerank = true } = params;
+    const { queryText, k = 10, rerank = true, scope } = params;
     const ownerId = await ensureUser(db, params.username);
     const embedding = await embedder.embed(queryText);
     const query = JSON.stringify(Array.from(embedding));
@@ -212,7 +234,7 @@ export function createSearchMemory(db: Db, embedder: Embedder, reranker: Reranke
              cd.topic_anchor AS topicAnchor
       FROM vector_top_k('chat_digests_ann', vector32(${query}), ${poolK}) AS v
       JOIN chat_digests cd ON cd.rowid = v.id
-      WHERE cd.owner_id = ${ownerId}
+      WHERE cd.owner_id = ${ownerId}${scopeCond("cd", scope)}
       ORDER BY dist ASC
     `);
     const segRows = await db.all<{
@@ -230,7 +252,7 @@ export function createSearchMemory(db: Db, embedder: Embedder, reranker: Reranke
              vector_distance_cos(cs.embedding, vector32(${query})) AS dist, cs.hub_score AS hubScore
       FROM vector_top_k('chat_segments_ann', vector32(${query}), ${poolK}) AS v
       JOIN chat_segments cs ON cs.rowid = v.id
-      WHERE cs.owner_id = ${ownerId}
+      WHERE cs.owner_id = ${ownerId}${scopeCond("cs", scope)}
       ORDER BY dist ASC
     `);
     const csls = (dist: number, hub: number | null): number =>

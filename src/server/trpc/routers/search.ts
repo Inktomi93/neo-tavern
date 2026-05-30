@@ -11,6 +11,8 @@ const searchInput = z.object({
   over: z.enum(["characters", "segments", "scenes", "arcs", "mix"]).default("mix"),
   /** 'character' groups segment hits by character (the "who have I done X with" view). */
   group: z.enum(["none", "character"]).default("none"),
+  /** Restrict a chat-content search (segments/scenes/arcs/mix) to one chat or a character's chats. */
+  scope: z.object({ characterId: z.string().optional(), chatId: z.string().optional() }).optional(),
   k: z.number().int().positive().max(50).optional(),
   /** Second-stage cross-encoder rerank — better order, costs a model pass. CSLS is always on. */
   rerank: z.boolean().optional(),
@@ -18,7 +20,7 @@ const searchInput = z.object({
 
 export const searchRouter = t.router({
   search: authedProcedure.input(searchInput).query(async ({ ctx, input }) => {
-    const { q: queryText, over, group, k, rerank } = input;
+    const { q: queryText, over, group, scope, k, rerank } = input;
     const s = ctx.services.search;
     const username = ctx.username;
     if (over === "characters") {
@@ -31,7 +33,7 @@ export const searchRouter = t.router({
       return {
         over,
         group: "none" as const,
-        hits: await s.segments({ queryText, username, k, rerank }),
+        hits: await s.segments({ queryText, username, k, rerank, scope }),
       };
     }
     if (over === "scenes" || over === "arcs") {
@@ -39,13 +41,13 @@ export const searchRouter = t.router({
       return {
         over,
         group: "none" as const,
-        hits: await s.digests({ queryText, username, k, rerank, tier }),
+        hits: await s.digests({ queryText, username, k, rerank, tier, scope }),
       };
     }
     return {
       over,
       group: "none" as const,
-      hits: await s.corpus({ queryText, username, k, rerank }),
+      hits: await s.corpus({ queryText, username, k, rerank, scope }),
     };
   }),
 
