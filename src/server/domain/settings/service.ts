@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 import type { Db } from "../../../db/client";
 import { settings, userSettings } from "../../../db/schema";
 import { type AppSettings, parseAppSettings } from "../../../shared/app-settings";
+import { jsonValueSchema } from "../../../shared/json";
 import { parseUserSettings, USER_SETTINGS_SCHEMA_VERSION } from "../../../shared/user-settings";
 import {
   APP_SETTINGS_KEY,
@@ -70,9 +71,20 @@ export function createSettingsService(db: Db): SettingsService {
     return getUserSettings(params);
   }
 
+  // The `settings.value` column is a json blob (typed `unknown`); validate it to JsonValue at the
+  // read seam so the view's contract is honest rather than an `unknown` cast.
+  function toView(row: { key: string; value: unknown; updatedAt: number }): GlobalSettingView {
+    return {
+      key: row.key,
+      value: jsonValueSchema.catch(null).parse(row.value),
+      updatedAt: row.updatedAt,
+    };
+  }
+
   async function getGlobalSetting(key: string): Promise<GlobalSettingView | null> {
     const rows = await db.select().from(settings).where(eq(settings.key, key));
-    return rows[0] ?? null;
+    const [row] = rows;
+    return row === undefined ? null : toView(row);
   }
 
   async function setGlobalSetting(key: string, value: unknown): Promise<GlobalSettingView> {
@@ -89,7 +101,7 @@ export function createSettingsService(db: Db): SettingsService {
     if (row === undefined) {
       throw new Error(`setGlobalSetting: row for '${key}' missing immediately after upsert`);
     }
-    return row;
+    return toView(row);
   }
 
   // App-wide runtime config (admin-gated). Reads return the RESOLVED view (env floor + stored

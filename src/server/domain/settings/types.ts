@@ -1,4 +1,5 @@
 import type { AppSettings } from "../../../shared/app-settings";
+import type { JsonValue } from "../../../shared/json";
 import type { UserSettings } from "../../../shared/user-settings";
 import type { EffectiveAppConfig } from "../../config/app-config";
 
@@ -18,7 +19,7 @@ export interface UpdateUserSettingsInput {
 
 export interface GlobalSettingView {
   key: string;
-  value: unknown;
+  value: JsonValue;
   updatedAt: number;
 }
 
@@ -30,7 +31,7 @@ export interface SettingsService {
   ): Promise<UserSettingsView>;
 
   getGlobalSetting(key: string): Promise<GlobalSettingView | null>;
-  setGlobalSetting(key: string, value: unknown): Promise<GlobalSettingView>;
+  setGlobalSetting(key: string, value: JsonValue): Promise<GlobalSettingView>;
 
   /** Admin-only. The resolved runtime config (env floor + stored override). */
   getAppSettings(params: { username: string }): Promise<EffectiveAppConfig>;

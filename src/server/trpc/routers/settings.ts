@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { appSettingsSchema } from "../../../shared/app-settings";
+import { jsonValueSchema } from "../../../shared/json";
 import { userSettingsSchema } from "../../../shared/user-settings";
 import { adminProcedure, authedProcedure, t } from "../trpc";
 
@@ -24,7 +25,7 @@ export const settingsRouter = t.router({
     .query(({ ctx, input }) => ctx.services.settings.getGlobalSetting(input.key)),
 
   setGlobalSetting: authedProcedure
-    .input(z.object({ key: z.string().min(1), value: z.any() }))
+    .input(z.object({ key: z.string().min(1), value: jsonValueSchema }))
     .mutation(({ ctx, input }) => ctx.services.settings.setGlobalSetting(input.key, input.value)),
 
   // Admin-only runtime config (the env-default-floor + DB-override knobs). Gated by adminProcedure
