@@ -271,6 +271,13 @@ Keyword normalization depth (cheap regex vs embed-merge). Chat-centroid validity
 
 # Track C — Type-safety (eliminate the real escape hatches)
 
+> **✅ STATUS — DONE (2026-05-30).** All ~14 real holes (Groups A–J) + the breadth-rigor items
+> (`OpenRouterProviderRouting`, `MacroEnv`, `satisfies` on `TurnRouting`) are shipped to `main`,
+> each its own green-`pnpm check` commit. Branded IDs (C.3) shipped earlier the same day; an
+> `avatarAssetId → AssetId` branding follow-up landed in this pass. The as-built notes, the
+> deviations from this spec, and what was deliberately skipped are in **§C.6 (As-built)** at the
+> bottom — read that, not the per-group `file:line`s above (accurate at authoring time, since drifted).
+
 ## C.1 The split
 47 escapes inventoried. **~14 are real holes; the rest are correct SDK-boundary patterns — KEEP them** (chasing SDK type-churn is a treadmill). Keep-list with justification in C.5.
 
@@ -371,6 +378,76 @@ Mechanical first (all S unless noted): B (metadata schemas) → C (derive-from-Z
 
 ## C.5 KEEP (justified — do NOT "fix")
 Agent-SDK `SessionStoreEntry` casts (`seed.ts:67,84`, `store.ts:90`) — opaque SDK type, empirically validated (`scripts/seed-probe.ts`). Drizzle `prepare()` `WeakMap<Db,any>` (`context/queries.ts:49,131,172`) — unstable generic. OpenRouter SDK `*View` projections (`chat-completions.ts`, `responses.ts`, `catalog.ts`, `account.ts`) — the local `*View` interfaces ARE the typed projection over an unstable v0.x SDK. PRAGMA rows `Record<string,unknown>` (`debug/service.ts:113`). Undocumented `rate_limit_info` fields guard-and-cast (`claude-sdk/api.ts:232`). ST `RawCard` permissive projection (`import/card.ts`). Standard jose `JWTPayload` narrowing (`trust-header.ts:149`). Test fixtures. `scripts/` and `.tsx` are clean.
+
+## C.6 As-built (2026-05-30) — what shipped, deviations, and what was skipped
+
+All of Track C landed on `main` in one session, one logical commit per group, each gated green by
+`pnpm check`. The work matched the spec's *intent* but the *details drifted* from C.2's `file:line`s
+(the spec was accurate at authoring time; code moved). Notes that matter for the next reader:
+
+**Per-group as-built:**
+- **B (metadata blobs)** — `z.record(z.string(), z.unknown()).nullable().optional()` on world-info
+  entry metadata + persona metadata. As specced.
+- **C (derive from Zod)** — `createCharacterSchema`/`createPersonaSchema` now live in each domain's
+  `types.ts`; the input types are `z.infer` of them; the routers import the schema (not a hand type)
+  and the four `input as …Input` casts are gone. As specced.
+- **E (JSON `string[]` parsers)** — landed as **`src/db/parsers.ts`** (not `src/db/schema/parsers.ts`
+  as the spec wrote) with a single `parseStringArray` (`.catch(null)`), wired into greetings/tags,
+  legacyKeys (×2 — `getEntry` AND `listEntries`, which the spec's line list missed), and memory
+  `keywords` (preserving its `[] ` default via `?? []`). The real cast was `as string[] | null`, not
+  the spec's `as string[]`.
+- **D (non-null `!`)** — `getGlobalSetting`/`setGlobalSetting` bind-and-guard; the float32 `toDriver`
+  loop uses `?? 0`. Note the real `!` was at `custom-types.ts` line ~18 in **`src/db/schema/`**, not
+  `src/server/db/` — and there were two (`toDriver` + a `setFloat32`), both fixed.
+- **A (settings KV)** — **DEVIATION:** built the lenient `JsonValue` schema (`src/shared/json.ts`),
+  NOT the spec's `discriminatedUnion("key")` registry. Rationale: the only production key is
+  `app_settings`, which already has its own typed `getAppSettings`/`updateAppSettings` pair; the
+  generic `get/setGlobalSetting` endpoints are test-only. A per-key registry would over-fit and break
+  the arbitrary-key tests. Closing `z.any()` → `JsonValue` is the real win; the registry (or retiring
+  the generic endpoints) is left as a separate call.
+- **F (lift-chain)** — `isPlainObject` lives in **`src/shared/guards.ts`** (new), used in both lift
+  chains. As specced.
+- **G (import casts)** — the real file was the card-curator-derived `import/chat.ts` with
+  `RawHeader`/`RawExtra`/`RawSwipeInfo`/`RawMessage` + an `asObj` helper, NOT the generic
+  `RawChatMeta`/`RawMessage` the spec sketched. Converted the four Raw views to lenient
+  `.passthrough()` Zod schemas + an `asTyped(v, schema)` helper; `asObj` stays for one legitimate
+  inline `chat_metadata` narrowing.
+- **H (OIDC env)** — `assertOidcEnv()` returns the three narrowed strings (issuer/clientId/secret);
+  the `as string` casts in `getConfig` are gone. As specced.
+- **I (debug ctx)** — `app.ts` builds a real `MacroContext` (required `char/user/persona/scenario`
+  default to `""`, `env` to `{}`) instead of `ctx as any`. The cast was in `app.ts`'s
+  `registerDomainDebugRoutes`, not the spec's `app.ts:61` exactly, but same thing.
+- **J (fetchOwned)** — `fetchOwned<T extends OwnedTable>` returns `T["$inferSelect"] | undefined`;
+  the two call sites drop their explicit generic. As specced.
+
+**Breadth rigor:**
+- **`OpenRouterProviderRouting`** — `src/shared/provider-routing.ts` (lenient `.passthrough()` Zod +
+  `parseProviderRouting`). Replaced **4** real `Record<string,unknown>` sites (routing.ts ×2,
+  openrouter/shared.ts, openrouter/caching.ts in+out), not the spec's "6" — the count included
+  comments/duplicates. The schema's snake_case wire keys needed adding `src/shared/provider-routing.ts`
+  to the providers `useNamingConvention`-off biome override (same rationale as the rest of providers/**).
+- **`MacroEnv`** + **`satisfies TurnRouting`** — both done as specced.
+- **avatarAssetId branding** — extra: the character + persona create/update schemas validate
+  `avatarAssetId` via `brandedId<AssetId>()` and `PersonaDetail.avatarAssetId` is now `AssetId|null`.
+
+**Deliberately SKIPPED (with reasons):**
+- **Group K (HF tensor casts)** — NOT done, by design. Two sub-kinds, both keep-worthy: (1) the
+  `embedder.ts`/`reranker.ts`/`image-embedder.ts` `tolist() as number[][]` / `.data as Float32Array`
+  casts are genuine `@huggingface/transformers` SDK-boundary casts — exactly the C.5 "SDK-churn
+  treadmill" the doc says to leave; the model fixes the runtime shape, so a guard buys zero safety.
+  (2) `hubness.ts`'s `v[d] as number` casts are a **documented hot-loop perf choice** (the code comment
+  explains `?? 0` would add a branch per dim per pair across 1024×N² iterations). Converting either is
+  churn that makes the code worse. Left as keep-list.
+- **schema-as-SoT** — mostly **moot, not skipped**: `messages.toolCalls/rawRequest/rawResponse` are
+  **write-only provenance** — referenced only in the schema, never read back, so there's no read-cast
+  to fix. `chats.metadata` is already parsed via `parseProviderRouting` (the only field consumed).
+  `worldEntries.metadata` is already typed `Record<string,unknown>|null` from Group B. So the SoT item
+  had almost no real surface left once A/B/E/#9 landed; revisit if/when those provenance blobs get read.
+
+**Tooling note (landed alongside):** the test suite flooded ~77KB of pino logs per `pnpm check`
+(pino writes to `process.stdout` via multistream, which `vitest --silent` does NOT catch). Fixed at
+source: `LOG_LEVEL=silent` in the vitest server-project env + `--silent` on the check script, and the
+husky pre-commit hook now only prints check output on FAILURE (full log at `.git/pre-commit.log`).
 
 ---
 

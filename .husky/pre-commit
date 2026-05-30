@@ -1,1 +1,11 @@
-pnpm check
+# Quiet gate: run the full check, but only surface output if it FAILS. On success we print one
+# line instead of biome/depcruise/vitest's multi-hundred-line banners (which flooded every commit).
+# The full log is kept at .git/pre-commit.log for when a failure needs digging into.
+log=".git/pre-commit.log"
+if pnpm check >"$log" 2>&1; then
+  echo "pre-commit: pnpm check passed ✓"
+else
+  echo "pre-commit: pnpm check FAILED — output below (full log: $log)"
+  cat "$log"
+  exit 1
+fi
