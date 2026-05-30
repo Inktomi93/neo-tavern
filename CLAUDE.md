@@ -183,6 +183,9 @@ these → stop and ask.
   (inventory from `pnpm api:q`, verdicts manual). Outstanding gaps + close-the-gap plans.
 - **`docs/maintenance-and-scheduling.md`** — the decided-not-built seam for scheduled/maintenance
   work: one `maintenance` registry + `scheduled_runs` table + croner, executor-swappable. The *why*.
+- **`docs/marinara-reference.md`** — answer-key for **Marinara Engine** (`references/marinara-engine`),
+  the closest-stack peer: her steering/POV/preset-variable (`ChoiceBlock`) system, chat/DB patterns,
+  feature catalog with `file:line` refs, and what's worth lifting (read patterns, don't paste — AGPL).
 - **`references/README.md`** — reference repos (read, don't copy).
 - **`README.md` / `ONBOARDING.md`** — how to run / onboarding.
 

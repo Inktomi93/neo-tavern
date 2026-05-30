@@ -115,6 +115,11 @@ only ✅-tracking in the repo; keep it one line.
     it; we don't need it).
   - Persistent Guides (state/tracker/clothes) is the separate **variables/state** capability (the
     macro-audit gap), NOT part of this — owner doesn't use it.
+  - **POV via preset-variables, NOT hardcoded buttons:** the cleanest POV mechanism is Marinara's
+    `ChoiceBlock` pattern — a preset defines named variables (`{{POV}}`, tense, …) with a
+    question + options, user picks per chat, injected via the macro engine. This unifies POV +
+    the macro `variables` gap in one feature on our `PromptConfig`. See `docs/marinara-reference.md`
+    (her engine = her ST preset productized) for the full pattern + `file:line` refs.
 
 **Pluggable auth + user/credential foundation — BUILT (migrations 0025–0026 + the `feat(auth)`
 commits) and verified live through the real caddy+authentik stack.** Pluggable `AUTH_MODE`
