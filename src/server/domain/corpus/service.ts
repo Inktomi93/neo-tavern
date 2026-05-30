@@ -36,6 +36,7 @@ import {
   type SimilarityGraph,
   similarChats,
 } from "./similarity";
+import { type SwipeInsights, swipeInsights } from "./swipes";
 import { type ThemeRow, themes } from "./themes";
 import {
   type CharacterDossier,
@@ -147,6 +148,8 @@ export interface CorpusService {
     clusterIdx: number,
     level: "scene" | "arc",
   ): Promise<ThemeDetail | null>;
+  /** Swipe/re-roll insights — most re-rolled moments + which characters/models make you re-roll. */
+  swipes(username: string): Promise<SwipeInsights>;
 }
 
 export interface CorpusServiceDeps {
@@ -280,6 +283,11 @@ export function createCorpusService(db: Db, deps: CorpusServiceDeps = {}): Corpu
     async themeDetail(username, clusterIdx, level) {
       const ownerId = await ensureUser(db, username);
       return themeDetail(db, ownerId, clusterIdx, level);
+    },
+
+    async swipes(username) {
+      const ownerId = await ensureUser(db, username);
+      return swipeInsights(db, ownerId);
     },
   };
 }

@@ -112,6 +112,9 @@ export const analyticsRouter = t.router({
     )
     .query(({ ctx, input }) => ctx.services.corpus.similarityGraph(ctx.username, input)),
 
+  // Swipe/re-roll insights — most re-rolled moments + which characters/models make you re-roll.
+  swipes: authedProcedure.query(({ ctx }) => ctx.services.corpus.swipes(ctx.username)),
+
   // "More like this chat" — nearest chats by segment-centroid cosine.
   similarChats: authedProcedure
     .input(
