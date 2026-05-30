@@ -47,6 +47,14 @@ import {
   themes,
   themeTimeline,
 } from "./themes";
+import {
+  type CharacterDossier,
+  characterDossier,
+  type HomeView,
+  homeView,
+  type ThemeDetail,
+  themeDetail,
+} from "./views";
 
 // Embeds a character card and stores the vector in the owner-keyed `character_embeddings` table
 // (relational: characterId / ownerId / characterVersionId FKs). The embed pass (scripts/embed-corpus)
@@ -125,8 +133,8 @@ export interface CorpusService {
   ): Promise<{ keyword: string; count: number }[]>;
 
   // ── analytics: emergent themes (Pillar B, B.4) ─────────────────────────────
-  /** All themes (k-means clusters), largest first. */
-  themes(username: string): Promise<ThemeRow[]>;
+  /** All themes (k-means clusters) at a level (scene|arc), largest first. */
+  themes(username: string, level?: "scene" | "arc"): Promise<ThemeRow[]>;
   /** A theme's activity over STORY time (msgMidAt-bucketed). */
   themeTimeline(
     username: string,
@@ -166,6 +174,18 @@ export interface CorpusService {
     genres: { value: string; count: number }[];
     tones: { value: string; count: number }[];
   }>;
+
+  // ── composed page views (the unified front-end surface) ────────────────────
+  /** The corpus home — most-RP'd + activity + top scene/arc themes + cleanup counts (one call). */
+  home(username: string): Promise<HomeView>;
+  /** A character page — profile + distillation + keywords + scene/arc themes + similar (one call). */
+  characterDossier(username: string, characterId: string): Promise<CharacterDossier | null>;
+  /** One theme's detail — facets + story-time timeline + top characters (one call). */
+  themeDetail(
+    username: string,
+    clusterIdx: number,
+    level: "scene" | "arc",
+  ): Promise<ThemeDetail | null>;
 }
 
 export interface CorpusServiceDeps {
@@ -272,9 +292,9 @@ export function createCorpusService(db: Db, deps: CorpusServiceDeps = {}): Corpu
       return characterKeywords(db, ownerId, characterId, limit);
     },
 
-    async themes(username) {
+    async themes(username, level = "scene") {
       const ownerId = await ensureUser(db, username);
-      return themes(db, ownerId);
+      return themes(db, ownerId, level);
     },
 
     async themeTimeline(username, clusterIdx, bucketDays) {
@@ -319,6 +339,21 @@ export function createCorpusService(db: Db, deps: CorpusServiceDeps = {}): Corpu
     async characterFacets(username) {
       const ownerId = await ensureUser(db, username);
       return characterFacets(db, ownerId);
+    },
+
+    async home(username) {
+      const ownerId = await ensureUser(db, username);
+      return homeView(db, ownerId);
+    },
+
+    async characterDossier(username, characterId) {
+      const ownerId = await ensureUser(db, username);
+      return characterDossier(db, ownerId, characterId);
+    },
+
+    async themeDetail(username, clusterIdx, level) {
+      const ownerId = await ensureUser(db, username);
+      return themeDetail(db, ownerId, clusterIdx, level);
     },
   };
 }
