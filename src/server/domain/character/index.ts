@@ -6,4 +6,9 @@ export type {
   CreateCharacterInput,
   UpdateCharacterInput,
 } from "./types";
-export { CharacterNotFoundError, CharacterOperationError } from "./types";
+export {
+  CharacterNotFoundError,
+  CharacterOperationError,
+  createCharacterSchema,
+  updateCharacterSchema,
+} from "./types";

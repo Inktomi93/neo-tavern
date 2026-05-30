@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type { PersonaId } from "../../../shared/ids";
 import { DomainNotFoundError } from "../_shared/errors";
 
@@ -9,19 +10,19 @@ export class PersonaNotFoundError extends DomainNotFoundError {
   }
 }
 
-export interface CreatePersonaInput {
-  name: string;
-  description: string;
-  avatarAssetId?: string | null;
-  metadata?: unknown | null;
-}
+// The create-input contract IS the Zod schema; the domain type is derived (z.infer) so the router's
+// validated shape and the service signature stay locked together (no post-validation cast). metadata
+// is constrained to a JSON object rather than the old `z.any()` free-for-all.
+export const createPersonaSchema = z.object({
+  name: z.string().min(1).max(200),
+  description: z.string().max(100000),
+  avatarAssetId: z.string().nullable().optional(),
+  metadata: z.record(z.string(), z.unknown()).nullable().optional(),
+});
+export type CreatePersonaInput = z.infer<typeof createPersonaSchema>;
 
-export interface UpdatePersonaInput {
-  name?: string;
-  description?: string;
-  avatarAssetId?: string | null;
-  metadata?: unknown | null;
-}
+export const updatePersonaSchema = createPersonaSchema.partial();
+export type UpdatePersonaInput = z.infer<typeof updatePersonaSchema>;
 
 export interface PersonaDetail {
   id: PersonaId;

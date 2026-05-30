@@ -5,4 +5,4 @@ export type {
   PersonaService,
   UpdatePersonaInput,
 } from "./types";
-export { PersonaNotFoundError } from "./types";
+export { createPersonaSchema, PersonaNotFoundError, updatePersonaSchema } from "./types";

@@ -1,15 +1,9 @@
 import { z } from "zod";
 import { brandedId, type PersonaId } from "../../../shared/ids";
-import type { CreatePersonaInput, UpdatePersonaInput } from "../../domain/persona";
+import { createPersonaSchema, updatePersonaSchema } from "../../domain/persona";
 import { authedProcedure, t } from "../trpc";
 
-const createSchema = z.object({
-  name: z.string().min(1).max(200),
-  description: z.string().max(100000),
-  avatarAssetId: z.string().nullable().optional(),
-  metadata: z.any().optional(),
-});
-const updateSchema = createSchema.partial().extend({ personaId: brandedId<PersonaId>() });
+const updateSchema = updatePersonaSchema.extend({ personaId: brandedId<PersonaId>() });
 
 export const personaRouter = t.router({
   list: authedProcedure.query(({ ctx }) => ctx.services.persona.list({ username: ctx.username })),
@@ -21,18 +15,12 @@ export const personaRouter = t.router({
     ),
 
   create: authedProcedure
-    .input(createSchema)
-    .mutation(({ ctx, input }) =>
-      ctx.services.persona.create({ username: ctx.username }, input as CreatePersonaInput),
-    ),
+    .input(createPersonaSchema)
+    .mutation(({ ctx, input }) => ctx.services.persona.create({ username: ctx.username }, input)),
 
   update: authedProcedure.input(updateSchema).mutation(({ ctx, input }) => {
     const { personaId, ...edits } = input;
-    return ctx.services.persona.update(
-      { username: ctx.username },
-      personaId,
-      edits as UpdatePersonaInput,
-    );
+    return ctx.services.persona.update({ username: ctx.username }, personaId, edits);
   }),
 
   remove: authedProcedure
