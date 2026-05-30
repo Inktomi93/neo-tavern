@@ -158,7 +158,7 @@ these → stop and ask.
 ## Doc map
 
 `docs/` is grouped by role (`architecture/` · `auth/` · `subsystems/` · `planning/` · `ops/` ·
-`reference/` · `_archive/`). `AGENTS.md` is working doctrine; the rest map below.
+`reference/` · `design/` · `_archive/`). `AGENTS.md` is working doctrine; the rest map below.
 
 - **`AGENTS.md`** — working doctrine: the enforcement is real, references are not the bible.
 
@@ -201,6 +201,14 @@ these → stop and ask.
 **`docs/reference/` — external answer-keys:**
 - **`marinara-reference.md`** — answer-key for **Marinara Engine** (`references/marinara-engine`), the
   closest-stack peer: steering/POV/preset-variable (`ChoiceBlock`) system, patterns worth lifting (read, don't paste — AGPL).
+
+**`docs/design/` — the visual identity (Orbweaver) answer-key (read-don't-paste, from a Claude Design handoff):**
+- **`README.md`** — index + what landed in code: tokens → `src/client/styles/globals.css` (Tailwind v4
+  `@theme`, three dark faces via `[data-theme]`: Hearth/Catppuccin/Loom, Ember accent), self-hosted Geist fonts.
+- **`DESIGN.md`** / **`PRODUCT.md`** / **`COMPONENTS.md`** — design-system rationale, product/brand register,
+  and the component build-list (NavRail, ManuscriptThread, Composer, Refinery, WeaveGlyph, …). Pairs with `ui-direction.md`.
+- **`BRAND.md`** — operational identity: name (Orbweaver) + mark + the "say what it is" naming table + Lucide icon
+  map + **voice** (UX-copy do/don't). The reference for writing any button/label/error/empty-state string.
 
 **`docs/_archive/`** — superseded/orphaned docs kept for history (api_comparison, package-modernization,
 and the pre-frontend research set). Not load-bearing. (`docs/api-map.{md,json}` are generated `pnpm api:map` output, gitignored.)
