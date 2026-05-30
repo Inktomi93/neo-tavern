@@ -17,7 +17,9 @@ import { createRegexService } from "./domain/_shared/regex";
 import { createAssetsService } from "./domain/assets";
 import { createDebugService } from "./domain/debug";
 import { createExportService } from "./domain/export";
+import { env } from "./env";
 import { registerImportRoutes } from "./import-http";
+import { ipAllowlistMiddleware } from "./middleware/ip-allowlist";
 import { debugAuthMiddleware, registerDebugRoutes } from "./observability/debug";
 import { getLog } from "./observability/logger";
 import { observability } from "./observability/middleware";
@@ -84,7 +86,17 @@ export function buildApp(
 ) {
   const app = new Hono();
 
-  // Must be first: assigns the request id + binds the request-scoped logger.
+  // Edge IP allowlist (optional; env IP_ALLOWLIST) — a blunt network gate in FRONT of everything,
+  // including observability, so a blocked IP never even gets a request id. No-op unless configured.
+  const ipAllowlist = (env.IP_ALLOWLIST ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+  if (ipAllowlist.length > 0) {
+    app.use(ipAllowlistMiddleware(ipAllowlist));
+  }
+
+  // Must be first (after the edge gate): assigns the request id + binds the request-scoped logger.
   app.use(observability);
 
   app.onError((err, c) => {
