@@ -52,4 +52,41 @@ export const analyticsRouter = t.router({
     .query(({ ctx, input }) =>
       ctx.services.corpus.characterProfile(ctx.username, input.characterId),
     ),
+
+  // Pillar A — keyword co-occurrence. Most-frequent scene keywords across the corpus.
+  topKeywords: authedProcedure
+    .input(
+      z
+        .object({
+          limit: z.number().int().positive().max(200).optional(),
+          minCount: z.number().int().positive().optional(),
+        })
+        .optional()
+        .transform((v) => v ?? {}),
+    )
+    .query(({ ctx, input }) => ctx.services.corpus.topKeywords(ctx.username, input)),
+
+  // Keywords that co-occur with a given keyword in a scene (the "what goes with X" view).
+  cooccurringKeywords: authedProcedure
+    .input(
+      z.object({
+        keyword: z.string().min(1),
+        limit: z.number().int().positive().max(100).optional(),
+      }),
+    )
+    .query(({ ctx, input }) =>
+      ctx.services.corpus.cooccurringKeywords(ctx.username, input.keyword, input.limit),
+    ),
+
+  // Top scene keywords for one character.
+  characterKeywords: authedProcedure
+    .input(
+      z.object({
+        characterId: z.string().min(1),
+        limit: z.number().int().positive().max(100).optional(),
+      }),
+    )
+    .query(({ ctx, input }) =>
+      ctx.services.corpus.characterKeywords(ctx.username, input.characterId, input.limit),
+    ),
 });

@@ -42,6 +42,7 @@
     "memory:backfill": "tsx scripts/memory-backfill.ts",
     "backfill:content-hash": "tsx scripts/backfill-content-hash.ts",
     "find-duplicates": "tsx scripts/find-duplicates.ts",
+    "compute-cooccurrence": "tsx scripts/compute-cooccurrence.ts",
     "embed:assets:gpu": "bash scripts/embed-assets-gpu.sh",
     "embed:corpus:gpu": "bash scripts/embed-corpus-gpu.sh",
     "csls": "tsx scripts/csls.ts",

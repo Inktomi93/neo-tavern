@@ -2,6 +2,13 @@
 // ST→schema ingestion lives in its peer feature `domain/import/`, not here.
 
 export {
+  type CooccurrenceStats,
+  computeCooccurrence,
+  type DigestKeywords,
+  normalizeKeyword,
+  tallyCooccurrence,
+} from "./cooccurrence";
+export {
   computeDuplicatePairs,
   DEFAULT_DUP_THRESHOLD,
   type DuplicateCharacterPair,

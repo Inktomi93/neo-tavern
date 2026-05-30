@@ -6,6 +6,13 @@ import { getLog } from "../../observability/logger";
 import { newId } from "../_shared/ids";
 import { ensureUser } from "../_shared/users";
 import {
+  type CooccurrenceStats,
+  characterKeywords,
+  computeCooccurrence,
+  cooccurringKeywords,
+  topKeywords,
+} from "./cooccurrence";
+import {
   computeDuplicatePairs,
   type DuplicateCharacterPair,
   type DuplicateChatPair,
@@ -72,6 +79,30 @@ export interface CorpusService {
   corpusStats(username: string): Promise<CorpusStats>;
   /** One character's full aggregate profile + top keywords (tier-0, content-collapsed). */
   characterProfile(username: string, characterId: string): Promise<CharacterProfile | null>;
+
+  // ── analytics: keyword co-occurrence (Pillar A, B.3) ───────────────────────
+  /** Recompute the co-occurrence + character-keyword rollups (script-driven). */
+  computeCooccurrence(opts?: {
+    maxPairs?: number | undefined;
+    hubFraction?: number | undefined;
+  }): Promise<CooccurrenceStats>;
+  /** Most frequent scene keywords across the owner's corpus. */
+  topKeywords(
+    username: string,
+    opts?: { limit?: number | undefined; minCount?: number | undefined },
+  ): Promise<{ keyword: string; count: number }[]>;
+  /** Keywords that most often co-occur with `keyword` in a scene. */
+  cooccurringKeywords(
+    username: string,
+    keyword: string,
+    limit?: number,
+  ): Promise<{ keyword: string; count: number }[]>;
+  /** Top keywords for one character. */
+  characterKeywords(
+    username: string,
+    characterId: string,
+    limit?: number,
+  ): Promise<{ keyword: string; count: number }[]>;
 }
 
 export interface CorpusServiceDeps {
@@ -157,6 +188,25 @@ export function createCorpusService(db: Db, deps: CorpusServiceDeps = {}): Corpu
     async characterProfile(username, characterId) {
       const ownerId = await ensureUser(db, username);
       return characterProfile(db, ownerId, characterId);
+    },
+
+    computeCooccurrence(opts = {}) {
+      return computeCooccurrence(db, opts);
+    },
+
+    async topKeywords(username, opts = {}) {
+      const ownerId = await ensureUser(db, username);
+      return topKeywords(db, ownerId, opts);
+    },
+
+    async cooccurringKeywords(username, keyword, limit) {
+      const ownerId = await ensureUser(db, username);
+      return cooccurringKeywords(db, ownerId, keyword, limit);
+    },
+
+    async characterKeywords(username, characterId, limit) {
+      const ownerId = await ensureUser(db, username);
+      return characterKeywords(db, ownerId, characterId, limit);
     },
   };
 }
