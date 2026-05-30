@@ -306,14 +306,68 @@ Type `SettingsService.setGlobalSetting`'s value per-key.
 **Group K — HF tensor casts:** `embedder.ts`/`reranker.ts`/`image-embedder.ts` (#33-38) + `hubness.ts:88,93,103` — loose `@huggingface/transformers` Tensor types + `noUncheckedIndexedAccess` hot loops. Convert to `number[]` once at the boundary / `?? 0` in loops. Low priority.
 
 ## C.3 Breadth rigor
-- **Branded IDs (the marquee upgrade, effort L):** `src/server/domain/_shared/ids.ts` — `type ChatId = Branded<string,"ChatId">` etc.; `newId<T>()` mints branded; tRPC `.transform(s => s as ChatId)` at the boundary; domain signatures take `ChatId` not `string`. So a `chatId` can't be passed where a `characterId` is expected. Mint seam + tRPC boundary already centralized → tractable.
+- **Branded IDs — ✅ SHIPPED (2026-05-30).** 10 commits, each its own green `pnpm check`. A
+  `chatId` can no longer be passed where a `characterId` is expected, end-to-end (db row → domain →
+  tRPC → client via `AppRouter` inference). **The how, the two false starts, and the test handling
+  are recorded below — they're the reusable lesson, not just trivia.**
+
+  **What landed:**
+  - `src/shared/ids.ts` (NOT `domain/_shared` as originally sketched — it must live in `shared` so the
+    brand flows through db columns → domain → tRPC → client): `Branded<B>` phantom type (zero runtime
+    cost), one branded type per entity (`UserId`/`ChatId`/`MessageId`/`CharacterId`/`CharacterVersionId`/
+    `PersonaId`/`PresetId`/`PresetVersionId`/`WorldBookId`/`WorldEntryId`/`TagId`/`AssetId`/`SessionId`),
+    `castId<T>(raw)` for untyped seams, `brandedId<T>()` Zod helper for tRPC inputs.
+  - `newId<T extends string>()` made generic in **both** id modules — `db/schema/ids.ts` AND
+    `domain/_shared/ids.ts` (the domain one is what services actually mint through; missing it was the
+    first bug). `newId<ChatId>()` tags the mint at the source.
+  - Per-entity clusters: Persona, Tag, World(Book/Entry), Asset, Session, Character(+Version),
+    Preset(+Version), Chat(+Message), User — branded through service signatures, `*View`/`*Detail` id
+    fields, error constructors, and tRPC inputs.
+
+  - **❌ FALSE START 1 — branding the Drizzle COLUMN (`id: text("id").$type<ChatId>()`).** This
+    detonates across the whole codebase: every `eq(table.id, someString)` and every `insert({id})` in
+    *any* feature that touches that table then demands the brand. ~20+ errors from one column. **Do
+    NOT brand columns.** The spec said "domain signatures take `ChatId`" — it never said columns; that
+    was my over-reach. Reset hard, started over.
+  - **✅ THE PATTERN THAT WORKS — brand the TYPES THAT FLOW THROUGH CODE, leave columns plain `text`.**
+    A `Branded<T>` *is* a `string` at runtime and structurally, so `eq(col, brandedId)` and
+    `insert({ id: brandedId })` just work — **zero blast radius.** Touch only: (1) the view/param
+    *types* (`MessageView.id`, `*Params.chatId`), (2) `castId<T>()` at the row→view construction seam
+    (covariant returns need it), (3) tRPC inputs via `brandedId<T>()`, (4) `newId<T>()` at mints.
+  - **The contravariance lever (what made the effort-L chat cluster tractable):** a function whose
+    *implementation* keeps `chatId: string` still satisfies an interface that declares `chatId: ChatId`
+    (params are contravariant — a `string`-accepting fn accepts a `ChatId`). So internal helpers
+    (`loadOwnedChat`, `versionPinned`, the dozens of `ownerId: string` domain params) **need no
+    change** — only the public interface + the value-producing seams. Branding `types.ts` alone gave 0
+    production errors after just the 3 view-casts + 2 mints + router inputs.
+  - **`UserId` was the EASIEST, not the hardest, despite being the most pervasive** (`ownerId` on every
+    owned table, `ensureUser` at ~19 sites). Brand the *produce* side (`ensureUser`/`requireAdmin`/
+    `provisionIdentity` returns → `UserId`) and all ~19 `const ownerId = await ensureUser()` sites infer
+    `UserId` for free; the internal `ownerId: string` params accept them unchanged (assignability). Then
+    brand only the caller-chosen `userId` *inputs* (admin/sessions/router) — that's where a wrong-id
+    swap is a real bug.
+
+  - **Tests (the bulk of the churn) — fixed at the SOURCE, not per-call-site.** Branding
+    `tests/support/db.ts` `seedChatRow`/`seedCharacter` return types (`chatId: ChatId`,
+    `characterVersionId: CharacterVersionId`, `ownerId: UserId`, via `castId` on the internal strings)
+    auto-fixed ~60 of ~75 test errors for free — every `const { chatId } = await seedChatRow(db)` site
+    became branded. The residual ~15 were hardcoded string literals in direct-insert tests
+    (`chatId: "ch1"`): fixed with a per-file `const CH1 = castId<ChatId>("ch1")` (greppable, explicit) +
+    `castId<MessageId>("")` on the `?? ""` id fallbacks. Direct `db.insert({ id: "ch1" })` literals stay
+    plain strings (a column is `text` — no brand needed).
+
+  - **DEFERRED (deliberate skip, low value):** corpus/internal ids — `CharacterEmbeddingId`,
+    `ChatDigestId`, `ChatSegmentId`, `ChatEventId`, `UserCredentialId`. These are write-internal and
+    essentially never cross a public id-typed signature where a wrong-id swap could happen, so branding
+    them is churn for near-zero safety gain. The brand *types* exist in `shared/ids.ts` if a future
+    surface ever needs them.
 - **Schema-as-single-source-of-truth** for all JSON blobs (follow `presetVersions.config`→`parsePromptConfig` model): `worldEntries.metadata`, `chats.metadata` (→ typed `providerRouting`), `messages.toolCalls/rawRequest/rawResponse`.
 - **`OpenRouterProviderRouting`** interface + Zod (replaces 6 `Record<string,unknown>` sites across `providers/openrouter/*` + `routing.ts`).
 - **`MacroEnv`** typed bag instead of `env: Record<string,unknown>` (`shared/macro/types.ts`).
 - **`satisfies`** on each `TurnRouting` branch in `routing.ts` (catches future api additions).
 
 ## C.4 Sequencing (C)
-Mechanical first (all S unless noted): B (metadata schemas) → C (derive-from-Zod) → A (settings registry, M) → E (JSON parsers) → D (guard) → H (OIDC assert) → I (debug ctx) → G (asTyped, M) → breadth `OpenRouterProviderRouting` → F (lift guard) → J (helpers) → `MacroEnv` (M) → schema-SoT (M) → HF casts → `satisfies`. **Then** branded IDs (L, do it deliberately when not mid-feature).
+Mechanical first (all S unless noted): B (metadata schemas) → C (derive-from-Zod) → A (settings registry, M) → E (JSON parsers) → D (guard) → H (OIDC assert) → I (debug ctx) → G (asTyped, M) → breadth `OpenRouterProviderRouting` → F (lift guard) → J (helpers) → `MacroEnv` (M) → schema-SoT (M) → HF casts → `satisfies`. ~~**Then** branded IDs (L, do it deliberately when not mid-feature).~~ **Branded IDs ✅ DONE (2026-05-30) — shipped first, ahead of the mechanical items, on a quiet tree; see C.3.** The rest of C.2/C.3 mechanical cleanup is still open.
 
 ## C.5 KEEP (justified — do NOT "fix")
 Agent-SDK `SessionStoreEntry` casts (`seed.ts:67,84`, `store.ts:90`) — opaque SDK type, empirically validated (`scripts/seed-probe.ts`). Drizzle `prepare()` `WeakMap<Db,any>` (`context/queries.ts:49,131,172`) — unstable generic. OpenRouter SDK `*View` projections (`chat-completions.ts`, `responses.ts`, `catalog.ts`, `account.ts`) — the local `*View` interfaces ARE the typed projection over an unstable v0.x SDK. PRAGMA rows `Record<string,unknown>` (`debug/service.ts:113`). Undocumented `rate_limit_info` fields guard-and-cast (`claude-sdk/api.ts:232`). ST `RawCard` permissive projection (`import/card.ts`). Standard jose `JWTPayload` narrowing (`trust-header.ts:149`). Test fixtures. `scripts/` and `.tsx` are clean.
@@ -326,14 +380,15 @@ Agent-SDK `SessionStoreEntry` casts (`seed.ts:67,84`, `store.ts:90`) — opaque 
 security gap, UI-independent. (2) Track B **dedup + co-occurrence** — fastest differentiator payoff
 (dedup ~80% built, co-occurrence pure SQL). (3) Track C **mechanical cleanup** — interleave, low-risk
 clean commits. (4) Track B **themes + breadth** — the bigger build (needs `msgMidAt` + backfill).
-(5) **Branded IDs** — once, deliberately.
+(5) ~~**Branded IDs** — once, deliberately.~~ ✅ DONE (2026-05-30, see C.3).
 
 **Decided (owner sign-off):**
 - **`msgMidAt` digest column** (Track B.4) — **LOCKED IN to the RAG track.** Add the column + populate
   in `generateDigests` + backfill, as part of the themes schema step (B.8 step 6). Not optional.
-- **Branded IDs** (Track C.3) — **APPROVED as a standalone follow-up pass.** Do the full domain-wide
-  refactor (don't half-do it), but on a quiet tree — its own dedicated PR/commit-series, NOT interleaved
-  with feature work, so the churn doesn't tangle a feature diff. It's the last item in Track C (C.4).
+- **Branded IDs** (Track C.3) — ✅ **DONE (2026-05-30).** Shipped as its own 10-commit series on a quiet
+  tree (the standalone-pass discipline held — no feature work tangled in). Full write-up incl. the two
+  false starts, the contravariance lever, and the test-source fix is in C.3. Corpus/internal ids
+  deliberately skipped (low value — C.3).
 
 Effort totals (rough): Track A core ~1 wk; Track B pillars+core breadth ~3–4 wk (+1–2 stretch);
 Track C mechanical ~2–3 days + branded IDs ~few days.

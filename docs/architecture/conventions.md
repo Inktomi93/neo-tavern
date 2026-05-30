@@ -51,6 +51,29 @@ transformers.js `session_options`, OS env vars) trip `useNamingConvention`. Two 
 - **`noNestedTernary`** — convert `a ? x : b ? y : z` to `if` statements (e.g. the owner-knn filter).
 - No `any`; no default exports outside config/route files; `noShadow`.
 
+## Branded IDs — brand the FLOW, never the column (hard-won, 2026-05-30)
+
+Entity ids are branded nominal types (`shared/ids.ts`: `ChatId`, `UserId`, … = `Branded<string,B>`,
+zero runtime cost) so a `chatId` can't be passed where a `characterId` is expected. The full migration
+is shipped (`docs/planning/breadth-buildout.md` C.3). The trap that cost two restarts:
+
+- **NEVER brand the Drizzle column** (`id: text("id").$type<ChatId>()`). It detonates: every
+  `eq(table.id, str)` and `insert({id})` in *every* feature touching that table then demands the brand
+  (~20+ errors from one column). **Columns stay plain `text`.**
+- **Brand the types that flow through CODE:** view/param types (`MessageView.id`, `*Params.chatId`),
+  tRPC inputs via `brandedId<T>()`, mints via `newId<T>()`, and `castId<T>()` at the row→view seam
+  (covariant returns). A `Branded<T>` *is* a `string`, so `eq()`/`insert()` are unaffected — zero blast
+  radius.
+- **Contravariance keeps it cheap:** an impl fn with `chatId: string` still satisfies an interface
+  declaring `chatId: ChatId` (params are contravariant). So internal helpers + the many `ownerId: string`
+  domain params need NO change — only the public interface + value-producing seams. For pervasive ids
+  (`UserId`/`ownerId`), brand the *produce* side (`ensureUser` return) and call sites infer it for free.
+- **Two `newId`s:** `db/schema/ids.ts` AND `domain/_shared/ids.ts` — services mint through the latter;
+  both are generic (`newId<T>()`).
+- **Tests:** brand the seed-helper *returns* (`tests/support/db.ts` `seedChatRow`/`seedCharacter`) to fix
+  most call sites at the source; for hardcoded literals use a per-file `const CH1 = castId<ChatId>("ch1")`.
+  Direct `db.insert({ id: "x" })` literals stay plain strings.
+
 ## Tooling quirks
 
 - **`tsx -e '<code with top-level await>'` FAILS** ("Top-level await not supported with the cjs
