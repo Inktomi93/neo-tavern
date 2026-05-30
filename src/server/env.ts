@@ -171,6 +171,16 @@ const envSchema = z
       .enum(["true", "false"])
       .default("true")
       .transform((v) => v === "true"),
+    // JWKS hardening (A.2.6): the JWKS URL arrives in the X-Authentik-Meta-Jwks REQUEST header, so it's
+    // the one user-influenced egress vector. A remote JWKS URL is ALWAYS required to be https; if this
+    // allowlist (comma host-list) is set, its host must also be in the list. Default = the OIDC_ISSUER
+    // host when set. Recommended in forward-header mode.
+    FORWARD_AUTH_JWKS_ALLOWLIST: z.string().optional(),
+    // Optional expected `iss` / `aud` for the forwarded JWT — when set, jwtVerify enforces them (jose
+    // checks neither by default). authentik's JWT `iss` = the authentik issuer URL, `aud` = the provider
+    // client id. Unset ⇒ signature-only (today's behavior); set them to bind the token to your IdP.
+    FORWARD_AUTH_JWT_ISSUER: z.string().optional(),
+    FORWARD_AUTH_JWT_AUDIENCE: z.string().optional(),
 
     // Per-user credential encryption key — base64 of 32 random bytes (AES-256-GCM). UNSET ⇒ per-user
     // creds are OFF (the store rejects writes; the resolver falls back to the host key). Validated for

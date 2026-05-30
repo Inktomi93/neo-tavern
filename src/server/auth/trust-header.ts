@@ -49,6 +49,13 @@ export interface AuthConfig {
   // OPT-IN source-IP gate for the unsigned path: CIDRs the forwarded request's client IP must match.
   // Empty/absent ⇒ no gate (network-isolation trust). The signed-JWT path never consults this.
   forwardTrustedProxies?: string[];
+  // JWKS-URL host allowlist (A.2.6) for the X-Authentik-Meta-Jwks header. A remote URL is always
+  // required https; if this is non-empty, its host must be in it. Absent ⇒ host not restricted (https
+  // still enforced).
+  jwksAllowlist?: string[];
+  // Optional expected iss/aud enforced on the forwarded JWT (jose checks neither by default).
+  jwtIssuer?: string;
+  jwtAudience?: string;
 }
 
 /** Injected, db-dependent resolution steps (wired at the composition root; absent ⇒ that layer is
@@ -95,7 +102,25 @@ export function authConfigFromEnv(): AuthConfig {
       : {}),
     ...(env.FORWARD_AUTH_UID_HEADER ? { forwardUidHeader: env.FORWARD_AUTH_UID_HEADER } : {}),
     forwardTrustedProxies: parseCsv(env.FORWARD_AUTH_TRUSTED_PROXIES),
+    jwksAllowlist: jwksAllowlistFromEnv(),
+    ...(env.FORWARD_AUTH_JWT_ISSUER ? { jwtIssuer: env.FORWARD_AUTH_JWT_ISSUER } : {}),
+    ...(env.FORWARD_AUTH_JWT_AUDIENCE ? { jwtAudience: env.FORWARD_AUTH_JWT_AUDIENCE } : {}),
   };
+}
+
+/** The JWKS host allowlist: explicit FORWARD_AUTH_JWKS_ALLOWLIST, else the OIDC_ISSUER host when set,
+ *  else empty (host not restricted — https is still enforced on remote URLs). */
+function jwksAllowlistFromEnv(): string[] {
+  const explicit = parseCsv(env.FORWARD_AUTH_JWKS_ALLOWLIST).map((h) => normalizeHost(h));
+  if (explicit.length > 0) return explicit;
+  if (env.OIDC_ISSUER) {
+    try {
+      return [normalizeHost(new URL(env.OIDC_ISSUER).host)];
+    } catch {
+      return [];
+    }
+  }
+  return [];
 }
 
 /** Parse a comma-list env value into trimmed non-empty entries (CIDR strings, header names, …). */
@@ -145,13 +170,35 @@ const jwksCache = new Map<
   string,
   ReturnType<typeof createLocalJWKSet> | ReturnType<typeof createRemoteJWKSet>
 >();
-function jwksFor(metaJwks: string) {
+function jwksFor(
+  metaJwks: string,
+  allowlist: string[],
+): ReturnType<typeof createLocalJWKSet> | null {
   const cached = jwksCache.get(metaJwks);
   if (cached) return cached;
   const trimmed = metaJwks.trim();
-  const set = trimmed.startsWith("{")
-    ? createLocalJWKSet(JSON.parse(trimmed))
-    : createRemoteJWKSet(new URL(trimmed));
+  let set: ReturnType<typeof createLocalJWKSet> | ReturnType<typeof createRemoteJWKSet>;
+  if (trimmed.startsWith("{")) {
+    set = createLocalJWKSet(JSON.parse(trimmed));
+  } else {
+    // A remote JWKS URL is the lone user-influenced egress vector (A.2.6): require https, and — when an
+    // allowlist is configured — require the host to be on it. Reject otherwise (→ identity rejected).
+    let url: URL;
+    try {
+      url = new URL(trimmed);
+    } catch {
+      return null;
+    }
+    if (url.protocol !== "https:") {
+      getLog().warn({ jwksHost: url.host }, "auth: rejecting non-https JWKS URL");
+      return null;
+    }
+    if (allowlist.length > 0 && !allowlist.includes(normalizeHost(url.host))) {
+      getLog().warn({ jwksHost: url.host }, "auth: rejecting JWKS URL host (not in allowlist)");
+      return null;
+    }
+    set = createRemoteJWKSet(url);
+  }
   jwksCache.set(metaJwks, set);
   return set;
 }
@@ -225,8 +272,13 @@ async function resolveForwardHeader(
   const jwt = headers.get("x-authentik-jwt");
   const metaJwks = headers.get("x-authentik-meta-jwks");
   if (config.verifyForwardJwt && jwt && metaJwks) {
+    const keyset = jwksFor(metaJwks, config.jwksAllowlist ?? []);
+    if (!keyset) return null; // bad/non-https/off-allowlist JWKS URL → reject the forwarded identity
     try {
-      const { payload } = await jwtVerify(jwt, jwksFor(metaJwks));
+      const { payload } = await jwtVerify(jwt, keyset, {
+        ...(config.jwtIssuer ? { issuer: config.jwtIssuer } : {}),
+        ...(config.jwtAudience ? { audience: config.jwtAudience } : {}),
+      });
       const claims = payload as JWTPayload & {
         preferred_username?: unknown;
         groups?: unknown;

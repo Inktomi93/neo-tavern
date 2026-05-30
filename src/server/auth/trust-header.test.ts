@@ -111,6 +111,42 @@ describe("resolveIdentity — forward-header", () => {
     });
   });
 
+  test("rejects a non-https JWKS URL (A.2.6 SSRF/spoof guard)", async () => {
+    const { jwt } = await signedAuthentikJwt({ sub: "x", preferred_username: "x" });
+    const headers = new Headers({
+      "x-authentik-jwt": jwt,
+      "x-authentik-meta-jwks": "http://evil.example/jwks",
+    });
+    const { identity } = await resolveIdentity(
+      headers,
+      cfg({ mode: "forward-header", verifyForwardJwt: true }),
+    );
+    expect(identity).toBeNull();
+  });
+
+  test("rejects a JWKS URL whose host is not in the allowlist", async () => {
+    const { jwt } = await signedAuthentikJwt({ sub: "x", preferred_username: "x" });
+    const headers = new Headers({
+      "x-authentik-jwt": jwt,
+      "x-authentik-meta-jwks": "https://evil.example/jwks",
+    });
+    const { identity } = await resolveIdentity(
+      headers,
+      cfg({ mode: "forward-header", jwksAllowlist: ["auth.lan"] }),
+    );
+    expect(identity).toBeNull();
+  });
+
+  test("enforces expected issuer when configured (a token without it is rejected)", async () => {
+    const { jwt, jwksJson } = await signedAuthentikJwt({ sub: "x", preferred_username: "x" });
+    const headers = new Headers({ "x-authentik-jwt": jwt, "x-authentik-meta-jwks": jwksJson });
+    const { identity } = await resolveIdentity(
+      headers,
+      cfg({ mode: "forward-header", jwtIssuer: "https://expected.example" }),
+    );
+    expect(identity).toBeNull();
+  });
+
   test("Authelia Remote-* trusted headers resolve an identity (no uid → externalId null)", async () => {
     const headers = new Headers({
       "remote-user": "dana",
