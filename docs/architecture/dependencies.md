@@ -1,133 +1,85 @@
-# Dependency parking lot
+# Dependencies
 
-`package.json` can't carry comments, so this is where **deferred dependencies**
-live — with what they're for, when to add them, and the exact command. Nothing
-gets installed until the feature that needs it lands; that keeps `knip` clean and
-avoids dead deps. Uncomment + run when it's time.
+What's installed, what each thing replaces from the reference stacks (SillyTavern / AstraProjecta /
+Marinara), and the small set still genuinely deferred. `package.json` can't carry comments, so the
+*why* lives here.
 
-> Locked stack reminder (from `CLAUDE.md`): React + Vite + TanStack + Tailwind +
-> shadcn + Zustand + RHF. **Never** add: Next.js/RSC, MUI/AntD, Redux,
-> styled-components, CSS Modules, ESLint, Prettier.
+> Locked stack reminder (from `CLAUDE.md`): React + Vite + TanStack + Tailwind + shadcn + Zustand +
+> RHF. **Never** add: Next.js/RSC, MUI/AntD, Redux, styled-components, CSS Modules, ESLint, Prettier.
 
-## Installed now
+> **Heads-up — the frontend deps are installed AHEAD of the UI.** The React frontend is still
+> scaffolding (`src/client/features/*` are mostly `.gitkeep`), so `pnpm knip` currently reports the
+> client libraries below as **unused dependencies** (~25). That's expected until the chat/corpus UI
+> consumes them — it is NOT the old "don't install before a consumer" discipline (that rule held while
+> the parking lot was real; the client set has since been front-loaded). `knip` is not in `pnpm check`,
+> so it doesn't gate commits; treat the unused-dep list as a frontend-build TODO, not a regression.
 
-Runtime: `hono`, `@hono/node-server`, `@trpc/{server,client,react-query}`,
-`@tanstack/{react-query,react-router}`, `react`, `react-dom`, `zod`,
-`@anthropic-ai/claude-agent-sdk` (the agent-sdk runner), `@openrouter/sdk` (the openrouter
-runner — Chat Completions + Responses; the OFFICIAL OpenRouter SDK, **NOT** the `openai`
-package, which we removed — the official SDK gives typed errors, routing metadata, the live
-model catalog, image-gen for later), `dotenv` (loads a gitignored `.env` with `override:true` so a
-local key wins over a stale shell export — see `src/server/env.ts`),
-`luxon` (+ `@types/luxon` dev) — the canonical time layer: all timestamps are epoch-ms UTC, parsed
-deterministically as UTC at every provider/import boundary (`src/shared/time.ts`); the client renders
-in the viewer's tz via `Intl` when the UI lands.
-`atomically` — durable atomic file writes for the content-addressed asset store (`src/server/storage/cas.ts`):
-temp-under-root → fsync → rename, so a crashed write never leaves a corrupt blob at its hash. The ONE
-CAS dep (the two CAS npm libs are unmaintained/untyped; the rest is ~80 lines of our own). See `docs/subsystems/assets.md`.
-Tooling: biome, typescript, vite, tsx, vitest, dependency-cruiser, knip, husky,
-tailwindcss (v4), concurrently.
+## Installed — server / runtime
+
+- **`hono`, `@hono/node-server`** — the HTTP server + Node adapter.
+- **`@trpc/{server,client,react-query}`, `@tanstack/react-query`** — typed RPC boundary + server-state cache.
+- **`zod`** — runtime validation at every boundary (tRPC inputs, blob parsers, env).
+- **`@anthropic-ai/claude-agent-sdk`** — the **agent-sdk runner** (modes 1+2).
+- **`@openrouter/sdk`** — the **openrouter runner** (chat-completions + responses). The OFFICIAL SDK,
+  **NOT** the `openai` package (removed) — typed errors, routing metadata, the live model catalog.
+- **`@huggingface/transformers`** — in-process BGE-M3 embeddings + `bge-reranker-v2-m3` reranker (onnx, CUDA EP).
+- **`@anush008/tokenizers`** — native Rust tokenizer for real BGE token counts (the transformers.js JS tokenizer is quadratic).
+- **`node-llama-cpp`** — local GGUF summarizer (Qwen3) for digest generation (`docs/subsystems/chat-memory.md`); Haiku fallback over OpenRouter.
+- **`drizzle-orm`, `@libsql/client`** — the ORM + libSQL driver. Vectors are native `F32_BLOB` + `libsql_vector_idx` (no sqlite-vec).
+- **`nanoid`** — row id generation. **`luxon`** (+ `@types/luxon`) — the canonical epoch-ms-UTC time layer (`src/shared/time.ts`).
+- **`dotenv`** — loads a gitignored `.env` with `override:true` (a local key beats a stale shell export; `src/server/env.ts`).
+- **`atomically`** — durable atomic writes for the content-addressed asset store (`src/server/storage/cas.ts`); see `docs/subsystems/assets.md`.
+- **`sharp`** — image processing (avatar/card handling). **`fflate`** — zip (un)packing for export/import.
+- **Auth:** **`jose`** (JWT/JWKS — `forward-header` verifies `X-Authentik-Jwt`), **`openid-client`** v6 (the `oidc` AUTH_MODE).
 
 > **`@openrouter/sdk` build note:** its postinstall is skipped (`pnpm-workspace.yaml`
-> `allowBuilds: '@openrouter/sdk': false`) — the prebuilt ESM works without it (verified
-> live). Don't "approve" the build.
+> `allowBuilds: '@openrouter/sdk': false`) — the prebuilt ESM works without it (verified live). Don't "approve" the build.
 
-## Client — with `shadcn init` (first real UI: `features/chat`)
+## Installed — client / UI (front-loaded; knip-unused until the UI lands)
 
-```bash
-# The cn() trio + icons + animations + toasts that shadcn/ui generates against.
-# shadcn also copies @radix-ui/react-* in per-component as you add them.
-# pnpm add clsx tailwind-merge class-variance-authority lucide-react tw-animate-css sonner
-```
+The shadcn base + the per-feature client libs. **What each replaces** in the reference stacks:
 
-- **clsx + tailwind-merge + class-variance-authority** — the `cn()` class-merge helper + variant API every shadcn component uses.
-- **lucide-react** — icon set (shadcn default).
-- **tw-animate-css** — Tailwind v4 animation utilities (the v4 replacement for `tailwindcss-animate`).
-- **sonner** — toast notifications (shadcn standard).
+| Dep(s) | Role | Replaces (ST / Astra / Marinara) |
+|---|---|---|
+| `clsx` + `tailwind-merge` + `class-variance-authority` | the `cn()` class-merge + variant API every shadcn component uses (`src/client/lib/utils.ts`) | Astra/Marinara `clsx`+`tailwind-merge` |
+| `radix-ui` + `@radix-ui/react-slot` | shadcn primitive substrate | Astra `@radix-ui/*` |
+| `lucide-react` | icon set (shadcn default) | Astra/Marinara `lucide-react`; skip `@tabler/icons` |
+| `tw-animate-css` | Tailwind v4 animation utilities | the v4 replacement for `tailwindcss-animate` / Marinara `framer-motion` |
+| `sonner` | toast notifications (shadcn standard) | Marinara `sonner` |
+| `zustand` | GLOBAL/feature-local client state only (server state stays in TanStack Query) | Marinara `zustand` (but feature-scoped stores, not one 80KB god-store) |
+| `react-hook-form` + `@hookform/resolvers` | character/persona/preset editors, validated with the existing `zod` schemas | ST DOM-state forms |
+| `react-markdown` + `remark-gfm` + `rehype-sanitize` (+ `rehype-raw`) | render RP messages as SANITIZED markdown (React-idiomatic) | ST `showdown`+`dompurify`; Astra vanilla `markdown-it` |
+| `@tanstack/react-virtual` | virtualize the 400+ char corpus + long chats | ST jQuery list rendering |
+| `@uiw/react-codemirror` + `@codemirror/{state,view,lang-markdown}` | prompt / character-card / world-entry editors | ST `chevrotain`; Astra `@codemirror/*` |
+| `react-resizable-panels` | the resizable chat/sidebar split | Marinara panel logic |
+| `recharts` | analytics dashboards (token burn, co-occurrence, theme charts; Phase 6) | — (neo-original) |
 
-## Client — state & forms
+Tailwind v4 is configured via `@tailwindcss/vite` + `@theme` in `src/client/styles/globals.css` (no `tailwind.config.js`).
 
-```bash
-# pnpm add zustand                              # global + feature-local client state (brief-locked)
-# pnpm add react-hook-form @hookform/resolvers  # forms (character/persona editors), validated with zod
-```
-> **Still deferred (confirmed at 4.6.3d, the corpus-search UI):** that feature needs NO zustand —
-> its state is URL search params (router-owned, shareable) + local `useState` (the input draft) +
-> TanStack Query (server cache). zustand is for genuine GLOBAL client state (a cross-route selection,
-> app-wide ephemeral UI); install it when a feature actually has that, else knip flags it dead.
+## Installed — tooling
 
-## Client — per feature (Phase 2+)
+- **Build/dev:** `vite`, `@vitejs/plugin-react`, `babel-plugin-react-compiler`, `@tailwindcss/vite`,
+  `@tanstack/router-plugin` (must sequence BEFORE the React plugin), `tsx`, `concurrently`.
+- **Quality gate (`pnpm check`):** `@biomejs/biome`, `typescript`, `dependency-cruiser`, `vitest`. Plus `husky` (pre-commit).
+- **Not gating:** `knip` (dead-code/dep report), `jscpd` (copy-paste), `typescript-language-server`.
+- **Testing kit:** `vitest` + `@vitest/{browser,browser-playwright,coverage-v8}`, `@testing-library/{react,jest-dom,user-event}`,
+  `msw` (mock OUTBOUND http only — never the DB), `@playwright/test` + `playwright` (one happy-path E2E per flow).
+- **GPU runtime:** CUDA-12 + cuDNN-9 are vendored project-locally with **uv** (`tools/cuda/`, `pnpm cuda:setup`) —
+  NOT an npm/system dep. `onnxruntime-node` (native, pulled via `@huggingface/transformers`) gets `allowBuilds`.
+  Model weights cache to repo-local `.models/` (`MODEL_CACHE_DIR`, gitignored).
+- Dev logging: `pino-pretty` (the `dev:server` pretty stream; prod emits JSON). `@types/*` for node/react/luxon.
 
-```bash
-# chat: render RP messages as SANITIZED markdown (React-idiomatic; AstraProjecta used vanilla markdown-it)
-# pnpm add react-markdown remark-gfm rehype-sanitize
+## Genuinely deferred (not yet added — add when the feature lands)
 
-# long lists: virtualize the 400+ character corpus + long chats (TanStack family — essential for the RAG product)
-# pnpm add @tanstack/react-virtual
-
-# editors: prompts / character cards / world entries
-# pnpm add @uiw/react-codemirror @codemirror/state @codemirror/view @codemirror/lang-markdown
-```
-
-## Client — analytics (Phase 6 dashboards)
-
-```bash
-# pnpm add recharts   # token burn, character co-occurrence, theme clustering charts
-```
-
-## Server — persistence (Phase 2)
-
-```bash
-# pnpm add drizzle-orm @libsql/client
-# pnpm add -D drizzle-kit
-# pnpm add nanoid          # id generation for rows
-# Vectors use libSQL NATIVE F32_BLOB + libsql_vector_idx — NO sqlite-vec, no extension.
-```
-
-## Server — embeddings / RAG ✅ INSTALLED (Phase 3a / 4.6)
-
-```bash
-# pnpm add @huggingface/transformers   # in-process BGE-M3 (Xenova/bge-m3) embeddings +
-#                                       # onnx-community/bge-reranker-v2-m3-ONNX reranker
-# pnpm add @anush008/tokenizers        # native Rust tokenizer (real BGE-M3 token counts;
-#                                       # the transformers.js JS tokenizer is quadratic — 12.7s
-#                                       # for a 10k-token card). Prebuilt napi, no build step.
-```
-- **GPU is in-process** (onnxruntime-node CUDA EP), not a service. The CUDA-12 + cuDNN-9
-  runtime is vendored project-locally with **uv** (`tools/cuda/pyproject.toml` + `uv.lock`,
-  `pnpm cuda:setup`) — NOT an npm/system dep. `allowBuilds`: `onnxruntime-node` (native).
-- Model weights cache to repo-local `.models/` (`MODEL_CACHE_DIR`), gitignored.
-- Future swap option (no native binary): **kitoken** (Rust→WASM, HF-compatible) for the
-  tokenizer; **Qwen3-Embedding** if BGE-M3 is outgrown (cheap re-index — `embeddings.model` tags rows).
-
-## Server — structured logging + observability ✅ INSTALLED
-
-`pino` (+ `pino-pretty` dev) are in. The logging + `curl`-able `/api/_debug/*`
-layer is built in `src/server/observability/` — see **`docs/subsystems/observability.md`**.
-(Not deferred; here for the record.)
-
-## Testing (the kit — see `tests/AGENTS.md` for the doctrine)
-
-```bash
-# coverage (report, not a gate — `vitest run --coverage`)
-# pnpm add -D @vitest/coverage-v8
-
-# component tests — also split vitest into node + happy-dom projects (see tests/AGENTS.md)
-# pnpm add -D happy-dom @testing-library/react @testing-library/jest-dom @testing-library/user-event
-
-# mock OUTBOUND HTTP only (OpenRouter, client fetch) — never the DB
-# pnpm add -D msw
-
-# E2E: ONE happy-path per critical flow, sparingly, no screenshot diffs. Own runner.
-# pnpm add -D @playwright/test
-```
-
-In-memory DB tests need **no new dep** — libSQL `:memory:` + drizzle + drizzle-kit
-(already in the server/persistence set). When test files + these deps land, add
-`tests` to knip's project globs so the test-only deps aren't flagged as unused.
+- **`@headless-tree`** — only when the world-info / lorebook tree UI lands.
+- **`undici`** (explicit) + **`rate-limiter-flexible`** — Track A security (SSRF egress firewall + rate limiting); see `docs/planning/breadth-buildout.md`.
+- **`croner`** — the scheduled-work seam when the first real maintenance task arrives (`docs/planning/maintenance-and-scheduling.md`).
 
 ## Considered & deliberately skipped (so we don't re-litigate)
 
-- **@tabler/icons** — lucide-react covers it.
-- **vaul** — only if we lean hard into mobile bottom-sheets.
-- **@headless-tree** — only when the world-info / lorebook tree UI lands.
-- **markdown-it** — AstraProjecta's pick; we use `react-markdown` (React-native, easier sanitization).
+- **`@tabler/icons`** — `lucide-react` covers it. · **`vaul`** — only if we lean hard into mobile bottom-sheets.
+- **`markdown-it`** — AstraProjecta's pick; we use `react-markdown` (React-native, easier sanitization).
+- **`framer-motion`** — `tw-animate-css` covers the v4 animation need.
+- **Translation APIs** (`bing-translate-api`, `google-translate-api-x`) — out of scope (single-user RP, slop guard).
+- **Git-backup libs** (`isomorphic-git`, `simple-git`) — out of scope; SQLite is canon, standard DB backup instead.
+- **Client persistence** (`localforage`, `node-persist`) — stateless client; TanStack Query + the libSQL backend are the source of truth.

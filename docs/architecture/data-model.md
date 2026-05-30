@@ -115,20 +115,23 @@ model changes. (agent-sdk carries compaction natively in its session, so the mar
   "see it without refreshing" convenience is outstanding.
 
 ## Embeddings = libSQL native vectors
-`embeddings` rows are polymorphic (`entityType`/`entityId`) and hold the vector directly in an
-`F32_BLOB(1024)` column with a `libsql_vector_idx` ANN index — no sqlite-vec, no `vec0` table.
-`1024` matches BGE-M3; the `model` column + the column dimension are the only things that change
-on a model swap. `hubScore` (CSLS, migration 0005) + `sourceText` (for the reranker, 0006) ride
-along. Search: `vector_top_k('embeddings_ann', vector32(?), k)` → exact cosine re-rank → CSLS
-adjust → optional cross-encoder rerank. See `docs/subsystems/corpus-import.md`. Entity type: `character` (the
-corpus card layer, batch-embedded via `pnpm embed:corpus`). The retired `chat_message` memory (#40)
-**and** the old polymorphic `chat_segment` (Phase B) are **replaced** by dedicated first-class tables
-— `chat_digests` + `chat_segments` (below).
+The character vector layer is **`character_embeddings`** — a **dedicated, owner-columned table**, NOT
+polymorphic (the `embeddings`→`character_embeddings` migration retired the old `embeddings(entityType/entityId)` table). It holds the
+vector directly in an `F32_BLOB(1024)` column with a `libsql_vector_idx` ANN index
+(`character_embeddings_ann`) — no sqlite-vec, no `vec0` table. Real FKs: `characterId` → `characters.id`
+**cascade**, `ownerId` → `users.id` **notNull + indexed** (direct per-user scoping), `characterVersionId`
+→ `characterVersions.id` **restrict** (the embedded version = provenance). `1024` matches BGE-M3; the
+`model` column tags the vector space (a swap = re-index); `hubScore` (CSLS) + `sourceText` (reranker)
+ride along; unique `(characterId, model)`. Search: `vector_top_k('character_embeddings_ann', vector32(?),
+k)` → exact cosine re-rank → CSLS adjust → optional cross-encoder rerank. See `docs/subsystems/corpus-import.md`.
+Batch-embedded via `pnpm embed:corpus`. The retired `chat_message` memory (#40), the old polymorphic
+`chat_segment` (Phase B), **and** the old polymorphic `embeddings` table are all **replaced** by
+dedicated first-class owner-columned tables — `character_embeddings`, `chat_digests`, `chat_segments`.
 
 ## Chat memory = `chat_digests` + `chat_segments` (own tables — migrations 0018/0019)
 
 The within-chat `{{memory}}` system (`docs/subsystems/chat-memory.md`) stores per-N-turn **structured digests** in a
-**dedicated `chat_digests` table** — NOT the polymorphic `embeddings` table — so it gets real FKs:
+**dedicated `chat_digests` table** — a first-class table, not a polymorphic one — so it gets real FKs:
 `chatId` → `chats.id` **cascade** (nuke-the-chat cleans up its digests), `ownerId` → `users.id`
 (indexed — per-user corpus scoping), `characterVersionId` → `characterVersions.id` RESTRICT (the
 chat's pin). Columns: `tier` (0 = per-block, 1+ = consolidation), `blockIdx`, `seqStart`/`seqEnd` (the
@@ -141,8 +144,10 @@ the **`chat_segments`** table (migration 0019) — same FKs + block boundary, ra
 live for every chat (`generateSegments`, behind `CORPUS_AUTOINDEX`); `search.corpus` joint-reranks
 both substrates into one deduped, source-tagged list; CSLS hub-scores on both via `pnpm csls`. The old
 polymorphic `chat_segment` is **retired** (Phase B: `discover`/`knn`/`find` read `chat_segments`).
-**Forward-correctness:** the polymorphic `embeddings` rows (now just `character`) have no `ownerId`,
-so per-user scoping of that layer is a follow-up under real multi-user.
+**Owner-consistent (done):** all three vector tables — `character_embeddings`, `chat_digests`,
+`chat_segments` — now carry a notNull, indexed `ownerId`, so per-user scoping is a direct
+`WHERE owner_id = ?` (the `embeddings`→`character_embeddings` migration retired the old unkeyed polymorphic table and its
+over-fetch-then-join scoping hack).
 
 ## Assets are content-addressed (CAS — migration 0016)
 `hash` (sha-256, unique) IS the locator: binaries (card PNGs, persona avatars) live on the mounted

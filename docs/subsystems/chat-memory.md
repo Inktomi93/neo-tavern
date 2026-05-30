@@ -1,14 +1,24 @@
-# Memory system — refinement & migration plan
+# Memory system — the chat `{{memory}}` spec (refinement plan, now SHIPPED)
 
 **This supersedes the original design doc.** It records what we **built**, what we **measured on the
-real corpus**, and the **refinements + migrations** that turn it into something usable. It is the
-authoritative spec; read alongside `src/server/domain/chat/memory.ts`, `docs/architecture/data-model.md`,
+real corpus**, and the **refinements + migrations** that turned it into something usable. It is the
+authoritative spec; read alongside `src/server/domain/chat/memory/` (the code:
+`generate.ts`/`retrieve.ts`/`constants.ts`/`db.ts`), `docs/architecture/data-model.md`,
 `docs/subsystems/chat-memory-diagram.md` (the visual companion), and `docs/subsystems/sdk-notes.md`.
 
-> **One-line status:** the substrate (structured digests, tiering, hybrid corpus, CSLS) is **built and
-> green**. This plan corrects the *retrieval model* (it's flat query-driven RAG, not a tiered
-> "inject-the-whole-story" budget), fixes a corpus-coverage hole + a keyword bug, re-keys the legacy
-> character vectors, and re-derives the knobs from measured data. **Nothing built is stripped.**
+> **STATUS — the plan below has SHIPPED (verify against `memory/constants.ts` `DEFAULTS`).** This doc
+> reads as a forward plan (§6 migration, §8 steps, §9 knobs), but those landed:
+> - **§6 — legacy `embeddings` → `character_embeddings`**: DONE. The owner-columned `character_embeddings`
+>   table exists (`db/schema/search.ts`) and the old polymorphic `embeddings` table is retired.
+> - **§8/§9 — write/read-path refinements**: DONE. `DEFAULTS` are `blockSize 8`, `verbatimWindow 8`,
+>   `queryWindow 2`, **`mode: "mixC"`** (flat query-driven RAG is the default), `fanOut 4`, `maxTier 3`,
+>   `rerankTo 3`, `minScore 0.25`, `keywordMatch` with the ≥4-char word-overlap fix (the multi-word
+>   keyword bug, §7 #4). Segments cover the trailing partial / whole short chat (`generateSegments`).
+> - **One divergence from §9:** `retrieveK` shipped at **8**, NOT the proposed 4 (constants.ts note:
+>   "top-4 too tight on long chats; rerank cost negligible"). The §9 table below still says 4 — treat 8 as current.
+>
+> The sections below remain the authoritative *rationale* (the why behind each knob + the measured
+> corpus data). Read them as "why it is this way," not "what to do next."
 
 ---
 
