@@ -254,6 +254,7 @@
       // snake_case wire fields (stop_reason) to seed a resumable session.
       "includes": [
         "src/server/providers/**",
+        "src/shared/provider-routing.ts",
         "tests/integration/chat-session-store.test.ts",
         "src/server/domain/chat/seed.ts",
         "src/server/domain/chat/seed.test.ts"
