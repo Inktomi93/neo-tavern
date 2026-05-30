@@ -55,7 +55,10 @@ import {
 import { type SwipeInsights, swipeInsights } from "./swipes";
 import {
   type ApplyTagsResult,
+  appliedAutoTags,
   applyTagSuggestions,
+  removeAutoTag,
+  type TagAssignment,
   type TagSuggestion,
   tagSuggestions,
 } from "./tag-suggest";
@@ -202,10 +205,14 @@ export interface CorpusService {
     characterId: string,
     question: string,
   ): Promise<{ answer: string } | null>;
-  /** Distilled tags not yet in the tags table — promotion candidates (review before applying). */
-  tagSuggestions(username: string): Promise<TagSuggestion[]>;
-  /** Promote approved distilled tags into the tags table (source='auto') + link characters. */
-  applyTagSuggestions(username: string, tagNames: string[]): Promise<ApplyTagsResult>;
+  /** Distilled tags not yet in the tags table, with their full candidate character list, for review. */
+  tagSuggestions(username: string, minCount?: number): Promise<TagSuggestion[]>;
+  /** Apply reviewed (tag → chosen characters) assignments into the tags table (source='auto'). */
+  applyTagSuggestions(username: string, assignments: TagAssignment[]): Promise<ApplyTagsResult>;
+  /** Tags already auto-applied with their link counts — the current state for the review screen. */
+  appliedAutoTags(username: string): Promise<{ tag: string; characterCount: number }[]>;
+  /** Undo an auto-applied tag entirely (tag + links). */
+  removeAutoTag(username: string, tag: string): Promise<boolean>;
 }
 
 export interface CorpusServiceDeps {
@@ -386,14 +393,24 @@ export function createCorpusService(db: Db, deps: CorpusServiceDeps = {}): Corpu
       return askCard(db, ownerId, createSummarizer(), characterId, question);
     },
 
-    async tagSuggestions(username) {
+    async tagSuggestions(username, minCount) {
       const ownerId = await ensureUser(db, username);
-      return tagSuggestions(db, ownerId);
+      return tagSuggestions(db, ownerId, minCount);
     },
 
-    async applyTagSuggestions(username, tagNames) {
+    async applyTagSuggestions(username, assignments) {
       const ownerId = await ensureUser(db, username);
-      return applyTagSuggestions(db, ownerId, tagNames);
+      return applyTagSuggestions(db, ownerId, assignments);
+    },
+
+    async appliedAutoTags(username) {
+      const ownerId = await ensureUser(db, username);
+      return appliedAutoTags(db, ownerId);
+    },
+
+    async removeAutoTag(username, tag) {
+      const ownerId = await ensureUser(db, username);
+      return removeAutoTag(db, ownerId, tag);
     },
   };
 }

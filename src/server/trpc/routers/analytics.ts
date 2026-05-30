@@ -167,17 +167,44 @@ export const analyticsRouter = t.router({
       ctx.services.corpus.askCard(ctx.username, input.characterId, input.question),
     ),
 
-  // Distilled tags not yet in the tags table — promotion candidates (review).
-  tagSuggestions: authedProcedure.query(({ ctx }) =>
-    ctx.services.corpus.tagSuggestions(ctx.username),
+  // Distilled tags not yet in the tags table, with their full candidate character list — for review.
+  tagSuggestions: authedProcedure
+    .input(
+      z
+        .object({ minCount: z.number().int().positive().optional() })
+        .optional()
+        .transform((v) => v ?? {}),
+    )
+    .query(({ ctx, input }) => ctx.services.corpus.tagSuggestions(ctx.username, input.minCount)),
+
+  // Apply the REVIEWED assignments — pick which tags, and within each, which characters. Mutation.
+  applyTagSuggestions: authedProcedure
+    .input(
+      z.object({
+        assignments: z
+          .array(
+            z.object({
+              tag: z.string().min(2),
+              characterIds: z.array(z.string().min(1)).min(1),
+            }),
+          )
+          .min(1)
+          .max(300),
+      }),
+    )
+    .mutation(({ ctx, input }) =>
+      ctx.services.corpus.applyTagSuggestions(ctx.username, input.assignments),
+    ),
+
+  // The current auto-applied tags + link counts (the review screen's "already applied" state).
+  appliedAutoTags: authedProcedure.query(({ ctx }) =>
+    ctx.services.corpus.appliedAutoTags(ctx.username),
   ),
 
-  // Promote approved distilled tags into the tags table (source='auto') + link characters. Mutation.
-  applyTagSuggestions: authedProcedure
-    .input(z.object({ tags: z.array(z.string().min(1)).min(1).max(200) }))
-    .mutation(({ ctx, input }) =>
-      ctx.services.corpus.applyTagSuggestions(ctx.username, input.tags),
-    ),
+  // Undo an auto-applied tag entirely (tag + its character links). Mutation.
+  removeAutoTag: authedProcedure
+    .input(z.object({ tag: z.string().min(1) }))
+    .mutation(({ ctx, input }) => ctx.services.corpus.removeAutoTag(ctx.username, input.tag)),
 
   // "More like this chat" — nearest chats by segment-centroid cosine.
   similarChats: authedProcedure
