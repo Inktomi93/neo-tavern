@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { chatApiSchema, chatSourceSchema } from "./chat-routing";
 import { generationParamsSchema } from "./generation";
+import { isPlainObject } from "./guards";
 import { regexScriptSchema } from "./regex";
 
 // The typed per-user settings contract — the schema `user_settings.config` was always missing. Same
@@ -59,12 +60,12 @@ const SETTINGS_LIFTS: Record<number, (config: Record<string, unknown>) => Record
  * failure falls back to `DEFAULT_USER_SETTINGS`. So existing rows keep working with no migration.
  */
 export function parseUserSettings(raw: unknown): UserSettings {
-  if (raw === null || typeof raw !== "object") {
+  if (!isPlainObject(raw)) {
     return DEFAULT_USER_SETTINGS;
   }
   const probe = z.object({ schemaVersion: z.number().int().optional() }).safeParse(raw);
   let version = probe.success ? (probe.data.schemaVersion ?? 1) : 1;
-  let config: Record<string, unknown> = raw as Record<string, unknown>;
+  let config: Record<string, unknown> = raw;
   let lift = SETTINGS_LIFTS[version];
   while (lift !== undefined) {
     config = lift(config);

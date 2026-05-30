@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { generationParamsSchema } from "./generation";
+import { isPlainObject } from "./guards";
 import { regexScriptSchema } from "./regex";
 
 // The prompt structure a chat is generated under — the versioned `config` blob stored on
@@ -112,8 +113,8 @@ export function parsePromptConfig(raw: unknown): PromptConfig {
   let version = probe.success ? (probe.data.schemaVersion ?? 1) : 1;
   let config = raw;
   let lift = CONFIG_LIFTS[version];
-  while (lift !== undefined && config !== null && typeof config === "object") {
-    config = lift(config as Record<string, unknown>);
+  while (lift !== undefined && isPlainObject(config)) {
+    config = lift(config);
     version += 1;
     lift = CONFIG_LIFTS[version];
   }
