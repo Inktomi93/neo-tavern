@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import { unzipSync } from "fflate";
 import type { Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import type { Db } from "../db/client";
 import { type AuthResolver, resolveOwner } from "./auth-context";
 import { getAppConfig } from "./config/app-config";
@@ -58,7 +59,7 @@ export function registerImportRoutes(
 ): void {
   // POST /api/import/cards — one or more character cards (PNG with embedded chunk, or bare V2/V3 JSON).
   // multipart field `files` (repeatable) or `file`.
-  app.post("/api/import/cards", async (c) => {
+  app.post("/api/import/cards", bodyLimit({ maxSize: 50 * 1024 * 1024 }), async (c) => {
     const auth = await resolveOwner(authResolver, db, c.req.raw.headers, { requireCsrf: true });
     if (!auth.ok) return c.json({ error: auth.error }, auth.status);
     const owner = auth.handle;
@@ -109,7 +110,7 @@ export function registerImportRoutes(
   // POST /api/import/chats — loose JSONL chats attached to an EXISTING character (multipart `files`
   // [repeatable] + a `characterId` form field; the UI picks the target since ST chat headers don't
   // carry a reliable character name).
-  app.post("/api/import/chats", async (c) => {
+  app.post("/api/import/chats", bodyLimit({ maxSize: 50 * 1024 * 1024 }), async (c) => {
     const auth = await resolveOwner(authResolver, db, c.req.raw.headers, { requireCsrf: true });
     if (!auth.ok) return c.json({ error: auth.error }, auth.status);
     const owner = auth.handle;
@@ -153,7 +154,7 @@ export function registerImportRoutes(
   // POST /api/import/zip — a zip of an ST profile dir (characters/*.png + chats/<charDir>/*.jsonl).
   // The bulk migration path: reuses the exact CLI pipeline (collectBundlesFromDir → importCharacter),
   // so card↔chat pairing, branch-linking, idempotency, and the skip-list all come for free.
-  app.post("/api/import/zip", async (c) => {
+  app.post("/api/import/zip", bodyLimit({ maxSize: 512 * 1024 * 1024 }), async (c) => {
     const auth = await resolveOwner(authResolver, db, c.req.raw.headers, { requireCsrf: true });
     if (!auth.ok) return c.json({ error: auth.error }, auth.status);
     const owner = auth.handle;
@@ -167,6 +168,23 @@ export function registerImportRoutes(
       entries = unzipSync(new Uint8Array(await file.arrayBuffer()));
     } catch {
       return c.json({ error: "Invalid zip archive" }, 400);
+    }
+
+    // Zip-bomb guard (A.2.4): reject an archive that decompresses to an absurd size before we touch the
+    // disk. NOTE: fflate's unzipSync already expanded into `entries` in RAM, so the COMPRESSED bodyLimit
+    // above (512MB) is the primary memory bound; this per-entry + total cap stops a write-to-disk bomb
+    // and a pathological ratio. (A true streaming counter via fflate's Unzip is a future tightening.)
+    const maxEntryBytes = 256 * 1024 * 1024; // 256 MiB per file
+    const maxTotalBytes = 1024 * 1024 * 1024; // 1 GiB decompressed total
+    let totalOut = 0;
+    for (const data of Object.values(entries)) {
+      if (data.length > maxEntryBytes) {
+        return c.json({ error: "Archive entry too large." }, 413);
+      }
+      totalOut += data.length;
+    }
+    if (totalOut > maxTotalBytes) {
+      return c.json({ error: "Archive decompresses too large." }, 413);
     }
 
     const tmp = await mkdtemp(join(tmpdir(), "neo-import-"));

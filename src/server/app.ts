@@ -3,6 +3,8 @@ import { Readable } from "node:stream";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
+import { secureHeaders } from "hono/secure-headers";
 import sharp from "sharp";
 import type { Db } from "../db/client";
 import { isAssetHash } from "../shared/assets";
@@ -99,6 +101,42 @@ export function buildApp(
   // Must be first (after the edge gate): assigns the request id + binds the request-scoped logger.
   app.use(observability);
 
+  // Security headers (breadth-buildout A.2.3). CSP is iterative — a strict prod policy for the chunked
+  // Vite build, a permissive dev policy that allows Vite HMR (ws:) + inline/eval. Tailwind needs
+  // 'unsafe-inline' for styles. HSTS only over HTTPS, so it's gated OFF for single-user (plain-http LAN).
+  app.use(
+    secureHeaders({
+      contentSecurityPolicy: isProd
+        ? {
+            defaultSrc: ["'self'"],
+            scriptSrc: ["'self'"],
+            styleSrc: ["'self'", "'unsafe-inline'"],
+            imgSrc: ["'self'", "data:", "blob:"],
+            connectSrc: ["'self'"],
+            fontSrc: ["'self'"],
+            objectSrc: ["'none'"],
+            baseUri: ["'self'"],
+            formAction: ["'self'"],
+            frameAncestors: ["'none'"],
+          }
+        : {
+            defaultSrc: ["'self'"],
+            scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
+            styleSrc: ["'self'", "'unsafe-inline'"],
+            imgSrc: ["'self'", "data:", "blob:"],
+            connectSrc: ["'self'", "ws:", "wss:"],
+            objectSrc: ["'none'"],
+            frameAncestors: ["'none'"],
+          },
+      strictTransportSecurity:
+        env.AUTH_MODE === "single-user" ? false : "max-age=63072000; includeSubDomains",
+      xFrameOptions: "DENY",
+      xContentTypeOptions: "nosniff",
+      referrerPolicy: "strict-origin-when-cross-origin",
+      crossOriginOpenerPolicy: "same-origin",
+    }),
+  );
+
   app.onError((err, c) => {
     getLog().error({ err, path: c.req.path }, "unhandled hono exception");
     return c.json({ error: "Internal Server Error" }, 500);
@@ -179,7 +217,7 @@ export function buildApp(
     return c.body(webStream, 200, headers);
   });
 
-  app.post("/api/assets/upload", async (c) => {
+  app.post("/api/assets/upload", bodyLimit({ maxSize: 50 * 1024 * 1024 }), async (c) => {
     // A mutating write → require a resolved identity + (cookie path) the CSRF header, same as tRPC.
     const owner = await resolveOwner(authResolver, db, c.req.raw.headers, { requireCsrf: true });
     if (!owner.ok) return c.json({ error: owner.error }, owner.status);
@@ -227,6 +265,10 @@ export function buildApp(
       "Content-Disposition": `attachment; filename="${result.filename}"`,
     });
   });
+
+  // tRPC payloads are JSON (text/params) — 1MB is generous; binary goes through the upload/import
+  // routes with their own larger limits. Caps a malicious oversized mutation body (A.2.4).
+  app.use("/api/trpc/*", bodyLimit({ maxSize: 1024 * 1024 }));
 
   // The tRPC auth seam: resolve the request's AuthContext via the shared resolver (the same one the
   // export/import/upload routes use through resolveOwner), then hand it to the procedure ladder.
