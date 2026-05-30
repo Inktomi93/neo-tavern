@@ -10,12 +10,36 @@ vars, and the authentik setup checklist — so deploying neo-tavern is "paste th
 > debugging: **`docs/auth/auth-verify.md`** (`pnpm verify:auth`).
 
 ## The model in one paragraph
-Identity = a pluggable `AUTH_MODE`: **`single-user`** (default, zero-infra: the owner) · **`forward-header`**
-(caddy+authentik forward-auth; the app verifies `X-Authentik-Jwt` via JWKS) · **`oidc`** (the app is an
-authentik OIDC client; **recommended** — matches how Open WebUI/Grafana/Forgejo run here). The browser
-session is an **HttpOnly/Secure/SameSite=Lax cookie** (BFF; revocable server-side `sessions`), CSRF
-mitigated by SameSite + a custom header. `max-pro-sub` is owner/admin-only; everyone else brings their
-own (encrypted) OpenRouter key. See the plan for all of it.
+Identity = a pluggable `AUTH_MODE`: **`single-user`** (default, zero-infra: the owner) · **`local`**
+(username+password the app stores) · **`forward-header`** (caddy+authentik/authelia forward-auth; the app
+verifies `X-Authentik-Jwt` via JWKS, or trusts `Remote-*` headers) · **`oidc`** (the app is an authentik
+OIDC client; **recommended for an SSO homelab** — matches how Open WebUI/Grafana/Forgejo run here). The
+browser session is an **HttpOnly/Secure/SameSite=Lax cookie** (BFF; revocable server-side `sessions`),
+CSRF mitigated by SameSite + a custom header. `max-pro-sub` is owner/admin-only; everyone else brings
+their own (encrypted) OpenRouter key. See the plan for all of it.
+
+## Choosing your tier (these are deliberate, not gaps)
+
+neo-tavern is a **single-operator homelab app first**. The auth modes are a deliberate ladder so a
+deployer picks the tier that matches their setup — **not** a strong mode with the rest left as holes.
+Each tier is *complete and safe for its stated deployment*; the cheaper ones simply assume a smaller
+threat model (a trusted home LAN, no public exposure) instead of bolting on infra nobody asked for.
+
+| Tier | For whom | Trust boundary | When it's the RIGHT choice |
+|---|---|---|---|
+| **`single-user`** (default) | "I just run it on my LAN / behind Tailscale" | the network (`:8788` not exposed) | One person, a trusted home network, no IdP. Zero infra by design — a login form would be pure friction. |
+| **`local`** | "I want a password but don't run authentik" | password + cookie session | A couple of users, no SSO stack. The app is a *minimal* password IdP only because asking everyone to stand up authentik would be absurd. Pair with `AUTH_FALLBACK=deny` for a wall on every origin. |
+| **`forward-header`** | "I already run authentik/authelia + a reverse proxy" | the proxy (verified JWT, or `Remote-*` on a trusted network) | You have forward-auth middleware; let it gate. authentik's path is cryptographically verified (JWKS); authelia's is network-trust + the opt-in IP gate. |
+| **`oidc`** | "I want full SSO, the strong default" | OIDC + PKCE + cookie BFF | The recommended mode for an SSO homelab — strongest, and no more work than `forward-header` once authentik is up. |
+
+**The optional knobs follow the same philosophy.** `FORWARD_AUTH_TRUSTED_PROXIES`, `IP_ALLOWLIST`, and
+the `owner`-fallback origin gate default to *the convenient thing for a trusted LAN* and tighten on
+demand — because the **load-bearing boundary for a homelab is the network perimeter** (Caddy in front,
+`:8788` private), and the cheaper tiers lean on that boundary *on purpose*. They are belts you add when
+your setup grows (public exposure, multiple users, an untrusted segment), not patches for a leaky design.
+If you expose the app to an untrusted network, step up a tier (`oidc`/`local`+`deny`) and turn the belts
+on — the ladder is there precisely so you can. What we do **not** do is ship a fake-strong default that
+pretends a homelab needs enterprise infra.
 
 ---
 
