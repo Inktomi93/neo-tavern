@@ -402,10 +402,10 @@ covered inside a domain section; the rest get audited here.
 | **macro** | **30/4** | ✅ done | **below** |
 | **regex** | **25/4** | 🔲 pending | `pnpm api:q hooks regex` |
 | **reasoning** | **12/0** | 🔲 pending | thinking/effort — likely in the agent-sdk runner, not a module |
-| **slash-commands** | **10/0** | 🔲 NEEDS-DECISION | ST ~7k-LOC slash system; in or out for a single-user RP client? |
+| **slash-commands** | **10/0** | 🚫 OUT | owner hard-no 2026-05-29 (like instruct/extensions) |
 | instruct | 19/0 | 🚫 SKIP | owner does not want instruct mode |
 | themes / backgrounds | 82/3 | 🚫 deferred | ui-cosmetic |
-| extensions | 115/0 | 🚫 OUT | no third-party extension system |
+| extensions (loader) | 115/0 | 🚫 OUT | the 3rd-party extension *system* is OUT — but its **bundled defaults** are NOT (see below) |
 | groups | 67/0 | 🚫 deferred | groups |
 
 ### macro — ✅ done (2026-05-29)
@@ -441,10 +441,51 @@ vocabulary + script shape vs ST's.
 typed `effort`/`thinking` agent-sdk Options + `reasoning` on openrouter. neo=0 hooks because it's in
 the runner, not a module — verify it's actually covered, not missing.
 
-### slash-commands — 🔲 NEEDS-DECISION
-`pnpm api:q hooks slash-commands` (st 10 / neo 0). ST has a ~7k-LOC slash-command system (STscript).
-We have none. ⛳ **Decision needed:** is a command language in scope for a single-user RP client, or
-OUT like instruct/extensions?
+### slash-commands — 🚫 OUT (owner hard-no 2026-05-29)
+ST's ~7k-LOC STscript command language. **Not in scope** — same bucket as instruct/extensions. No
+audit.
+
+---
+
+## ST bundled extensions & client feature modules
+
+**Critical distinction (don't conflate):** ST's `extensions` *system* (the 3rd-party loader/API) is
+OUT. But ST **ships ~14 bundled default extensions** + a set of top-level feature modules, and
+several are **core capabilities** — the plan is to make them **first-class** (bake the capability
+in, NOT support an extension system). Owner already first-classed **regex** this way.
+
+### Bundled default extensions (`public/scripts/extensions/*`)
+| ST extension | our status | note |
+|---|---|---|
+| `regex` | ✅ first-classed | owner-ported → `shared/regex.ts` + `_shared/regex.ts` (regex subsystem) |
+| `memory` (summarize) | ✅ first-classed | chat summarization → `domain/chat/memory/` + compaction |
+| `vectors` | ✅ first-classed | → the rag/corpus domain (superset) |
+| `assets` | ✅ first-classed | → assets domain (content-addressed) |
+| `token-counter` | ✅ first-classed | → `shared/tokens.ts` (this session) |
+| `attachments` (data bank) | 🎯 candidate | attach files/docs to a chat for context — NOT built; could be first-class |
+| `connection-manager` | ⚠️ partial | saved connection profiles; we have in-chat `setProvider`, no named profiles |
+| `expressions` (sprites) | 🚫 OUT | slop guard |
+| `caption` · `stable-diffusion` · `gallery` | 🚫 OUT | image-gen slop guard |
+| `tts` · `translate` | 🚫 OUT | slop guard |
+| `quick-reply` | 🚫 OUT | tied to slash-commands (hard-no) |
+| `third-party` | 🚫 OUT | the loader itself |
+
+### Top-level client feature modules (`public/scripts/*.js`)
+| ST module | our status | note |
+|---|---|---|
+| `authors-note` | ✅ subsumed | a persistent editable literal system section (by design, not a special feature) |
+| `bookmarks` | ✅ covered | branch/checkpoint → `chat.fork` |
+| `sysprompt` | ✅ covered | system prompt → prompt-config system sections |
+| `variables` | 🎯 candidate | the `setvar`/`getvar`/`incvar` state system — **same gap as the macro variables** (cross-listed); the headline first-class candidate |
+| `tool-calling` | 🎯 candidate? | function/tool calling — probably OUT for pure RP, but owner's call |
+| `bulk-edit` | 🎯 candidate | bulk library ops (multi-select tag/delete) — minor, UI-era |
+| `cfg-scale` | 🚫 OUT | CFG sampler (Anthropic doesn't expose it) |
+| `logit-bias` · `logprobs` | 🚫 OUT | token-level features we don't build |
+
+**Net:** `extensions` is NOT wholesale OUT. 5 bundled defaults are already first-classed (regex,
+memory, vectors, assets, token-counter); the live **first-class candidates** are **variables**
+(state system — also the macro gap), **attachments** (data bank), and **connection-manager**
+(named profiles). The rest are genuine slop-guard OUTs.
 
 ---
 
