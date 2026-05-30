@@ -41,6 +41,14 @@ export interface AuthConfig {
   // gate — e.g. a custom Tailscale subnet-router range or a non-default Docker network. Optional; absent
   // ⇒ just the built-in DEFAULT_TRUSTED_RANGES (loopback/RFC1918/Tailscale/link-local/ULA).
   trustedPrivateRanges?: string[];
+  // Custom trusted-header NAMES for the UNSIGNED forward-header path (override the known authentik/
+  // authelia families for an arbitrary proxy). All optional; absent ⇒ auto-accept both known families.
+  forwardUserHeader?: string;
+  forwardGroupsHeader?: string;
+  forwardUidHeader?: string;
+  // OPT-IN source-IP gate for the unsigned path: CIDRs the forwarded request's client IP must match.
+  // Empty/absent ⇒ no gate (network-isolation trust). The signed-JWT path never consults this.
+  forwardTrustedProxies?: string[];
 }
 
 /** Injected, db-dependent resolution steps (wired at the composition root; absent ⇒ that layer is
@@ -81,6 +89,12 @@ export function authConfigFromEnv(): AuthConfig {
     verifyForwardJwt: env.FORWARD_AUTH_VERIFY_JWT,
     trustedLocalHosts: parseHostList(env.TRUSTED_LOCAL_HOSTS),
     trustedPrivateRanges: parseCsv(env.TRUSTED_PRIVATE_RANGES),
+    ...(env.FORWARD_AUTH_USER_HEADER ? { forwardUserHeader: env.FORWARD_AUTH_USER_HEADER } : {}),
+    ...(env.FORWARD_AUTH_GROUPS_HEADER
+      ? { forwardGroupsHeader: env.FORWARD_AUTH_GROUPS_HEADER }
+      : {}),
+    ...(env.FORWARD_AUTH_UID_HEADER ? { forwardUidHeader: env.FORWARD_AUTH_UID_HEADER } : {}),
+    forwardTrustedProxies: parseCsv(env.FORWARD_AUTH_TRUSTED_PROXIES),
   };
 }
 
@@ -154,17 +168,63 @@ function groupsFromClaim(claim: unknown): string[] {
   return [];
 }
 
+/** The request's apparent client IP for the opt-in trusted-proxy gate: the leftmost X-Forwarded-For
+ *  hop (Caddy sets it to the real client), falling back to X-Real-IP. null when neither is present. */
+function clientIpFromHeaders(headers: Headers): string | null {
+  const xff = headers.get("x-forwarded-for");
+  if (xff) {
+    const first = xff.split(",")[0]?.trim();
+    if (first) return first;
+  }
+  return headers.get("x-real-ip")?.trim() || null;
+}
+
+/** Read an UNSIGNED forwarded identity from the configured/known trusted headers. Order: a custom
+ *  override (FORWARD_AUTH_USER_HEADER), then the authentik family (X-Authentik-*), then the Authelia
+ *  family (Remote-*). Authelia has no stable uid → externalId stays null (provisionIdentity then keys
+ *  on handle). Returns null when no known user header is present. */
+function readUnsignedIdentity(headers: Headers, config: AuthConfig): ResolvedIdentity | null {
+  if (config.forwardUserHeader) {
+    const handle = headers.get(config.forwardUserHeader);
+    if (!handle) return null;
+    const externalId = config.forwardUidHeader ? headers.get(config.forwardUidHeader) : null;
+    const groups = config.forwardGroupsHeader
+      ? groupsFromClaim(headers.get(config.forwardGroupsHeader))
+      : [];
+    return { externalId, handle, groups };
+  }
+  const authentik = headers.get("x-authentik-username");
+  if (authentik) {
+    return {
+      externalId: headers.get("x-authentik-uid"),
+      handle: authentik,
+      groups: groupsFromClaim(headers.get("x-authentik-groups")),
+    };
+  }
+  const authelia = headers.get("remote-user");
+  if (authelia) {
+    return {
+      externalId: null,
+      handle: authelia,
+      groups: groupsFromClaim(headers.get("remote-groups")),
+    };
+  }
+  return null;
+}
+
 // forward-header layer. When FORWARD_AUTH_VERIFY_JWT is on AND authentik forwarded a signed JWT (+ the
-// JWKS to verify it), trust the CLAIMS — cryptographic, spoof-proof regardless of network path (§1c).
-// Otherwise fall back to network-isolation trust of the raw X-Authentik-* headers (every other app in
-// the stack relies on this). Returns null when no usable identity is present.
+// JWKS to verify it), trust the CLAIMS — cryptographic, spoof-proof regardless of network path (§1c);
+// the signed path SKIPS the source-IP gate (the signature is the proof). Otherwise it's network-trust
+// of the raw headers — authentik X-Authentik-*, Authelia Remote-*, or a custom-named proxy — guarded by
+// the OPT-IN FORWARD_AUTH_TRUSTED_PROXIES source-IP gate (unset ⇒ no gate, today's behavior). Returns
+// null when no usable identity is present.
 async function resolveForwardHeader(
   headers: Headers,
-  verifyJwt: boolean,
+  config: AuthConfig,
 ): Promise<ResolvedIdentity | null> {
   const jwt = headers.get("x-authentik-jwt");
   const metaJwks = headers.get("x-authentik-meta-jwks");
-  if (verifyJwt && jwt && metaJwks) {
+  if (config.verifyForwardJwt && jwt && metaJwks) {
     try {
       const { payload } = await jwtVerify(jwt, jwksFor(metaJwks));
       const claims = payload as JWTPayload & {
@@ -187,14 +247,24 @@ async function resolveForwardHeader(
       return null;
     }
   }
-  // Network-isolation trust (verify off, or no JWT forwarded): the raw headers.
-  const handle = headers.get("x-authentik-username");
-  if (!handle) return null;
-  return {
-    externalId: headers.get("x-authentik-uid"),
-    handle,
-    groups: groupsFromClaim(headers.get("x-authentik-groups")),
-  };
+  // Unsigned network-trust path (verify off, or no JWT forwarded): the raw headers.
+  const identity = readUnsignedIdentity(headers, config);
+  if (!identity) return null;
+  // OPT-IN source-IP gate: if FORWARD_AUTH_TRUSTED_PROXIES is configured, the forwarded request's client
+  // IP must fall inside it — else reject (a request reaching :8788 from outside the trusted ranges can't
+  // forge Remote-User). Unset ⇒ skip (network-isolation trust, the deployment invariant is the boundary).
+  const proxies = config.forwardTrustedProxies;
+  if (proxies && proxies.length > 0) {
+    const ip = clientIpFromHeaders(headers);
+    if (!ip || !isInRanges(ip, proxies)) {
+      getLog().warn(
+        { ip, handle: identity.handle },
+        "auth: forwarded identity from an untrusted source IP — rejecting",
+      );
+      return null;
+    }
+  }
+  return identity;
 }
 
 /**
@@ -218,7 +288,7 @@ export async function resolveIdentity(
   }
   // 2. Forward-auth header (forward-header).
   if (config.mode === "forward-header") {
-    const identity = await resolveForwardHeader(headers, config.verifyForwardJwt);
+    const identity = await resolveForwardHeader(headers, config);
     if (identity) return { identity, viaCookie: false, viaFallback: false };
   }
   // 3. Fallback — owner ONLY when permitted for this request's origin (see ownerFallbackAllowed).

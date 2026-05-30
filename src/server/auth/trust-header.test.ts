@@ -110,6 +110,58 @@ describe("resolveIdentity — forward-header", () => {
       groups: ["Team A", "Team B"],
     });
   });
+
+  test("Authelia Remote-* trusted headers resolve an identity (no uid → externalId null)", async () => {
+    const headers = new Headers({
+      "remote-user": "dana",
+      "remote-groups": "admins, editors",
+    });
+    const { identity } = await resolveIdentity(
+      headers,
+      cfg({ mode: "forward-header", verifyForwardJwt: false }),
+    );
+    expect(identity).toEqual({ externalId: null, handle: "dana", groups: ["admins", "editors"] });
+  });
+
+  test("a custom user/groups header overrides the known families", async () => {
+    const headers = new Headers({ "x-proxy-user": "erin", "x-proxy-groups": "g1|g2" });
+    const { identity } = await resolveIdentity(
+      headers,
+      cfg({
+        mode: "forward-header",
+        verifyForwardJwt: false,
+        forwardUserHeader: "x-proxy-user",
+        forwardGroupsHeader: "x-proxy-groups",
+      }),
+    );
+    expect(identity).toEqual({ externalId: null, handle: "erin", groups: ["g1", "g2"] });
+  });
+
+  test("opt-in trusted-proxy gate: rejects an unsigned identity from an untrusted source IP", async () => {
+    const headers = new Headers({ "remote-user": "dana", "x-forwarded-for": "203.0.113.9" });
+    const { identity } = await resolveIdentity(
+      headers,
+      cfg({
+        mode: "forward-header",
+        verifyForwardJwt: false,
+        forwardTrustedProxies: ["10.0.0.0/8"],
+      }),
+    );
+    expect(identity).toBeNull();
+  });
+
+  test("opt-in trusted-proxy gate: accepts an unsigned identity from a trusted source IP", async () => {
+    const headers = new Headers({ "remote-user": "dana", "x-forwarded-for": "10.1.2.3" });
+    const { identity } = await resolveIdentity(
+      headers,
+      cfg({
+        mode: "forward-header",
+        verifyForwardJwt: false,
+        forwardTrustedProxies: ["10.0.0.0/8"],
+      }),
+    );
+    expect(identity?.handle).toBe("dana");
+  });
 });
 
 describe("resolveIdentity — oidc cookie", () => {

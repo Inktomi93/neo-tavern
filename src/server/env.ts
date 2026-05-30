@@ -141,17 +141,18 @@ const envSchema = z
 
     // ── forward-header configurability (the authentik JWKS path is unchanged; these tune the UNSIGNED
     //    trusted-header path: Authelia Remote-* and custom proxies) ──
-    // Comma CIDR list of proxy source IPs allowed to supply UNSIGNED trusted headers (Authelia Remote-*,
-    // or authentik with FORWARD_AUTH_VERIFY_JWT=false). A direct hit on :8788 from outside these ranges
-    // can't spoof Remote-User. The authentik signed-JWT path skips this (the signature is the proof).
-    // Unset ⇒ the built-in private set (DEFAULT_TRUSTED_RANGES) + TRUSTED_PRIVATE_RANGES.
+    // OPT-IN source-IP gate for the UNSIGNED trusted-header path (Authelia Remote-*, or authentik with
+    // FORWARD_AUTH_VERIFY_JWT=false): comma CIDR list of proxy source IPs (read from X-Forwarded-For /
+    // X-Real-IP) allowed to supply those headers. UNSET ⇒ no IP gate (network-isolation trust, today's
+    // behavior — the deployment invariant "don't expose :8788" is the boundary). SET ⇒ a forwarded
+    // identity whose source IP is outside these ranges is rejected (can't spoof Remote-User from
+    // elsewhere). The authentik signed-JWT path always skips this (the signature is the proof).
     FORWARD_AUTH_TRUSTED_PROXIES: z.string().optional(),
     // Optional custom trusted-header NAMES for an arbitrary forward-auth proxy. Unset ⇒ auto-accept the
     // two known families (authentik X-Authentik-* and Authelia Remote-*).
     FORWARD_AUTH_USER_HEADER: z.string().min(1).optional(),
     FORWARD_AUTH_GROUPS_HEADER: z.string().min(1).optional(),
     FORWARD_AUTH_UID_HEADER: z.string().min(1).optional(),
-    FORWARD_AUTH_NAME_HEADER: z.string().min(1).optional(),
 
     // ── IP allowlist edge belt (orthogonal to AUTH_MODE; off by default) ──
     // Comma CIDR list; when set, a request from a client IP outside it (and outside loopback, which is
