@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 import type { Db } from "../../../db/client";
 import { characterEmbeddings } from "../../../db/schema";
 import { createEmbedder, type Embedder } from "../../embeddings/embedder";
+import { createSummarizer } from "../../embeddings/summarizer";
 import { getLog } from "../../observability/logger";
 import { newId } from "../_shared/ids";
 import { ensureUser } from "../_shared/users";
@@ -13,6 +14,16 @@ import {
   topKeywords,
 } from "./cooccurrence";
 import {
+  type BrowseCharacter,
+  type BrowseFilter,
+  browseCharacters,
+  type CharacterDistillation,
+  characterFacets,
+  characterSummary,
+  computeCharacterSummaries,
+  type DistillStats,
+} from "./distill";
+import {
   computeDuplicatePairs,
   type DuplicateCharacterPair,
   type DuplicateChatPair,
@@ -21,6 +32,7 @@ import {
   readDuplicateChats,
   similarCharacters,
 } from "./duplicates";
+import type { EmbedItem } from "./embed-text";
 import {
   characterSimilarityGraph,
   type SimilarChat,
@@ -48,12 +60,7 @@ import {
 // bulk `DELETE FROM` trips SQLite's truncate optimization and poisons the DiskANN shadow table (next
 // insert fails "shadow row"; `reindexAnn` / the boot health check recover a poisoned one). The
 // unique(characterId, model) index makes an un-skipped duplicate error loudly.
-export interface EmbedItem {
-  characterId: string;
-  ownerId: string;
-  characterVersionId: string;
-  text: string;
-}
+export type { EmbedItem };
 
 export interface CorpusService {
   readonly model: string;
@@ -146,6 +153,19 @@ export interface CorpusService {
   ): Promise<SimilarityGraph>;
   /** Chats most similar to a given chat, by segment-centroid cosine. */
   similarChats(username: string, chatId: string, limit?: number): Promise<SimilarChat[]>;
+
+  // ── analytics: character distillation + browse (B.0) ───────────────────────
+  /** Recompute every character's grammar-constrained distillation (script-driven). */
+  computeCharacterSummaries(): Promise<DistillStats>;
+  /** One character's distilled facets (genre/tone/tags + elevator pitch + overview). */
+  characterSummary(username: string, characterId: string): Promise<CharacterDistillation | null>;
+  /** The filterable character catalog — distillation facets + engagement, filtered/sorted. */
+  browseCharacters(username: string, filter?: BrowseFilter): Promise<BrowseCharacter[]>;
+  /** Distinct genres/tones present (for filter dropdowns). */
+  characterFacets(username: string): Promise<{
+    genres: { value: string; count: number }[];
+    tones: { value: string; count: number }[];
+  }>;
 }
 
 export interface CorpusServiceDeps {
@@ -280,6 +300,25 @@ export function createCorpusService(db: Db, deps: CorpusServiceDeps = {}): Corpu
     async similarChats(username, chatId, limit) {
       const ownerId = await ensureUser(db, username);
       return similarChats(db, ownerId, chatId, limit);
+    },
+
+    computeCharacterSummaries() {
+      return computeCharacterSummaries(db, { summarizer: createSummarizer() });
+    },
+
+    async characterSummary(username, characterId) {
+      const ownerId = await ensureUser(db, username);
+      return characterSummary(db, ownerId, characterId);
+    },
+
+    async browseCharacters(username, filter = {}) {
+      const ownerId = await ensureUser(db, username);
+      return browseCharacters(db, ownerId, filter);
+    },
+
+    async characterFacets(username) {
+      const ownerId = await ensureUser(db, username);
+      return characterFacets(db, ownerId);
     },
   };
 }

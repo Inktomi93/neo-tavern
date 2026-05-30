@@ -9,6 +9,13 @@ export {
   tallyCooccurrence,
 } from "./cooccurrence";
 export {
+  type CharacterDistillation,
+  computeCharacterSummaries,
+  type DistillStats,
+  GENRES,
+  TONES,
+} from "./distill";
+export {
   computeDuplicatePairs,
   DEFAULT_DUP_THRESHOLD,
   type DuplicateCharacterPair,

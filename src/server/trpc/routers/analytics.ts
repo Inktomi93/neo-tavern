@@ -148,4 +148,33 @@ export const analyticsRouter = t.router({
     .query(({ ctx, input }) =>
       ctx.services.corpus.similarChats(ctx.username, input.chatId, input.limit),
     ),
+
+  // The filterable character catalog (distillation facets + engagement) — narrow 300+ chars at a glance.
+  characters: authedProcedure
+    .input(
+      z
+        .object({
+          genre: z.string().optional(),
+          tone: z.string().optional(),
+          tag: z.string().optional(),
+          q: z.string().optional(),
+          sort: z.enum(["chats", "recent", "name"]).optional(),
+          limit: z.number().int().positive().max(500).optional(),
+        })
+        .optional()
+        .transform((v) => v ?? {}),
+    )
+    .query(({ ctx, input }) => ctx.services.corpus.browseCharacters(ctx.username, input)),
+
+  // One character's distilled facets (genre/tone/tags + elevator pitch + overview).
+  characterSummary: authedProcedure
+    .input(z.object({ characterId: z.string().min(1) }))
+    .query(({ ctx, input }) =>
+      ctx.services.corpus.characterSummary(ctx.username, input.characterId),
+    ),
+
+  // Distinct genres/tones present — populates the browse filter dropdowns.
+  characterFacets: authedProcedure.query(({ ctx }) =>
+    ctx.services.corpus.characterFacets(ctx.username),
+  ),
 });

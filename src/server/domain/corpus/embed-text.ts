@@ -49,6 +49,15 @@ export interface CardEmbedFields {
   tags: string[];
 }
 
+// A character's current-version card resolved to embeddable text. Lives here (the leaf) rather than in
+// service.ts so `targets.ts` can return it without importing the service (which would cycle back).
+export interface EmbedItem {
+  characterId: string;
+  ownerId: string;
+  characterVersionId: string;
+  text: string;
+}
+
 // Field order = card-curator config.py:63 EMBED_FIELDS (order matters — last-token pooling
 // weights later text less): name, tags, description, personality, scenario, first_mes, then
 // the optional alternate_greetings. Port of extract.py:143-186.

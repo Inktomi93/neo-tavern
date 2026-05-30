@@ -44,6 +44,7 @@
     "find-duplicates": "tsx scripts/find-duplicates.ts",
     "compute-cooccurrence": "tsx scripts/compute-cooccurrence.ts",
     "compute-themes": "tsx scripts/compute-themes.ts",
+    "distill-characters": "tsx scripts/distill-characters.ts",
     "embed:assets:gpu": "bash scripts/embed-assets-gpu.sh",
     "embed:corpus:gpu": "bash scripts/embed-corpus-gpu.sh",
     "csls": "tsx scripts/csls.ts",

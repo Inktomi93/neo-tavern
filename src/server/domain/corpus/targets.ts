@@ -1,8 +1,7 @@
 import type { Db } from "../../../db/client";
 import { characters, characterVersions } from "../../../db/schema";
 import { getLog } from "../../observability/logger";
-import { buildCardEmbedText } from "./embed-text";
-import type { EmbedItem } from "./service";
+import { buildCardEmbedText, type EmbedItem } from "./embed-text";
 
 // Coarse char pre-cap (~8192 tok · BGE-M3 truncates at 8192 internally anyway) — keeps the
 // stored source_text == the text that was embedded, so the reranker scores what was indexed.

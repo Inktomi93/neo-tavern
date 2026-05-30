@@ -85,6 +85,36 @@ export const characterKeywordProfiles = sqliteTable(
   ],
 );
 
+// Per-character DISTILLATION (card-curator classify_genre + summarize_card, B.0). A grammar-constrained
+// LLM pass turns each character card into filterable facets (genre/tone enum-constrained) + an elevator
+// pitch + a bounded overview — so a 300+ character library becomes skimmable and narrowable. One row per
+// character (its current version), replaced on recompute.
+export const characterSummaries = sqliteTable(
+  "character_summaries",
+  {
+    characterId: text("character_id")
+      .primaryKey()
+      .references(() => characters.id, { onDelete: "cascade" }),
+    ownerId: text("owner_id")
+      .notNull()
+      .references(() => users.id),
+    characterVersionId: text("character_version_id").notNull(), // which version was distilled (provenance)
+    genre: text("genre"), // primary genre (enum-constrained at generation — filterable)
+    subGenres: text("sub_genres", { mode: "json" }), // string[]
+    tone: text("tone"), // enum-constrained — filterable
+    setting: text("setting"), // free text ("modern urban fantasy")
+    tags: text("tags", { mode: "json" }), // string[] — theme/content tags (free)
+    elevatorPitch: text("elevator_pitch"), // one-line broad strokes
+    overview: text("overview"), // 2-3 sentence constrained overview
+    model: text("model").notNull(), // summarizer that produced it
+    computedAt: integer("computed_at").notNull(),
+  },
+  (t) => [
+    index("character_summaries_owner_genre_idx").on(t.ownerId, t.genre),
+    index("character_summaries_owner_tone_idx").on(t.ownerId, t.tone),
+  ],
+);
+
 // Emergent THEMES (Pillar B — docs/planning/breadth-buildout.md B.4). k-means clusters over the tier-0
 // digest embeddings surface themes nobody labeled; an LLM names each. Centroids are few (~30) and
 // queried by loading directly — NO ANN index. Model-tagged (an embedder swap invalidates the clustering).
