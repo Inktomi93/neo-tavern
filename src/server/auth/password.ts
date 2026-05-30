@@ -32,6 +32,13 @@ const KEY_LEN = 64;
 // the last line — a too-short password should never reach storage). Matches LOCAL_INITIAL_PASSWORD.
 export const MIN_PASSWORD_LENGTH = 8;
 
+// A well-formed dummy hash (valid scrypt$salt$hash with a KEY_LEN-byte hash) for the login
+// CONSTANT-TIME floor: an unknown handle / SSO-only (null hash) row verifies against THIS so scrypt
+// still runs, defeating the username-enumeration timing oracle (a known-handle wrong-password also runs
+// one scrypt → indistinguishable). The bytes are all-zero on purpose — it can never match a real
+// password (which is peppered+salted), it just burns the same KDF time.
+export const DUMMY_PASSWORD_HASH = `${ALGO}$${Buffer.alloc(SALT_BYTES).toString("base64")}$${Buffer.alloc(KEY_LEN).toString("base64")}`;
+
 /** Hash a cleartext password into the self-contained `scrypt$salt$hash` form. Throws if too short. */
 export async function hashPassword(plain: string): Promise<string> {
   const normalized = plain.normalize();
@@ -64,8 +71,11 @@ export async function verifyPassword(
   } catch {
     return false;
   }
-  if (salt.length === 0 || expected.length === 0) return false;
-  const derived = (await scrypt(pepper(plain), salt, expected.length)) as Buffer;
-  // Lengths match by construction (we derived `expected.length`), so timingSafeEqual is safe to call.
+  // Pin the derive length to our own KEY_LEN (every hash we write is 64 bytes) rather than the
+  // stored-data-derived length — a defensive cap so a malformed/oversized stored hash can never steer
+  // scrypt toward Node's maxmem. A row whose hash isn't KEY_LEN bytes can't have come from hashPassword.
+  if (expected.length !== KEY_LEN) return false;
+  const derived = (await scrypt(pepper(plain), salt, KEY_LEN)) as Buffer;
+  // Lengths match by construction (both KEY_LEN), so timingSafeEqual is safe to call.
   return timingSafeEqual(derived, expected);
 }

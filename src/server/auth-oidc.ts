@@ -3,7 +3,7 @@ import { getCookie } from "hono/cookie";
 import * as client from "openid-client";
 import type { Db } from "../db/client";
 import { clearSessionCookie, sessionCookieOptions, setSessionCookie } from "./auth/cookie";
-import { SESSION_COOKIE_NAME } from "./auth/trust-header";
+import { hasCsrfHeader, SESSION_COOKIE_NAME } from "./auth/trust-header";
 import { provisionIdentity } from "./domain/_shared/users";
 import type { SessionsService } from "./domain/sessions";
 import { env } from "./env";
@@ -180,6 +180,10 @@ export function registerOidcRoutes(app: Hono, db: Db, sessions: SessionsService)
   });
 
   app.post("/api/auth/logout", async (c) => {
+    // Require the CSRF header (cookie mutation) — blocks a cross-site forced-logout. See auth-local.ts.
+    if (!hasCsrfHeader(c.req.raw.headers)) {
+      return c.json({ error: "Missing CSRF header." }, 403);
+    }
     const token = getCookie(c, SESSION_COOKIE_NAME);
     if (token) {
       await sessions.revokeByToken(token);

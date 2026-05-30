@@ -1,16 +1,51 @@
 import { eq } from "drizzle-orm";
-import type { Hono } from "hono";
+import type { Context, Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import { getCookie } from "hono/cookie";
 import type { Db } from "../db/client";
 import { users } from "../db/schema";
 import { castId, type UserId } from "../shared/ids";
 import { clearSessionCookie, setSessionCookie } from "./auth/cookie";
-import { hashPassword, verifyPassword } from "./auth/password";
-import { SESSION_COOKIE_NAME } from "./auth/trust-header";
+import { DUMMY_PASSWORD_HASH, hashPassword, verifyPassword } from "./auth/password";
+import { hasCsrfHeader, SESSION_COOKIE_NAME } from "./auth/trust-header";
 import { ensureUser } from "./domain/_shared/users";
 import type { SessionsService } from "./domain/sessions";
 import { env } from "./env";
 import { getLog } from "./observability/logger";
+
+// A minimal in-memory per-IP fixed-window throttle on the login route — the only unauthenticated,
+// CPU-heavy (scrypt) endpoint `local` mode opens. This is a stopgap until the general rate-limiter
+// (breadth-buildout A.2.2) lands; it caps brute-force + scrypt-flood DoS without a dep. Single-process
+// (the deploy is one container); a Map is fine.
+const LOGIN_WINDOW_MS = 60_000;
+const LOGIN_MAX_PER_WINDOW = 10;
+const loginHits = new Map<string, { count: number; resetAt: number }>();
+
+function loginRateLimited(ip: string): boolean {
+  const now = Date.now();
+  // Opportunistic prune so the Map can't grow unbounded under a spoofed-IP flood.
+  if (loginHits.size > 10_000) {
+    for (const [k, v] of loginHits) if (v.resetAt <= now) loginHits.delete(k);
+  }
+  const entry = loginHits.get(ip);
+  if (!entry || entry.resetAt <= now) {
+    loginHits.set(ip, { count: 1, resetAt: now + LOGIN_WINDOW_MS });
+    return false;
+  }
+  entry.count++;
+  return entry.count > LOGIN_MAX_PER_WINDOW;
+}
+
+/** Best-effort client IP for the login throttle (leftmost X-Forwarded-For → X-Real-IP → "unknown").
+ *  Worst case (no headers) all anonymous attempts share one "unknown" bucket — still a throttle. */
+function loginClientIp(c: Context): string {
+  const xff = c.req.header("x-forwarded-for");
+  if (xff) {
+    const first = xff.split(",")[0]?.trim();
+    if (first) return first;
+  }
+  return c.req.header("x-real-ip")?.trim() || "unknown";
+}
 
 // Local username+password auth (AUTH_MODE=local) — the no-SSO path. Mirrors the OIDC routes
 // (auth-oidc.ts) but the session is minted by verifying a stored password instead of an OIDC code
@@ -53,7 +88,12 @@ export async function seedLocalOwner(db: Db): Promise<void> {
 export function registerLocalAuthRoutes(app: Hono, db: Db, sessions: SessionsService): void {
   if (env.AUTH_MODE !== "local") return;
 
-  app.post("/api/auth/login", async (c) => {
+  // bodyLimit caps the login body (credentials are tiny) so a huge POST can't be a DoS vector ahead of
+  // the general body-limit work (A.2.4).
+  app.post("/api/auth/login", bodyLimit({ maxSize: 4 * 1024 }), async (c) => {
+    if (loginRateLimited(loginClientIp(c))) {
+      return c.json({ error: "Too many attempts; try again shortly." }, 429);
+    }
     let body: { handle?: unknown; password?: unknown };
     try {
       body = await c.req.json();
@@ -71,8 +111,14 @@ export function registerLocalAuthRoutes(app: Hono, db: Db, sessions: SessionsSer
       .where(eq(users.handle, handle))
       .limit(1);
     const user = rows[0];
-    const ok = user?.enabled === true && (await verifyPassword(password, user.passwordHash));
-    if (!user || !ok) {
+    // CONSTANT-TIME floor: an unknown handle / disabled / SSO-only (null hash) user verifies against a
+    // dummy hash so scrypt ALWAYS runs — no timing oracle distinguishing "no such user" from "wrong
+    // password" (both pay one scrypt). The body response was already uniform; this closes the timing gap.
+    const storedForVerify =
+      user?.enabled === true && user.passwordHash ? user.passwordHash : DUMMY_PASSWORD_HASH;
+    const passwordOk = await verifyPassword(password, storedForVerify);
+    const authed = user?.enabled === true && user.passwordHash != null && passwordOk;
+    if (!authed || !user) {
       getLog().warn({ handle }, "auth: local login failed");
       return c.json({ error: "Invalid credentials." }, 401);
     }
@@ -86,6 +132,11 @@ export function registerLocalAuthRoutes(app: Hono, db: Db, sessions: SessionsSer
   });
 
   app.post("/api/auth/logout", async (c) => {
+    // Logout is state-changing (revokes the session), so require the CSRF header like every cookie
+    // mutation — otherwise a cross-site top-level POST (SameSite=Lax rides the cookie) could force-logout.
+    if (!hasCsrfHeader(c.req.raw.headers)) {
+      return c.json({ error: "Missing CSRF header." }, 403);
+    }
     const token = getCookie(c, SESSION_COOKIE_NAME);
     if (token) {
       await sessions.revokeByToken(token);

@@ -26,6 +26,16 @@ describe("matchesCidr", () => {
     expect(matchesCidr("10.0.0.1", "10.0.0.0/99")).toBe(false);
     expect(matchesCidr("10.0.0.1", "10.0.0.0/-1")).toBe(false);
   });
+
+  test("an empty prefix ('10.0.0.0/') is rejected, NOT treated as /0 (fail-open guard)", () => {
+    expect(matchesCidr("8.8.8.8", "0.0.0.0/")).toBe(false);
+    expect(matchesCidr("8.8.8.8", "10.0.0.0/")).toBe(false);
+  });
+
+  test("an explicit /0 still matches everything", () => {
+    expect(matchesCidr("8.8.8.8", "0.0.0.0/0")).toBe(true);
+    expect(matchesCidr("2001:db8::1", "::/0")).toBe(true);
+  });
 });
 
 describe("isPrivateOrLoopback (incl. Tailscale CGNAT)", () => {

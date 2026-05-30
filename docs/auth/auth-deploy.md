@@ -197,6 +197,16 @@ On first boot the owner row is created with this password (hashed). Log in via `
 (the `__Host-` cookie requires `Secure`) — i.e. front it with Caddy/TLS just like `oidc`; the cookie
 won't set over plain http except on a local origin where the owner fallback already applies.
 
+> **Recommended: pair `local` with `AUTH_FALLBACK=deny`** if you want a password required *everywhere*.
+> With the default `AUTH_FALLBACK=owner`, a request from a trusted-local origin (LAN/Tailscale/Docker IP
+> or `TRUSTED_LOCAL_HOSTS`) still resolves to **owner+admin with no password** — convenient on your own
+> LAN, but it means "enable local mode" does NOT by itself close the passwordless LAN-admin path. Set
+> `AUTH_FALLBACK=deny` to require login on every origin.
+>
+> **Rotation footgun:** `SESSION_SECRET` peppers BOTH session tokens AND local password hashes. Rotating
+> it logs everyone out **and invalidates every local password** (re-seed the owner via a fresh
+> `LOCAL_INITIAL_PASSWORD` on the next boot, then `resetPassword` the rest). Treat it as permanent.
+
 ### For `forward-header` mode with **Authelia** (instead of authentik)
 Authelia trusted-header SSO has no JWT to verify, so trust is network-isolation + the opt-in IP gate.
 Set `AUTH_MODE=forward-header`, `FORWARD_AUTH_VERIFY_JWT=false`, and
@@ -218,6 +228,15 @@ names with `FORWARD_AUTH_USER_HEADER` / `_GROUPS_HEADER` / `_UID_HEADER`.
 `IP_ALLOWLIST=192.168.0.0/16,100.64.0.0/10` → a 403 for any client IP outside the list. Loopback is
 always allowed (no self-lockout). Tailscale CGNAT `100.64.0.0/10` + Docker RFC1918 are trusted by the
 *origin gate* by default; `TRUSTED_PRIVATE_RANGES` adds custom CIDRs (subnet-router / non-default Docker).
+The middleware uses the real socket peer when the request arrives directly from a public IP, and only
+honors `X-Forwarded-For` when the peer is a local proxy (Caddy) — so a client can't prepend a trusted IP
+to XFF to walk through.
+
+> **Load-bearing invariant — don't expose :8788.** `FORWARD_AUTH_TRUSTED_PROXIES` (the unsigned-header
+> source-IP gate) reads `X-Forwarded-For`, which is client-controllable if a request reaches the app
+> directly. It is meaningful ONLY because Caddy fronts the app and overwrites XFF. If `:8788` is reachable
+> without going through Caddy, that gate (and any unsigned forward-header trust) can be spoofed — keep the
+> port off untrusted networks. The signed authentik-JWT path is unaffected (the signature is the proof).
 
 ---
 

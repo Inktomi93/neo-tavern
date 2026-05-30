@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { hashPassword, MIN_PASSWORD_LENGTH, verifyPassword } from "./password";
+import { DUMMY_PASSWORD_HASH, hashPassword, MIN_PASSWORD_LENGTH, verifyPassword } from "./password";
 
 describe("password hashing", () => {
   test("round-trips a correct password", async () => {
@@ -32,5 +32,17 @@ describe("password hashing", () => {
 
   test("rejects a too-short password at hash time", async () => {
     await expect(hashPassword("a".repeat(MIN_PASSWORD_LENGTH - 1))).rejects.toThrow();
+  });
+
+  test("the constant-time DUMMY hash is well-formed but never verifies true", async () => {
+    expect(DUMMY_PASSWORD_HASH.startsWith("scrypt$")).toBe(true);
+    expect(await verifyPassword("", DUMMY_PASSWORD_HASH)).toBe(false);
+    expect(await verifyPassword("anything at all", DUMMY_PASSWORD_HASH)).toBe(false);
+  });
+
+  test("rejects a stored hash whose digest isn't KEY_LEN bytes (no maxmem steering)", async () => {
+    // 8-byte digest instead of 64 → rejected before scrypt runs.
+    const shortHash = `scrypt$${Buffer.alloc(16).toString("base64")}$${Buffer.alloc(8).toString("base64")}`;
+    expect(await verifyPassword("x", shortHash)).toBe(false);
   });
 });

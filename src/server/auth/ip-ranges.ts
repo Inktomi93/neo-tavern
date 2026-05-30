@@ -84,7 +84,16 @@ export function matchesCidr(ip: string, cidr: string): boolean {
   const net = parseIp(netStr);
   const addr = parseIp(ip);
   if (!net || !addr || net.bits !== addr.bits) return false;
-  const prefix = slash === -1 ? net.bits : Number(cidr.slice(slash + 1));
+  let prefix: number;
+  if (slash === -1) {
+    prefix = net.bits;
+  } else {
+    const prefixStr = cidr.slice(slash + 1);
+    // A trailing-slash / empty prefix ("10.0.0.0/") must NOT silently become /0 (Number("")===0), which
+    // would match every address — a fail-open misconfiguration. Reject it.
+    if (prefixStr.trim() === "") return false;
+    prefix = Number(prefixStr);
+  }
   if (!Number.isInteger(prefix) || prefix < 0 || prefix > net.bits) return false;
   if (prefix === 0) return true;
   const mask = ((1n << BigInt(prefix)) - 1n) << BigInt(net.bits - prefix);
