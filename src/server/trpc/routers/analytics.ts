@@ -115,6 +115,16 @@ export const analyticsRouter = t.router({
   // Swipe/re-roll insights — most re-rolled moments + which characters/models make you re-roll.
   swipes: authedProcedure.query(({ ctx }) => ctx.services.corpus.swipes(ctx.username)),
 
+  // Distill-powered catalog — collected-vs-played by genre/tone, top tags, tag co-occurrence.
+  catalog: authedProcedure.query(({ ctx }) => ctx.services.corpus.catalog(ctx.username)),
+
+  // Compare two characters by distilled facets (no-LLM compare_cards; pairs with duplicates).
+  compareCharacters: authedProcedure
+    .input(z.object({ a: z.string().min(1), b: z.string().min(1) }))
+    .query(({ ctx, input }) =>
+      ctx.services.corpus.compareCharacters(ctx.username, input.a, input.b),
+    ),
+
   // "More like this chat" — nearest chats by segment-centroid cosine.
   similarChats: authedProcedure
     .input(

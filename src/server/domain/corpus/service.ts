@@ -7,6 +7,12 @@ import { getLog } from "../../observability/logger";
 import { newId } from "../_shared/ids";
 import { ensureUser } from "../_shared/users";
 import {
+  type CatalogStats,
+  type CharacterComparison,
+  catalogStats,
+  compareCharacters,
+} from "./catalog";
+import {
   type CooccurrenceStats,
   characterKeywords,
   computeCooccurrence,
@@ -150,6 +156,14 @@ export interface CorpusService {
   ): Promise<ThemeDetail | null>;
   /** Swipe/re-roll insights — most re-rolled moments + which characters/models make you re-roll. */
   swipes(username: string): Promise<SwipeInsights>;
+  /** Distill-powered catalog — collected-vs-played by genre/tone, top tags, tag co-occurrence. */
+  catalog(username: string): Promise<CatalogStats>;
+  /** Compare two characters by distilled facets — a no-LLM `compare_cards` (pairs with dedup). */
+  compareCharacters(
+    username: string,
+    characterIdA: string,
+    characterIdB: string,
+  ): Promise<CharacterComparison | null>;
 }
 
 export interface CorpusServiceDeps {
@@ -288,6 +302,16 @@ export function createCorpusService(db: Db, deps: CorpusServiceDeps = {}): Corpu
     async swipes(username) {
       const ownerId = await ensureUser(db, username);
       return swipeInsights(db, ownerId);
+    },
+
+    async catalog(username) {
+      const ownerId = await ensureUser(db, username);
+      return catalogStats(db, ownerId);
+    },
+
+    async compareCharacters(username, characterIdA, characterIdB) {
+      const ownerId = await ensureUser(db, username);
+      return compareCharacters(db, ownerId, characterIdA, characterIdB);
     },
   };
 }
