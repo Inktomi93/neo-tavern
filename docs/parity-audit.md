@@ -383,6 +383,71 @@ piece** and the stated *killer differentiator*.
 
 ---
 
+## Subsystems (the cross-cutting axis)
+
+The domain spine above is REST endpoints. **Subsystems are cross-cutting behaviors** (`pnpm api:q
+subsystems`) that don't map 1:1 to an endpoint — they were the audit's blind spot. Some are already
+covered inside a domain section; the rest get audited here.
+
+| subsystem | st/neo hooks | status | where |
+|---|---|---|---|
+| prompt-assembly | 20/5 | ✅ | covered under presets + world-info |
+| world-info | 12/6 | ✅ | world-info domain |
+| persona | 13/1 | ✅ | personas domain |
+| prompt-manager | 5/5 | ✅ | presets domain |
+| chat-generate | 8/2 | ✅ | chat + providers |
+| vectors | 2/2 | ✅ | rag domain |
+| presets | 6/1 | ✅ | presets domain |
+| tokenizers | 44/0 | ✅ | tokenizers (generic counter) |
+| **macro** | **30/4** | ✅ done | **below** |
+| **regex** | **25/4** | 🔲 pending | `pnpm api:q hooks regex` |
+| **reasoning** | **12/0** | 🔲 pending | thinking/effort — likely in the agent-sdk runner, not a module |
+| **slash-commands** | **10/0** | 🔲 NEEDS-DECISION | ST ~7k-LOC slash system; in or out for a single-user RP client? |
+| instruct | 19/0 | 🚫 SKIP | owner does not want instruct mode |
+| themes / backgrounds | 82/3 | 🚫 deferred | ui-cosmetic |
+| extensions | 115/0 | 🚫 OUT | no third-party extension system |
+| groups | 67/0 | 🚫 deferred | groups |
+
+### macro — ✅ done (2026-05-29)
+**ST surface**: a **new structured engine** — `macros/engine/` (`MacroLexer` → `MacroParser` →
+`MacroCstWalker`, a real CST pipeline) + `MacroRegistry` with **categorized, typed-arg** definitions
+(`definitions/{core,chat,env,instruct,state,time,variable}-macros.js`), plus `MacroBrowser` (UI) and
+an autocomplete helper. ~60 macros.
+**Our surface**: `shared/macro/` — a **real engine too** (`parser.ts` + `evaluator.ts` + AST +
+`registry.ts`), block macros (`{{#if}}`, `{{#trim}}`), `processMacros` consumed by prompt-assembly
++ regex. **~16 macros**: char, user, persona, scenario, get, random, pick, if, newline, trim, time,
+date, roll, input, lastMessage, lastUserMessage, lastCharMessage.
+**Verdict:** the **engine architecture is at parity** (parser + registry + typed handlers — same
+class as ST's new engine, NOT the old regex-replace). The gap is **vocabulary + state**:
+- ❌ **Variables** (`setvar`/`getvar`/`addvar`/`incvar`/`decvar`) — we have read-only `get` from
+  `ctx.env`, no mutable chat-scoped variable state. The biggest functional gap (stateful RP).
+- ❌ **Granular `char.*`** (`charDescription`, `charPersonality`, `charScenario`, `mesExamples`,
+  `charDepthPrompt`, `systemPrompt`, `charVersion`, `charCreatorNotes`, `charFirstMessage`).
+- ❌ **`else`** branch; time extras (`weekday`, `isotime`, `isodate`, `datetimeformat`, `timeDiff`,
+  `idleDuration`); env (`model`, `original`, `isMobile`); utility (`space`, `reverse`, `noop`,
+  `maxPrompt`/`maxContext`/`maxResponse`, `banned`, `outlet`).
+- 🚫 group/instruct macros → OUT (deferred/SKIP).
+**Close-the-gap:** (1) add the variables subsystem (chat-scoped KV + `setvar`/`getvar`/`addvar`);
+(2) register the granular `char.*` macros (the data is already in `AssembleContext`); (3) add
+`else` + the time/env/utility stragglers. All are registry additions — no engine rework.
+
+### regex — 🔲 pending
+`pnpm api:q hooks regex` (st 25 / neo 4). ST regex scripts (`regex/*`) vs our `shared/regex.ts` +
+`domain/_shared/regex.ts` (`RegexPlacement`, executed in prompt-assembly). Audit the placement
+vocabulary + script shape vs ST's.
+
+### reasoning — 🔲 pending
+`pnpm api:q hooks reasoning` (st 12 / neo 0). ST `reasoning.js` (thinking-block parse/display) vs our
+typed `effort`/`thinking` agent-sdk Options + `reasoning` on openrouter. neo=0 hooks because it's in
+the runner, not a module — verify it's actually covered, not missing.
+
+### slash-commands — 🔲 NEEDS-DECISION
+`pnpm api:q hooks slash-commands` (st 10 / neo 0). ST has a ~7k-LOC slash-command system (STscript).
+We have none. ⛳ **Decision needed:** is a command language in scope for a single-user RP client, or
+OUT like instruct/extensions?
+
+---
+
 ## Deferred (owner-decided OUT for now, 2026-05-29)
 
 ### groups — 🚫 out for now
