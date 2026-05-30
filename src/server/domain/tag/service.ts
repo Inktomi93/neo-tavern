@@ -8,6 +8,7 @@ import {
   tags,
   worldBookTags,
 } from "../../../db/schema";
+import { castId, type TagId } from "../../../shared/ids";
 import { fetchOwned, stripUndefined } from "../_shared/helpers";
 import { newId } from "../_shared/ids";
 import { ensureUser } from "../_shared/users";
@@ -23,19 +24,19 @@ export function createTagService(db: Db): TagService {
   async function listTags(params: { username: string }): Promise<TagView[]> {
     const ownerId = await ensureUser(db, params.username);
     const rows = await db.select().from(tags).where(eq(tags.ownerId, ownerId));
-    return rows;
+    return rows.map((r) => ({ ...r, id: castId<TagId>(r.id) }));
   }
 
-  async function getTag(params: { username: string }, tagId: string): Promise<TagView> {
+  async function getTag(params: { username: string }, tagId: TagId): Promise<TagView> {
     const ownerId = await ensureUser(db, params.username);
     const tag = await fetchOwned<TagView>(db, tags, tagId, ownerId);
     if (!tag) throw new TagNotFoundError(`tag not found: ${tagId}`);
-    return tag;
+    return { ...tag, id: castId<TagId>(tag.id) };
   }
 
   async function createTag(params: { username: string }, input: CreateTagInput): Promise<TagView> {
     const ownerId = await ensureUser(db, params.username);
-    const id = newId();
+    const id = newId<TagId>();
     await db.insert(tags).values({
       id,
       ownerId,
@@ -48,7 +49,7 @@ export function createTagService(db: Db): TagService {
 
   async function updateTag(
     params: { username: string },
-    tagId: string,
+    tagId: TagId,
     input: UpdateTagInput,
   ): Promise<TagView> {
     const ownerId = await ensureUser(db, params.username);
@@ -67,7 +68,7 @@ export function createTagService(db: Db): TagService {
 
   async function removeTag(
     params: { username: string },
-    tagId: string,
+    tagId: TagId,
   ): Promise<{ deleted: boolean }> {
     const ownerId = await ensureUser(db, params.username);
     await getTag({ username: params.username }, tagId);
@@ -77,7 +78,7 @@ export function createTagService(db: Db): TagService {
 
   async function attachTag(
     params: { username: string },
-    tagId: string,
+    tagId: TagId,
     targetType: "character" | "chat" | "worldBook" | "persona" | "preset",
     targetId: string,
   ): Promise<void> {
@@ -112,7 +113,7 @@ export function createTagService(db: Db): TagService {
 
   async function detachTag(
     params: { username: string },
-    tagId: string,
+    tagId: TagId,
     targetType: "character" | "chat" | "worldBook" | "persona" | "preset",
     targetId: string,
   ): Promise<void> {

@@ -1,9 +1,10 @@
 import { z } from "zod";
+import { brandedId, type TagId } from "../../../shared/ids";
 import { authedProcedure, t } from "../trpc";
 
 // Shared input for tag attachment mutations — attach and detach take the same three fields.
 const tagTargetInput = z.object({
-  tagId: z.string().min(1),
+  tagId: brandedId<TagId>(),
   targetType: z.enum(["character", "chat", "worldBook", "persona", "preset"]),
   targetId: z.string().min(1),
 });
@@ -12,7 +13,7 @@ export const tagRouter = t.router({
   list: authedProcedure.query(({ ctx }) => ctx.services.tag.listTags({ username: ctx.username })),
 
   get: authedProcedure
-    .input(z.object({ tagId: z.string().min(1) }))
+    .input(z.object({ tagId: brandedId<TagId>() }))
     .query(({ ctx, input }) => ctx.services.tag.getTag({ username: ctx.username }, input.tagId)),
 
   create: authedProcedure
@@ -28,7 +29,7 @@ export const tagRouter = t.router({
   update: authedProcedure
     .input(
       z.object({
-        tagId: z.string().min(1),
+        tagId: brandedId<TagId>(),
         name: z.string().min(1).max(200).optional(),
         color: z.string().optional(),
         source: z.enum(["manual", "auto"]).optional(),
@@ -40,7 +41,7 @@ export const tagRouter = t.router({
     }),
 
   remove: authedProcedure
-    .input(z.object({ tagId: z.string().min(1) }))
+    .input(z.object({ tagId: brandedId<TagId>() }))
     .mutation(({ ctx, input }) =>
       ctx.services.tag.removeTag({ username: ctx.username }, input.tagId),
     ),

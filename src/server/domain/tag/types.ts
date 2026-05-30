@@ -1,7 +1,8 @@
+import type { TagId } from "../../../shared/ids";
 import { DomainNotFoundError } from "../_shared/errors";
 
 export interface TagView {
-  id: string;
+  id: TagId;
   name: string;
   color: string | null;
   source: "manual" | "auto" | null;
@@ -21,20 +22,20 @@ export interface UpdateTagInput {
 
 export interface TagService {
   listTags(params: { username: string }): Promise<TagView[]>;
-  getTag(params: { username: string }, tagId: string): Promise<TagView>;
+  getTag(params: { username: string }, tagId: TagId): Promise<TagView>;
   createTag(params: { username: string }, input: CreateTagInput): Promise<TagView>;
-  updateTag(params: { username: string }, tagId: string, input: UpdateTagInput): Promise<TagView>;
-  removeTag(params: { username: string }, tagId: string): Promise<{ deleted: boolean }>;
+  updateTag(params: { username: string }, tagId: TagId, input: UpdateTagInput): Promise<TagView>;
+  removeTag(params: { username: string }, tagId: TagId): Promise<{ deleted: boolean }>;
 
   attachTag(
     params: { username: string },
-    tagId: string,
+    tagId: TagId,
     targetType: "character" | "chat" | "worldBook" | "persona" | "preset",
     targetId: string,
   ): Promise<void>;
   detachTag(
     params: { username: string },
-    tagId: string,
+    tagId: TagId,
     targetType: "character" | "chat" | "worldBook" | "persona" | "preset",
     targetId: string,
   ): Promise<void>;
