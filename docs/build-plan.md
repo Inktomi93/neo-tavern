@@ -94,6 +94,24 @@ only ✅-tracking in the repo; keep it one line.
   (libSQL atomic, same-connection) — currently 0 uses, so it needs a `:memory:` validation first.
   The chat turn is already atomic via `withChatLock` + compensating rollback (`send.ts`); this is
   only the non-locked bulk-insert paths (import, and to a lesser degree `forkChat`).
+- **#50 — Guided Generations (the steering actions, frontend-era):** the features the owner actually
+  uses from `references/guided-generations` — **guided response, guided swipe, guided impersonate,
+  rewrite / edit-intro**. They collapse to ONE parameterized `guidedTurn` on primitives we already
+  have — NOT a port of ST's QR/STscript (that's just ST's delivery for "inject + generate"):
+  - **Ephemeral guidance injection** — a one-turn instruction added to the **dynamic** (post-cache-
+    boundary) system prompt; never enters the append-only `messages` log, never busts the cached
+    prefix. Powers guided response (= `send` + inject) and guided swipe (= `swipe` + inject).
+  - **Rewrite / edit-intro** — "regenerate THIS message under instruction X" → a new
+    `message_variants` swipe (reuses `editMessage` + the variant machinery). The intro-reformat menu
+    (POV/tense/style) is just canned instruction strings.
+  - **Impersonate** — generate as the persona/POV; result lands in the **client draft**, not canon.
+  - **Per-action EDITABLE prompt templates** (REQUIRED) — every action's prompt is a user-editable
+    string with `{{input}}`/`{{char}}`/`{{user}}` via the macro engine, so users can change them.
+  - **Injection `role` settable** (system/user/assistant) per action [+ optional depth].
+  - **NO per-action profile/preset switching** — owner is single-model; explicitly dropped (GG has
+    it; we don't need it).
+  - Persistent Guides (state/tracker/clothes) is the separate **variables/state** capability (the
+    macro-audit gap), NOT part of this — owner doesn't use it.
 
 **Pluggable auth + user/credential foundation — BUILT (migrations 0025–0026 + the `feat(auth)`
 commits) and verified live through the real caddy+authentik stack.** Pluggable `AUTH_MODE`
