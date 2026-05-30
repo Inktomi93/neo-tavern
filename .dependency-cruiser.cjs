@@ -5,7 +5,7 @@
  *
  *     src/shared      types & zod schemas — the foundation; imports nothing internal
  *     src/db          Drizzle schema + libSQL — persistence; imports shared only
- *     src/server/{providers,embeddings,auth,crypto,env}   infrastructure (external systems, config)
+ *     src/server/{providers,embeddings,auth,crypto,config,observability,storage,env}   infrastructure (external systems, config)
  *     src/server/{domain,services}                 business logic (future)
  *     src/server/trpc                              transport edge — calls DOWN into the above
  *     src/server/index.ts                          composition root / entry
@@ -86,6 +86,14 @@ module.exports = {
         "Logging/observability is a foundation utility (like env) that every layer imports via getLog(). It must not reach UP into domain, the drivers, or the client.",
       severity: "error",
       from: { path: "^src/server/observability/" },
+      to: { path: ["^src/server/(domain|trpc|jobs)/", "^src/client/"] },
+    },
+    {
+      name: "config-is-foundation",
+      comment:
+        "AppSettings/app-config is a foundation utility (env floor → DB override) that domain + the drivers read DOWN into. It must not reach UP into domain, the drivers, or the client.",
+      severity: "error",
+      from: { path: "^src/server/config/" },
       to: { path: ["^src/server/(domain|trpc|jobs)/", "^src/client/"] },
     },
     {
