@@ -45,6 +45,13 @@ import {
   fieldSuggest,
 } from "./field-search";
 import {
+  type ImageDuplicatePair,
+  imageDuplicates,
+  similarArt,
+  type VisualArchetype,
+  visualArchetypes,
+} from "./image-analytics";
+import {
   type ForgottenGem,
   forgottenGems,
   type ModelRouting,
@@ -195,6 +202,18 @@ export interface CorpusService {
   fieldSearch(username: string, params: FieldSearchParams): Promise<FieldSearchHit[]>;
   /** As-you-type suggestions for the field search. */
   fieldSuggest(username: string, q: string, limit?: number): Promise<string[]>;
+
+  // ── analytics: IMAGE / avatar (SigLIP, the visual parallel) ────────────────
+  /** Cards sharing the same/near-identical ART (reused avatars) — exact all-pairs cosine. */
+  imageDuplicates(username: string, threshold?: number): Promise<ImageDuplicatePair[]>;
+  /** "What looks like this" — visually nearest characters by avatar (image ANN kNN). */
+  similarArt(
+    username: string,
+    characterId: string,
+    limit?: number,
+  ): Promise<{ characterId: string; name: string; similarity: number }[]>;
+  /** Art-style clusters — k-means over avatars, labeled by dominant genre/tone. */
+  visualArchetypes(username: string, k?: number): Promise<VisualArchetype[]>;
   /** Forgotten gems — characters you invested in but haven't touched recently (revisit candidates). */
   forgottenGems(username: string, limit?: number): Promise<ForgottenGem[]>;
   /** Which model you reach for per genre. */
@@ -386,6 +405,21 @@ export function createCorpusService(db: Db, deps: CorpusServiceDeps = {}): Corpu
     async fieldSuggest(username, q, limit) {
       const ownerId = await ensureUser(db, username);
       return fieldSuggest(db, ownerId, q, limit);
+    },
+
+    async imageDuplicates(username, threshold) {
+      const ownerId = await ensureUser(db, username);
+      return imageDuplicates(db, ownerId, threshold);
+    },
+
+    async similarArt(username, characterId, limit) {
+      const ownerId = await ensureUser(db, username);
+      return similarArt(db, ownerId, characterId, limit);
+    },
+
+    async visualArchetypes(username, k) {
+      const ownerId = await ensureUser(db, username);
+      return visualArchetypes(db, ownerId, k);
     },
 
     async forgottenGems(username, limit) {

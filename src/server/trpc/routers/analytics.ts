@@ -135,6 +135,38 @@ export const analyticsRouter = t.router({
     )
     .query(({ ctx, input }) => ctx.services.corpus.archetypes(ctx.username, input.k)),
 
+  // Cards sharing the same/near-identical ART (reused avatars) — visual cleanup. Exact all-pairs cosine.
+  imageDuplicates: authedProcedure
+    .input(
+      z
+        .object({ threshold: z.number().min(0).max(1).optional() })
+        .optional()
+        .transform((v) => v ?? {}),
+    )
+    .query(({ ctx, input }) => ctx.services.corpus.imageDuplicates(ctx.username, input.threshold)),
+
+  // "What looks like this" — visually nearest characters by avatar (image ANN kNN).
+  similarArt: authedProcedure
+    .input(
+      z.object({
+        characterId: z.string().min(1),
+        limit: z.number().int().positive().max(50).optional(),
+      }),
+    )
+    .query(({ ctx, input }) =>
+      ctx.services.corpus.similarArt(ctx.username, input.characterId, input.limit),
+    ),
+
+  // Art-style clusters — k-means over avatars, labeled by dominant genre/tone.
+  visualArchetypes: authedProcedure
+    .input(
+      z
+        .object({ k: z.number().int().positive().max(40).optional() })
+        .optional()
+        .transform((v) => v ?? {}),
+    )
+    .query(({ ctx, input }) => ctx.services.corpus.visualArchetypes(ctx.username, input.k)),
+
   // Forgotten gems — characters you invested in but haven't touched recently (revisit candidates).
   forgottenGems: authedProcedure
     .input(
