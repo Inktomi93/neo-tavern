@@ -66,13 +66,24 @@ migrations, the vector-index lesson, Serena editing).
 
 # Track A — Security: SSRF + hardening
 
-> **✅ A.2.0 (added 2026-05-30) — auth-flexibility foundation SHIPPED.** Before the hardening items
-> below, a separate slice closed the no-SSO/non-authentik gap: `AUTH_MODE=local` (username+password
-> accounts, env-seeded owner), `forward-header` now also accepts Authelia `Remote-*` + custom-named
-> proxy headers with an opt-in `FORWARD_AUTH_TRUSTED_PROXIES` source-IP gate, an optional `IP_ALLOWLIST`
-> edge belt, and Tailscale CGNAT `100.64/10` added to the trusted ranges (shared `auth/ip-ranges.ts`).
-> See `docs/auth/auth-deploy.md` + the amendment in `auth-and-credentials-plan.md`. The items below
-> (SSRF firewall, rate-limit, headers, body limits, audit, JWKS iss/aud) remain open.
+> **✅ TRACK A CORE — DONE (2026-05-30).** Shipped to `main`, each its own green `pnpm check` commit:
+> - **A.2.0** (auth-flexibility foundation): `AUTH_MODE=local` (password accounts, env-seeded owner),
+>   `forward-header` accepts Authelia `Remote-*` + custom headers + opt-in `FORWARD_AUTH_TRUSTED_PROXIES`
+>   source-IP gate, `IP_ALLOWLIST` edge belt, Tailscale CGNAT in the trusted ranges (`auth/ip-ranges.ts`).
+> - **A.2.3** security headers (CSP/HSTS/frame/COOP, dev-permissive/prod-strict, HSTS off for single-user).
+> - **A.2.4** per-route body limits + zip-bomb guard (per-entry/total decompressed caps).
+> - **A.2.6** JWKS hardening (https + host-allowlist on the meta-jwks URL) + opt-in jwtVerify iss/aud.
+> - **A.2.1** SSRF egress firewall (undici `setGlobalDispatcher` + private-IP-rejecting DNS lookup,
+>   rebinding-safe; `EGRESS_FIREWALL`/`EGRESS_ALLOWLIST`; OIDC issuer auto-allowed).
+> - **A.2.2** per-user rate limiting (`rate-limiter-flexible`; general 120/min + ai-turn 30/min on
+>   send/swipe/start, keyed on handle) + a bespoke login-route limiter.
+> - **A.2.5** consistent `securityEvent()` pino trail (greppable `security:true`+`event`); DB-persisted
+>   security audit deliberately skipped for a single-operator box.
+>
+> Plus a 3-agent adversarial review pass (commit `a7cb7db`): constant-time login floor, login
+> body-limit+throttle, empty-CIDR fail-open fix, logout CSRF, trusted-proxy-aware IP allowlist.
+> The §A.2 spec below is the as-designed reference (file:line since drifted). Remaining = the A.3
+> nice-to-haves (login-IP limit, global ceiling, outbound logging, `pnpm audit` in check).
 
 ## A.1 Current state (verified `file:line`)
 

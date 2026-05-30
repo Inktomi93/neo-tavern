@@ -52,6 +52,10 @@ pretends a homelab needs enterprise infra.
 | `FORWARD_AUTH_USER_HEADER` / `_GROUPS_HEADER` / `_UID_HEADER` | forward-header | optional custom trusted-header names (unset ⇒ auto-accept authentik `X-Authentik-*` + Authelia `Remote-*`) |
 | `IP_ALLOWLIST` | optional | comma CIDR edge belt; 403 for client IPs outside it (loopback always allowed). Fronts any mode |
 | `TRUSTED_PRIVATE_RANGES` | optional | extra CIDRs added to the built-in private set (Tailscale `100.64/10` + Docker RFC1918 already covered) for the local-origin + trusted-proxy gates |
+| `FORWARD_AUTH_JWKS_ALLOWLIST` | forward-header | host-allowlist for the `X-Authentik-Meta-Jwks` URL (always required https). Default = the OIDC_ISSUER host |
+| `FORWARD_AUTH_JWT_ISSUER` / `_AUDIENCE` | forward-header | optional expected `iss`/`aud` enforced on the forwarded JWT (jose checks neither by default) |
+| `EGRESS_FIREWALL` | optional | block outbound HTTP to private/Tailscale/loopback IPs (default `true`). SSRF defense-in-depth |
+| `EGRESS_ALLOWLIST` | optional | hostnames allowed to resolve to a private IP for egress (e.g. an internal API). The OIDC issuer host is auto-allowed |
 | `AUTH_FALLBACK` | all | un-credentialed request → `owner` (default) or `deny`. **`oidc`+`owner` = SSO on the domain AND owner on the raw LAN IP, at once** — safe because in SSO modes the `owner` fallback is **origin-gated**: granted ONLY on a local origin; on the public FQDN an un-cookied request gets `null` → 401 → SSO. `deny` = SSO mandatory everywhere. In `single-user` mode the fallback is unconditional (the only way in). |
 | `TRUSTED_LOCAL_HOSTS` | sso | optional comma-list of extra hostnames counted as a LOCAL origin for the `owner` fallback (a raw-LAN path reached by name, e.g. `neo.lan`). Private/loopback IPs + `localhost` are local already. **Never list the public FQDN here** (that re-opens the bypass). |
 | `DEFAULT_USER_HANDLE` | all | the owner handle (single-user / fallback identity + admin) |
