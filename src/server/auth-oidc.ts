@@ -63,6 +63,23 @@ interface OidcTransaction {
 const TX_TTL_MS = 1000 * 60 * 10; // a login attempt must complete within 10 minutes
 
 /**
+ * Narrow the three OIDC env vars to `string`. The env refinement already guarantees they're present
+ * in `oidc` mode, but that invariant lives in the schema, not the type — so assert it once at the
+ * discovery seam (instead of three `as string` casts) and fail loud if the invariant ever breaks.
+ */
+function assertOidcEnv(): { issuer: string; clientId: string; clientSecret: string } {
+  const { OIDC_ISSUER, OIDC_CLIENT_ID, OIDC_CLIENT_SECRET } = env;
+  if (
+    OIDC_ISSUER === undefined ||
+    OIDC_CLIENT_ID === undefined ||
+    OIDC_CLIENT_SECRET === undefined
+  ) {
+    throw new Error("OIDC env (issuer/client id/secret) missing in oidc mode");
+  }
+  return { issuer: OIDC_ISSUER, clientId: OIDC_CLIENT_ID, clientSecret: OIDC_CLIENT_SECRET };
+}
+
+/**
  * Register the OIDC routes — only in `oidc` mode (the env refinement guarantees the OIDC vars are
  * present then). Registered in buildApp like registerImportRoutes; all four paths are public (Hono
  * routes, not behind the tRPC 401 gate). Single-process assumption: the in-flight transaction state
@@ -77,12 +94,8 @@ export function registerOidcRoutes(app: Hono, db: Db, sessions: SessionsService)
   let configPromise: Promise<client.Configuration> | undefined;
   const getConfig = (): Promise<client.Configuration> => {
     if (!configPromise) {
-      // env refinement guarantees these are set in oidc mode.
-      configPromise = client.discovery(
-        new URL(env.OIDC_ISSUER as string),
-        env.OIDC_CLIENT_ID as string,
-        env.OIDC_CLIENT_SECRET as string,
-      );
+      const { issuer, clientId, clientSecret } = assertOidcEnv();
+      configPromise = client.discovery(new URL(issuer), clientId, clientSecret);
     }
     return configPromise;
   };
