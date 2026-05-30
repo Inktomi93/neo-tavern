@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import type { Db } from "../../../db/client";
 import { users } from "../../../db/schema";
+import { castId, type UserId } from "../../../shared/ids";
 import { env } from "../../env";
 import { getLog } from "../../observability/logger";
 import { newId } from "./ids";
@@ -9,7 +10,7 @@ import { newId } from "./ids";
 // creating the row on first sight. This is where identity (a string) becomes a
 // tenant (a row) — so the auth/trpc layers never touch the db. Single-user today =
 // one row; multi-user later = unchanged.
-export async function ensureUser(db: Db, handle: string): Promise<string> {
+export async function ensureUser(db: Db, handle: string): Promise<UserId> {
   const existing = await db
     .select({ id: users.id })
     .from(users)
@@ -17,9 +18,9 @@ export async function ensureUser(db: Db, handle: string): Promise<string> {
     .limit(1);
   const found = existing[0];
   if (found) {
-    return found.id;
+    return castId<UserId>(found.id);
   }
-  const id = newId();
+  const id = newId<UserId>();
   // The one access-control decision the app owns: the owner (DEFAULT_USER_HANDLE) is provisioned as
   // admin; everyone else as "user". Idempotent — covers the fresh-DB owner-first-login case without
   // a separate seed; authentik remains the real gate for who reaches this point at all.
@@ -34,7 +35,7 @@ export async function ensureUser(db: Db, handle: string): Promise<string> {
     .from(users)
     .where(eq(users.handle, handle))
     .limit(1);
-  return after[0]?.id ?? id;
+  return castId<UserId>(after[0]?.id ?? id);
 }
 
 // The owner-handle allowlist for admin determination (§6). OWNER_HANDLES (comma-list) overrides;
@@ -74,7 +75,7 @@ function determineRole(handle: string, groups: string[]): "admin" | "user" {
 export async function provisionIdentity(
   db: Db,
   identity: { externalId: string | null; handle: string; groups: string[] },
-): Promise<{ id: string; enabled: boolean; role: "admin" | "user" }> {
+): Promise<{ id: UserId; enabled: boolean; role: "admin" | "user" }> {
   const role = determineRole(identity.handle, identity.groups);
   const cols = {
     id: users.id,
@@ -122,10 +123,10 @@ export async function provisionIdentity(
         "user: provisioned SSO identity (updated)",
       );
     }
-    return { id: existing.id, enabled: existing.enabled, role: existing.role };
+    return { id: castId<UserId>(existing.id), enabled: existing.enabled, role: existing.role };
   }
 
-  const id = newId();
+  const id = newId<UserId>();
   await db.insert(users).values({
     id,
     handle: identity.handle,
@@ -144,7 +145,7 @@ export async function provisionIdentity(
 export async function withOwner<T>(
   db: Db,
   username: string,
-  fn: (ownerId: string) => Promise<T>,
+  fn: (ownerId: UserId) => Promise<T>,
 ): Promise<T> {
   const ownerId = await ensureUser(db, username);
   return fn(ownerId);

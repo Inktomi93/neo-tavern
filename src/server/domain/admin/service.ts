@@ -1,7 +1,7 @@
 import { asc, eq } from "drizzle-orm";
 import type { Db } from "../../../db/client";
 import { users } from "../../../db/schema";
-import type { SessionId } from "../../../shared/ids";
+import { castId, type SessionId, type UserId } from "../../../shared/ids";
 import type { SessionView } from "../../../shared/session";
 import { getLog } from "../../observability/logger";
 import { requireAdmin } from "../_shared/admin";
@@ -11,9 +11,9 @@ import { DomainNotFoundError, DomainOperationError } from "../_shared/errors";
 // admin doesn't import a sibling feature (domain-no-cross-feature). The composition root injects the
 // real SessionsService, which satisfies this structurally.
 export interface SessionAdminPort {
-  listForUser(userId: string): Promise<SessionView[]>;
+  listForUser(userId: UserId): Promise<SessionView[]>;
   revoke(sessionId: SessionId): Promise<void>;
-  revokeAllForUser(userId: string): Promise<number>;
+  revokeAllForUser(userId: UserId): Promise<number>;
 }
 
 // User administration (docs/auth/auth-and-credentials-plan.md §6) — the multi-user management surface,
@@ -21,7 +21,7 @@ export interface SessionAdminPort {
 // gates). Session listing/revocation lands in commit 4 (it needs the sessions service). No UI here.
 
 export interface AdminUserView {
-  id: string;
+  id: UserId;
   handle: string;
   externalId: string | null;
   displayName: string | null;
@@ -34,17 +34,17 @@ export interface AdminService {
   listUsers(params: { username: string }): Promise<AdminUserView[]>;
   setRole(params: {
     username: string;
-    userId: string;
+    userId: UserId;
     role: "admin" | "user";
   }): Promise<AdminUserView>;
   setEnabled(params: {
     username: string;
-    userId: string;
+    userId: UserId;
     enabled: boolean;
   }): Promise<AdminUserView>;
-  listSessions(params: { username: string; userId: string }): Promise<SessionView[]>;
+  listSessions(params: { username: string; userId: UserId }): Promise<SessionView[]>;
   revokeSession(params: { username: string; sessionId: SessionId }): Promise<void>;
-  revokeUserSessions(params: { username: string; userId: string }): Promise<{ revoked: number }>;
+  revokeUserSessions(params: { username: string; userId: UserId }): Promise<{ revoked: number }>;
 }
 
 const userCols = {
@@ -58,21 +58,22 @@ const userCols = {
 };
 
 export function createAdminService(db: Db, sessionsService: SessionAdminPort): AdminService {
-  async function loadUser(userId: string): Promise<AdminUserView> {
+  async function loadUser(userId: UserId): Promise<AdminUserView> {
     const rows = await db.select(userCols).from(users).where(eq(users.id, userId)).limit(1);
     const row = rows[0];
     if (!row) throw new DomainNotFoundError("user", userId);
-    return row;
+    return { ...row, id: castId<UserId>(row.id) };
   }
 
   async function listUsers(params: { username: string }): Promise<AdminUserView[]> {
     await requireAdmin(db, params.username);
-    return db.select(userCols).from(users).orderBy(asc(users.createdAt));
+    const rows = await db.select(userCols).from(users).orderBy(asc(users.createdAt));
+    return rows.map((r) => ({ ...r, id: castId<UserId>(r.id) }));
   }
 
   async function setRole(params: {
     username: string;
-    userId: string;
+    userId: UserId;
     role: "admin" | "user";
   }): Promise<AdminUserView> {
     await requireAdmin(db, params.username);
@@ -83,7 +84,7 @@ export function createAdminService(db: Db, sessionsService: SessionAdminPort): A
 
   async function setEnabled(params: {
     username: string;
-    userId: string;
+    userId: UserId;
     enabled: boolean;
   }): Promise<AdminUserView> {
     const adminId = await requireAdmin(db, params.username);
@@ -103,7 +104,7 @@ export function createAdminService(db: Db, sessionsService: SessionAdminPort): A
 
   async function listSessions(params: {
     username: string;
-    userId: string;
+    userId: UserId;
   }): Promise<SessionView[]> {
     await requireAdmin(db, params.username);
     return sessionsService.listForUser(params.userId);
@@ -116,7 +117,7 @@ export function createAdminService(db: Db, sessionsService: SessionAdminPort): A
 
   async function revokeUserSessions(params: {
     username: string;
-    userId: string;
+    userId: UserId;
   }): Promise<{ revoked: number }> {
     await requireAdmin(db, params.username);
     return { revoked: await sessionsService.revokeAllForUser(params.userId) };

@@ -8,6 +8,7 @@ import {
   type CharacterVersionId,
   type ChatId,
   castId,
+  type UserId,
 } from "../../src/shared/ids";
 
 // Fresh in-memory libSQL with migrations applied. Per tests/AGENTS.md: call per test
@@ -34,7 +35,7 @@ export async function seedCharacter(
     tags?: string[];
     greetings?: string[];
   },
-): Promise<{ characterId: CharacterId; ownerId: string; characterVersionId: CharacterVersionId }> {
+): Promise<{ characterId: CharacterId; ownerId: UserId; characterVersionId: CharacterVersionId }> {
   const now = Date.now();
   const cvId = `${opts.id}-v1`;
   // Mirror ensureUser's one access decision so the seeded owner is REALISTIC: the DEFAULT_USER_HANDLE
@@ -65,7 +66,7 @@ export async function seedCharacter(
   await db.update(characters).set({ currentVersionId: cvId }).where(eq(characters.id, opts.id));
   return {
     characterId: castId<CharacterId>(opts.id),
-    ownerId: opts.ownerId,
+    ownerId: castId<UserId>(opts.ownerId),
     characterVersionId: castId<CharacterVersionId>(cvId),
   };
 }
@@ -92,8 +93,8 @@ export async function seedChatRow(
     // greeting, user hasn't replied" state, for swipe/edit tests. Mirrors lifecycle's seedGreeting.
     greeting?: string;
   } = {},
-): Promise<{ chatId: ChatId; characterVersionId: CharacterVersionId; ownerId: string }> {
-  const ownerId = opts.ownerId ?? "owner";
+): Promise<{ chatId: ChatId; characterVersionId: CharacterVersionId; ownerId: UserId }> {
+  const ownerId = castId<UserId>(opts.ownerId ?? "owner");
   const n = chatSeedCounter++;
   const api = opts.api ?? "agent-sdk";
   const { characterVersionId } = await seedCharacter(db, {

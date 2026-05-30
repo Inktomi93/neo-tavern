@@ -7,7 +7,7 @@ import { createSessionsService } from "./service";
 
 let db: Db;
 let svc: ReturnType<typeof createSessionsService>;
-let userId: string;
+let userId: import("../../../shared/ids").UserId;
 
 beforeEach(async () => {
   db = await createDb(":memory:");

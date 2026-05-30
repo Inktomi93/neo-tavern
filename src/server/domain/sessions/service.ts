@@ -3,7 +3,7 @@ import { and, asc, eq, isNull } from "drizzle-orm";
 import type { Db } from "../../../db/client";
 import { sessions, users } from "../../../db/schema";
 import type { ResolvedIdentity } from "../../../shared/identity";
-import { castId, type SessionId } from "../../../shared/ids";
+import { castId, type SessionId, type UserId } from "../../../shared/ids";
 import type { SessionView } from "../../../shared/session";
 import { env } from "../../env";
 import { getLog } from "../../observability/logger";
@@ -25,7 +25,7 @@ const SLIDE_THROTTLE_MS = 1000 * 60 * 5;
 export interface SessionsService {
   /** Mint an opaque token (the caller sets it as the cookie) + persist only its peppered hash. */
   create(params: {
-    userId: string;
+    userId: UserId;
     userAgent?: string | null;
   }): Promise<{ token: string; sessionId: SessionId; expiresAt: number }>;
   /** Validate a cookie token → identity, or null if missing/revoked/expired/disabled. Slides expiry
@@ -36,9 +36,9 @@ export interface SessionsService {
   /** Revoke a session by id (admin: kick a specific device). */
   revoke(sessionId: SessionId): Promise<void>;
   /** Revoke ALL of a user's live sessions (admin disable / kick-all) → count revoked. */
-  revokeAllForUser(userId: string): Promise<number>;
+  revokeAllForUser(userId: UserId): Promise<number>;
   /** A user's sessions, newest-activity context for the admin list. */
-  listForUser(userId: string): Promise<SessionView[]>;
+  listForUser(userId: UserId): Promise<SessionView[]>;
 }
 
 // HMAC-pepper the token with SESSION_SECRET so a DB leak alone can't forge a session (the stored
@@ -52,7 +52,7 @@ function hashToken(token: string): string {
 
 export function createSessionsService(db: Db): SessionsService {
   async function create(params: {
-    userId: string;
+    userId: UserId;
     userAgent?: string | null;
   }): Promise<{ token: string; sessionId: SessionId; expiresAt: number }> {
     const token = randomBytes(32).toString("base64url");
@@ -118,7 +118,7 @@ export function createSessionsService(db: Db): SessionsService {
     getLog().info({ sessionId }, "session: revoked");
   }
 
-  async function revokeAllForUser(userId: string): Promise<number> {
+  async function revokeAllForUser(userId: UserId): Promise<number> {
     const live = await db
       .select({ id: sessions.id })
       .from(sessions)
@@ -133,7 +133,7 @@ export function createSessionsService(db: Db): SessionsService {
     return live.length;
   }
 
-  async function listForUser(userId: string): Promise<SessionView[]> {
+  async function listForUser(userId: UserId): Promise<SessionView[]> {
     const rows = await db
       .select({
         id: sessions.id,

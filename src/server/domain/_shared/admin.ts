@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import type { Db } from "../../../db/client";
 import { users } from "../../../db/schema";
+import type { UserId } from "../../../shared/ids";
 import { DomainForbiddenError } from "./errors";
 import { ensureUser } from "./users";
 
@@ -9,7 +10,7 @@ import { ensureUser } from "./users";
 // JIT-provisioned user is role="user" and rejected. When multi-user lands, granting admin
 // becomes a role mutation — this check doesn't change. Returns the resolved ownerId so callers
 // can chain (e.g. scope a write) without a second lookup.
-export async function requireAdmin(db: Db, username: string): Promise<string> {
+export async function requireAdmin(db: Db, username: string): Promise<UserId> {
   const ownerId = await ensureUser(db, username);
   const rows = await db
     .select({ role: users.role })
