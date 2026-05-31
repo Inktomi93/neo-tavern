@@ -33,6 +33,31 @@ interface ImageModelBundle {
   tokenizer: PreTrainedTokenizer;
 }
 
+// We load the COMBINED SigLIP graph (one model.onnx with both towers). Its forward requires BOTH the
+// image AND text inputs on every run, even when we only read one tower's output — so the image path
+// feeds a fixed dummy text and the text path feeds a blank image. That's safe: image_embeds depend only
+// on pixels and text_embeds only on tokens, so the unused tower's input never affects what we read.
+const VISION_RES = 384; // siglip2-so400m-patch14-384
+const SIGLIP_MAX_TOKENS = 64; // SigLIP's text tower was trained with FIXED 64-token padding…
+
+// …and WITHOUT that exact padding the text embedding is misaligned with the image space, giving ~0
+// cross-modal cosine (random retrieval — the bug that made text→image search return the placeholder).
+function tokenizeSiglip(tokenizer: PreTrainedTokenizer, text: string) {
+  return tokenizer(text, {
+    padding: "max_length",
+    max_length: SIGLIP_MAX_TOKENS,
+    truncation: true,
+  });
+}
+function blankImage(): RawImage {
+  return new RawImage(
+    new Uint8ClampedArray(VISION_RES * VISION_RES * 3),
+    VISION_RES,
+    VISION_RES,
+    3,
+  );
+}
+
 const warmModel = new WarmModel<ImageModelBundle>({
   name: `${IMAGE_EMBEDDING_MODEL}@${env.EMBED_DEVICE}:${env.EMBED_GPU_ID}`,
   idleMs: getAppConfig().idleUnloadMin * 60_000,
@@ -50,9 +75,8 @@ const warmModel = new WarmModel<ImageModelBundle>({
     await model.dispose();
   },
   warm: async ({ model, processor, tokenizer }) => {
-    const img = new RawImage(new Uint8ClampedArray(384 * 384 * 3).fill(0), 384, 384, 3);
-    const text_inputs = await tokenizer("warmup");
-    const model_inputs = await processor(img);
+    const model_inputs = await processor(blankImage());
+    const text_inputs = tokenizeSiglip(tokenizer, "warmup");
     model_inputs.input_ids = text_inputs.input_ids;
     model_inputs.attention_mask = text_inputs.attention_mask;
     await model(model_inputs);
@@ -90,7 +114,8 @@ export function createImageEmbedder(): ImageEmbedder {
           img = await RawImage.read(blob);
         }
         const model_inputs = await processor(img);
-        const text_inputs = await tokenizer("dummy");
+        // image_embeds depend only on pixels; the text input is a required-but-ignored dummy.
+        const text_inputs = tokenizeSiglip(tokenizer, "");
         model_inputs.input_ids = text_inputs.input_ids;
         model_inputs.attention_mask = text_inputs.attention_mask;
 
@@ -109,9 +134,9 @@ export function createImageEmbedder(): ImageEmbedder {
     embedText(text: string): Promise<Float32Array> {
       return warmModel.use(async ({ model, processor, tokenizer }) => {
         const start = performance.now();
-        const img = new RawImage(new Uint8ClampedArray(384 * 384 * 3).fill(0), 384, 384, 3);
-        const model_inputs = await processor(img);
-        const text_inputs = await tokenizer(text);
+        // text_embeds depend only on tokens; the image is a required-but-ignored blank.
+        const model_inputs = await processor(blankImage());
+        const text_inputs = tokenizeSiglip(tokenizer, text);
         model_inputs.input_ids = text_inputs.input_ids;
         model_inputs.attention_mask = text_inputs.attention_mask;
 
