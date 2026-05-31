@@ -66,6 +66,7 @@ export function buildPromptTrace(
   worldInfoIncluded: number;
   matchedKeys: string[];
   hasPersona: boolean;
+  staticCacheBusters: string[];
 } {
   return {
     // Generic QuadChars token estimate (shared/tokens.ts) — replaces the old raw char counts as the
@@ -79,5 +80,8 @@ export function buildPromptTrace(
     worldInfoIncluded: systemPrompt.trace.worldInfoIncluded,
     matchedKeys: systemPrompt.trace.matchedKeys,
     hasPersona: assembleCtx.activePersona !== null,
+    // {{random}}/{{date}}/etc found in static-half source templates — they re-resolve every turn,
+    // busting the cached prefix. Empty in the well-formed case; non-empty = warn the operator.
+    staticCacheBusters: systemPrompt.trace.staticCacheBusters,
   };
 }

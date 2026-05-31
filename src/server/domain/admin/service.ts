@@ -1,4 +1,4 @@
-import { asc, eq } from "drizzle-orm";
+import { and, asc, count, eq, ne } from "drizzle-orm";
 import type { Db } from "../../../db/client";
 import { users } from "../../../db/schema";
 import { castId, type SessionId, type UserId } from "../../../shared/ids";
@@ -70,6 +70,18 @@ const userCols = {
 };
 
 export function createAdminService(db: Db, sessionsService: SessionAdminPort): AdminService {
+  // Lockout guard primitive: would this mutation leave the system with zero enabled admins?
+  // Counts admins OTHER than `excludeUserId` who are still enabled — if that's 0, the caller is
+  // about to remove the last admin and we refuse. (Both setRole's demote and setEnabled's
+  // disable funnel through this so the rule is in one place.)
+  async function otherEnabledAdminCount(excludeUserId: UserId): Promise<number> {
+    const rows = await db
+      .select({ n: count() })
+      .from(users)
+      .where(and(eq(users.role, "admin"), eq(users.enabled, true), ne(users.id, excludeUserId)));
+    return rows[0]?.n ?? 0;
+  }
+
   async function loadUser(userId: UserId): Promise<AdminUserView> {
     const rows = await db.select(userCols).from(users).where(eq(users.id, userId)).limit(1);
     const row = rows[0];
@@ -89,6 +101,19 @@ export function createAdminService(db: Db, sessionsService: SessionAdminPort): A
     role: "admin" | "user";
   }): Promise<AdminUserView> {
     await requireAdmin(db, params.username);
+    // Last-admin guard: demoting the only enabled admin to "user" would lock the system out of
+    // its admin surfaces (no undo without a DB edit). Refuse and surface a typed error.
+    if (params.role === "user") {
+      const current = await loadUser(params.userId); // throws NotFound if the id is bogus
+      if (current.role === "admin" && current.enabled) {
+        if ((await otherEnabledAdminCount(params.userId)) === 0) {
+          throw new DomainOperationError(
+            "last_admin",
+            "cannot demote the last admin — promote another user first",
+          );
+        }
+      }
+    }
     await db.update(users).set({ role: params.role }).where(eq(users.id, params.userId));
     getLog().info({ userId: params.userId, role: params.role }, "admin: set user role");
     return loadUser(params.userId);
@@ -103,6 +128,20 @@ export function createAdminService(db: Db, sessionsService: SessionAdminPort): A
     // Lockout guard: an admin can't disable their own account.
     if (adminId === params.userId && !params.enabled) {
       throw new DomainOperationError("cannot_disable_self", "you cannot disable your own account");
+    }
+    // Last-admin guard: disabling another enabled admin is fine only if at least one enabled
+    // admin remains. (The self-disable case is already blocked above, so excluding self here is
+    // about disabling someone ELSE who happens to be the only other admin.)
+    if (!params.enabled) {
+      const target = await loadUser(params.userId);
+      if (target.role === "admin" && target.enabled) {
+        if ((await otherEnabledAdminCount(params.userId)) === 0) {
+          throw new DomainOperationError(
+            "last_admin",
+            "cannot disable the last admin — promote another user first",
+          );
+        }
+      }
     }
     await db.update(users).set({ enabled: params.enabled }).where(eq(users.id, params.userId));
     // Disable kills the user's live sessions NOW (belt-and-suspenders with the per-request enabled

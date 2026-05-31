@@ -21,10 +21,11 @@ export async function ensureUser(db: Db, handle: string): Promise<UserId> {
     return castId<UserId>(found.id);
   }
   const id = newId<UserId>();
-  // The one access-control decision the app owns: the owner (DEFAULT_USER_HANDLE) is provisioned as
-  // admin; everyone else as "user". Idempotent — covers the fresh-DB owner-first-login case without
-  // a separate seed; authentik remains the real gate for who reaches this point at all.
-  const role = handle === env.DEFAULT_USER_HANDLE ? "admin" : "user";
+  // The one access-control decision the app owns: any handle in OWNER_HANDLES (defaults to
+  // [DEFAULT_USER_HANDLE]) is provisioned as admin; everyone else as "user". Uses ownerHandles()
+  // — the SAME predicate provisionIdentity (SSO) uses — so both seams agree once OWNER_HANDLES
+  // names more than one admin (previously this hardcoded DEFAULT_USER_HANDLE only and diverged).
+  const role = ownerHandles().includes(handle) ? "admin" : "user";
   await db.insert(users).values({ id, handle, role, createdAt: Date.now() }).onConflictDoNothing();
   // Identity → tenant: a new user row appeared. Rare + notable (esp. under multi-user) —
   // the handle is an identity label, not RP content, so it's safe to log.

@@ -8,7 +8,7 @@ export const DEFAULTS = {
   fanOut: 4,
   maxTier: 3,
   retrieveK: 8, // over-fetch for rerank (reviewer #6: top-4 too tight on long chats; rerank cost negligible)
-  rerankTo: 3,
+  rerankTo: 5, // top-K after rerank that actually reaches the prompt; 3 was too stingy on long, sprawling chats
   minScore: 0.25, // ST `score_threshold`
   keywordMatch: true,
   recencyBias: 0, // mild boost toward recent digests in mixB/mixC (reviewer #2); 0 = off, wired for ablation

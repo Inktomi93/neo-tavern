@@ -62,13 +62,22 @@ export async function retrieveMemory(
     if (score >= cfg.minScore) scored.push({ d, score: score + recency(d) });
   }
   if (cfg.keywordMatch) {
-    const qWords = new Set(query.toLowerCase().match(/[a-z0-9]+/g) ?? []);
-    // Match on any DISTINCTIVE token (≥4 chars) the keyword shares with the query — so a query
-    // saying just "Gundam" hits the "Hi-Nu Gundam" keyword (rare-term recall, the gundam miss),
-    // while short words ("the", "of") can't cause false positives (reviewer #3, #4).
+    // Unicode-aware tokenization (was /[a-z0-9]+/ — ASCII-only, so `café`/`北京` were stripped
+    // and could never match). \p{L}\p{N} covers every script with the /u flag.
+    const tokenize = (s: string): string[] => s.toLocaleLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
+    const qWords = new Set(tokenize(query));
+    // Match on any DISTINCTIVE token the keyword shares with the query — so a query saying just
+    // "Gundam" hits the "Hi-Nu Gundam" keyword (rare-term recall, the gundam miss), while short
+    // ASCII words ("the", "of") can't cause false positives (reviewer #3, #4). Non-ASCII tokens
+    // (CJK, etc.) are distinctive at any length — a single CJK char is already a word.
+    const hasNonAscii = (w: string): boolean => {
+      for (const ch of w) if ((ch.codePointAt(0) ?? 0) > 127) return true;
+      return false;
+    };
+    const isDistinctive = (w: string) => w.length >= 4 || hasNonAscii(w);
     const kwMatches = (kw: string): boolean => {
-      const words = kw.toLowerCase().match(/[a-z0-9]+/g) ?? [];
-      return words.some((w) => w.length >= 4 && qWords.has(w));
+      const words = tokenize(kw);
+      return words.some((w) => isDistinctive(w) && qWords.has(w));
     };
     for (const d of bridge) {
       if (scored.some((s) => s.d === d)) continue;

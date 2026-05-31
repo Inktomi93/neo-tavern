@@ -160,11 +160,21 @@ export function createSend(ctx: ChatContext, ops: { runCompaction: RunCompaction
         },
         "chat: prompt assembled",
       );
+      // The static half is the CACHED prefix; a volatile macro inside it re-resolves every turn
+      // and we pay full input tokens. Surface it loudly so it's findable in the logs.
+      if (systemPrompt.trace.staticCacheBusters.length > 0) {
+        getLog().warn(
+          { chatId: params.chatId, macros: systemPrompt.trace.staticCacheBusters },
+          "chat: volatile macros in the static (cached) prompt half — cache will bust every turn",
+        );
+      }
 
       let turn: ChatTurnResult;
       try {
         const onDelta = (event: ChatDeltaEvent) => {
-          chatStreamEmitter.emit("delta", event);
+          // Tag with this chat's id — the agent-sdk runner emits chatId: "" (it has no chat
+          // context), and streamMessages filters on chatId, so untagged deltas get dropped.
+          chatStreamEmitter.emit("delta", { ...event, chatId: params.chatId });
         };
 
         if (routing.runner === "agent-sdk") {

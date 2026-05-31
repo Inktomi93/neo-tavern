@@ -138,7 +138,10 @@ export function createSummarizer(): Summarizer {
           }
           const out = await loaded.session.prompt(userPrompt, {
             budgets: { thoughtTokens: 0 }, // disable Qwen3 thinking (no-op on instruct models)
-            temperature: opts?.temperature ?? 0.7,
+            // Digests are facts-extraction, not creative writing. 0.7 was the llama-cpp default
+            // and produced sloppy/random first drafts that get frozen forever (digests never get
+            // rewritten). Match the hosted path's tight setting.
+            temperature: opts?.temperature ?? 0.25,
             topP: 0.8,
             topK: 20,
             minP: 0,

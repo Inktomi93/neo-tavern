@@ -86,6 +86,10 @@ export interface AssembleTrace {
   compactSummaryIncluded: boolean;
   /** True when the {{memory}} marker rendered retrieved chat-history memory. */
   memoryIncluded: boolean;
+  /** Volatile macro names ({{random}}, {{date}}, ...) found in source templates that landed in
+   *  the STATIC half — these bust prompt cache every turn (the static half is the cached prefix).
+   *  Empty in the well-formed case; non-empty = the caller should log a warning. */
+  staticCacheBusters: string[];
 }
 
 export interface AssembledPrompt {
@@ -99,6 +103,33 @@ export interface AssembledPrompt {
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// Macros whose value changes per call → bust the cached static prefix every turn. The set is
+// curated (not auto-derived) so static-prompt-safe macros ({{char}}, {{user}}, {{persona}}, ...)
+// stay silent. Kept in sync with shared/macro/registry.ts.
+const VOLATILE_MACRO_NAMES = [
+  "random",
+  "pick",
+  "roll",
+  "time",
+  "date",
+  "input",
+  "lastMessage",
+  "lastUserMessage",
+  "lastCharMessage",
+] as const;
+const VOLATILE_MACRO_RE = new RegExp(`\\{\\{#?(${VOLATILE_MACRO_NAMES.join("|")})\\b`, "g");
+
+// Source-template scan (NOT a post-render scan — macros are resolved before we'd see them).
+// Returns the volatile macro names present in `text`, or [] if none.
+function findVolatileMacros(text: string | null | undefined): string[] {
+  if (!text) return [];
+  const hits = new Set<string>();
+  for (const m of text.matchAll(VOLATILE_MACRO_RE)) {
+    if (m[1]) hits.add(m[1]);
+  }
+  return [...hits];
 }
 
 // Resolve {{macros}} against the character + the section-appropriate persona (pinned or active).
@@ -131,7 +162,7 @@ function renderWorldInfo(
   trace: AssembleTrace,
   executeRegex?: (text: string, placement: RegexPlacement) => string,
 ): string {
-  const haystack = ctx.recentMessages.join("\n").toLowerCase();
+  const haystack = ctx.recentMessages.join("\n").toLocaleLowerCase();
   const active: AssembleWorldEntry[] = [];
   for (const entry of ctx.worldEntries) {
     if (!entry.enabled || entry.scope !== scope) {
@@ -139,8 +170,17 @@ function renderWorldInfo(
     }
     if (scope === "keyword") {
       const hits = entry.keys
-        .map((key) => key.trim().toLowerCase())
-        .filter((key) => key.length > 0 && new RegExp(`\\b${escapeRegExp(key)}\\b`).test(haystack));
+        .map((key) => key.trim().toLocaleLowerCase())
+        // Unicode-aware "whole word" boundaries: JS \b is ASCII-only, so `café`, `北京`, and
+        // keys ending in punctuation like `dr.` silently never match. Lookarounds against
+        // letter/number/_ with the /u flag handle every script + lets punct-edged keys match.
+        .filter(
+          (key) =>
+            key.length > 0 &&
+            new RegExp(`(?<![\\p{L}\\p{N}_])${escapeRegExp(key)}(?![\\p{L}\\p{N}_])`, "u").test(
+              haystack,
+            ),
+        );
       if (hits.length === 0) {
         continue;
       }
@@ -234,6 +274,37 @@ function renderMarker(
   }
 }
 
+// Source-template strings (pre-macro-resolution) that feed a given section. Only used by the
+// volatile-macro detector — order/dedup don't matter, just coverage of every place a user can put
+// {{date}}/{{random}}/etc. (Empty for `chat_history` since live history isn't rendered here.)
+function collectStaticSources(section: PromptSection, ctx: AssembleContext): string[] {
+  if (section.type === "boundary") return [];
+  if (section.type === "literal") return [section.content];
+  // markers
+  switch (section.marker) {
+    case "char_description":
+      return [ctx.character.description ?? ""];
+    case "char_personality":
+      return [ctx.character.personality ?? ""];
+    case "scenario":
+      return [ctx.character.scenario ?? ""];
+    case "dialogue_examples":
+      return [ctx.character.exampleMessages ?? ""];
+    case "char_system":
+      return [ctx.character.systemPrompt ?? ""];
+    case "post_history":
+      return [ctx.character.postHistoryInstructions ?? ""];
+    case "persona":
+      return ctx.activePersona ? [ctx.activePersona.description] : [];
+    case "world_info": {
+      const scope = section.scope ?? "always";
+      return ctx.worldEntries.filter((e) => e.enabled && e.scope === scope).map((e) => e.content);
+    }
+    default:
+      return [];
+  }
+}
+
 function renderSection(
   section: PromptSection,
   ctx: AssembleContext,
@@ -270,18 +341,29 @@ export function assemblePrompt(
     matchedKeys: [],
     compactSummaryIncluded: false,
     memoryIncluded: false,
+    staticCacheBusters: [],
   };
   let bucket = staticParts;
   let bucketSections = trace.staticSections;
+  let inStatic = true;
+  const cacheBusters = new Set<string>();
 
   for (const section of config.sections) {
     if (section.type === "boundary") {
       bucket = dynamicParts;
       bucketSections = trace.dynamicSections;
+      inStatic = false;
       continue;
     }
     if (!section.enabled) {
       continue;
+    }
+    if (inStatic) {
+      // Pre-render source-template scan: macros get resolved before they hit `static`, so a
+      // post-render check is impossible. Walk only the strings that could carry a {{macro}}.
+      for (const src of collectStaticSources(section, ctx)) {
+        for (const name of findVolatileMacros(src)) cacheBusters.add(name);
+      }
     }
     const rendered = renderSection(section, ctx, trace, executeRegex).trim();
     if (rendered.length > 0) {
@@ -289,6 +371,7 @@ export function assemblePrompt(
       bucketSections.push(section.id);
     }
   }
+  trace.staticCacheBusters = [...cacheBusters];
 
   return {
     static: staticParts.join("\n\n"),

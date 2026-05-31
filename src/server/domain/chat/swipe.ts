@@ -97,7 +97,9 @@ export function createSwipe(ctx: ChatContext) {
       let seededSessionId: string | null = null;
       try {
         const onDelta = (event: ChatDeltaEvent) => {
-          chatStreamEmitter.emit("delta", event);
+          // Tag with this chat's id — the agent-sdk runner emits chatId: "" (it has no chat
+          // context), and streamMessages filters on chatId, so untagged deltas get dropped.
+          chatStreamEmitter.emit("delta", { ...event, chatId: params.chatId });
         };
 
         if (routing.runner === "agent-sdk") {
@@ -226,6 +228,16 @@ export function createSwipe(ctx: ChatContext) {
       if (routing.runner === "agent-sdk") {
         if (chat.sessionId !== null && chat.sessionId !== turn.sessionId) {
           await db.delete(sessionEntries).where(eq(sessionEntries.sessionId, chat.sessionId));
+        }
+        // If the SDK forked a fresh sessionId off our seeded resume target, the seeded frames
+        // are now orphaned (not canon, not chat.sessionId). Drop them; the canonical session
+        // is turn.sessionId. (When the SDK keeps the resumed id, this is a no-op.)
+        if (
+          seededSessionId !== null &&
+          seededSessionId !== turn.sessionId &&
+          seededSessionId !== chat.sessionId
+        ) {
+          await db.delete(sessionEntries).where(eq(sessionEntries.sessionId, seededSessionId));
         }
         await db
           .update(chats)
