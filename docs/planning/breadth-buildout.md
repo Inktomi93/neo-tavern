@@ -175,6 +175,69 @@ undici global-vs-library dispatcher (test interception). CSP vs Vite build (iter
 
 # Track B — Corpus RAG analytics (the differentiator)
 
+> **✅ TRACK B — DONE + EXCEEDED (2026-05-30).** All pillars shipped to `main`, each its own green
+> `pnpm check` commit, every number below validated on the live 307-character / 694-chat corpus. The
+> backend killer feature is complete; the front-end is the remaining chapter (out of this track's scope).
+>
+> **The seven planned pillars (B.3–B.8):**
+> - **Step 0 — `contentHash` fork/import hygiene (B.5.1, LOCKED):** sha256 of the SOURCE span on
+>   segments + tier-0 digests, backfilled (2880 + 2118 rows). `collapseByContentHash` primitive. Proven:
+>   collapses 160 redundant segments + 136 tier-0 digests (vs the bogus 1489 a seq-span proxy claims).
+> - **Step 1 — Dedup (B.5):** characters (exact all-pairs cosine ≥0.92, CSLS-ranked) + chats. **DESIGN
+>   PIVOT (recorded in B.5): chat dedup was specced as centroid-cosine — empirically wrong** (1609/1634
+>   "dups" were merely same-character: 51 Hikari chats, 42 Selene…). Rebuilt around **Jaccard of segment
+>   `contentHash`es** (precise + embedder-swap-proof): 1,881 → 20 genuine fork pairs, 0 false positives.
+> - **Step 3 — Keyword co-occurrence (B.3):** the neo-original pillar. 10k pairs + 27,896 char-keyword
+>   rows; tier-0-only + content-collapsed + hub-token-filtered.
+> - **Step 4 — Dashboard + character profile (B.6):** `corpusStats` (most-RP'd, model usage, timeline)
+>   + per-character profile (Hikari 87 chats / 326k tokens-out).
+> - **Step 5 — Similarity graph + similar-chats (B.6):** live pairwise/centroid compute.
+> - **Step 6 — Themes (B.4):** k-means over digest embeddings, GBNF-grammar-named. `msgMidAt` column
+>   (LOCKED) added + backfilled. **Extended to DUAL-ALTITUDE:** `level` discriminator → **scene** themes
+>   (tier-0: "Bathroom Confessions") AND **arc** themes (tier-1+: "Trauma to Trust", "Soul Bond Fracture
+>   & Reformation") — the 367 consolidation digests were being ignored.
+>
+> **Extras beyond the spec (this is the "exceeded"):**
+> - **B.0 character distillation — BUILT (was a reference-only row):** grammar-constrained per-card
+>   genre/tone (enum) + tags + elevator-pitch + overview over all 307 cards → a filterable catalog
+>   (`browseCharacters`). card-curator's `classify_genre` + `summarize_card`, version-aware.
+> - **card-curator `compare_cards` (LLM verdict) + `ask_about_card`** — grammar-constrained; plus a
+>   cheap no-LLM facet-diff (`compareCharacters`, tag-Jaccard redundancy).
+> - **Swipe / re-roll analytics** — the 70,654-`message_variants` goldmine: most-rerolled moments,
+>   per-character re-roll rate (Ysabeau 11.4/msg), per-model pool usage. Nobody else mines this.
+> - **Distill catalog** — collected-vs-played per genre/tone (slice-of-life: 11 cards, 0 chats), top
+>   tags, tag co-occurrence on cards.
+> - **Character archetypes** (k-means over CARD embeddings, distill-labeled) + **visual archetypes**.
+> - **Forgotten gems**, **model routing** (per-genre model habits), **theme drift over story time**.
+> - **Tag auto-suggest** — review-and-pick workflow promoting distilled tags → real `tags`
+>   (`source='auto'`), per-character granularity, idempotent, with undo. The `tags.source='auto'` column
+>   finally used.
+> - **Field-scoped FUZZY full-text search (MiniSearch)** — the lexical complement to semantic search;
+>   per-field/section scoping, typo tolerance, field boosts, prefix, AND/OR, autosuggest. Picked on 2026
+>   research (MiniSearch > Fuse for multi-field prose relevance).
+> - **Image / avatar analytics (SigLIP)** — the visual stepchild adopted: image dedup, similar-art (ANN),
+>   visual archetypes. Surfaced + diagnosed the "no-avatar placeholder" cluster (5 real reuse-clusters,
+>   not 169 — confirmed by a 64×64 perceptual-hash Python scan).
+>
+> **Cross-cutting work:**
+> - **Unified the tRPC surface** (the front-end contract): analytics **17 → 10** endpoints (page-view
+>   bundles: `home`/`character` dossier/`theme` detail) + search **6 → 1** (`search({over,scope,tier})`
+>   with the substrate/tier selector) + `suggest`. Granular service methods pruned.
+> - **Relational drill-down pass** — every analytics row carries entity ids + score (swipe hotspots got
+>   messageId/seq, cooccurrence got characterIds), so any aggregate drills to the underlying record.
+> - **SigLIP text→image search FIX** — was returning noise (missing `max_length=64` text padding → ~0
+>   cross-modal cosine, placeholder #1 for "knight"). Fixed → real armored knights; image *embeddings*
+>   were never broken (verified fresh==stored), stored vectors untouched. Kept SigLIP2 over CLIP.
+> - Compute scripts: `find-duplicates`, `compute-cooccurrence`, `compute-themes`, `distill-characters`,
+>   `backfill-content-hash`. New schema: `duplicate_pairs`, `keyword_cooccurrence`,
+>   `character_keyword_profiles`, `theme_clusters`(+level), `digest_theme_assignments`(+level),
+>   `character_summaries`, + `chat_digests.content_hash`/`msg_mid_at`.
+>
+> **Still open (deliberate):** the **perceptual-hash image dedup** (the correct dup tool vs SigLIP-cosine)
+> + **mean-centering** for crisper visual similarity — both noted, both optional. Qwen3-VL-Embedding-2B
+> is the future heavy-visual-search upgrade, blocked on an ONNX/GGUF export of the *embedding* variant.
+> The §B.1–B.9 spec below is the as-designed reference (file:line since drifted); the git log is truth.
+
 ## B.0 — card-curator answer-key: what each prior system DOES / CALCULATES (rebuild reference)
 `references/card-curator` (a prior project of ours — ChromaDB + Qwen3-VL embeddings, an MCP tool
 server) already BUILT most of this analytics surface. This is the rebuild map: what each system
@@ -654,10 +717,14 @@ husky pre-commit hook now only prints check output on FAILURE (full log at `.git
 
 # Cross-track recommendation & open decisions
 
-**Recommended order:** (1) Track A **security core** — self-contained, closes the only real quality
-security gap, UI-independent. (2) Track B **dedup + co-occurrence** — fastest differentiator payoff
-(dedup ~80% built, co-occurrence pure SQL). (3) Track C **mechanical cleanup** — interleave, low-risk
-clean commits. (4) Track B **themes + breadth** — the bigger build (needs `msgMidAt` + backfill).
+> **STATUS (2026-05-30): all three tracks DONE.** Track A core (security) ✅, Track B (corpus analytics)
+> ✅ + exceeded — see the banner at the top of Track B, Track C (type-safety) ✅. The original ordering
+> below is kept for history; it was followed and then Track B blew past its spec (distillation, swipe
+> analytics, catalog, archetypes, the unified API, field-fuzzy search, image analytics). The remaining
+> work is the **front-end** (renders all of it) — a separate effort, not in these tracks.
+
+**Recommended order (followed, now complete):** (1) Track A **security core** ✅. (2) Track B **dedup +
+co-occurrence** ✅. (3) Track C **mechanical cleanup** ✅. (4) Track B **themes + breadth** ✅ (+ far more).
 (5) ~~**Branded IDs** — once, deliberately.~~ ✅ DONE (2026-05-30, see C.3).
 
 **Decided (owner sign-off):**
